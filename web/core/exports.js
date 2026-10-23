@@ -2,6 +2,7 @@
 import { Rect, Quad, pt } from './geometry.js';
 import { homography, homographyPts, toRgba, raster } from './imaging.js';
 import { allFields, firstText, isModified } from './model.js';
+import { lotsActive, lotLabels } from './lots.js';
 
 // ---------- Texte ----------
 
@@ -16,7 +17,9 @@ export function cleanValue(s) {
 
 const hasValues = (l) => l.Cells.slice(1).some((c) => c.Text.trim().length > 0);
 
-function exportRow(row) {
+function exportRow(row, lots) {
+  // Avec les lots : une 1re colonne « Lot » sur toutes les lignes, pour garder les colonnes alignées.
+  const prefix = (l) => (!lots ? '' : (l.Kind === 'EnTete' ? 'Lot' : l.Lot ?? '') + '\t');
   const lines = row.Lines.filter((l) => l.Kind !== 'Ignoree');
   const moved = new Map();
   const titlesKeeping = new Set();
@@ -30,7 +33,7 @@ function exportRow(row) {
   for (const line of lines) {
     if (line.Kind === 'Titre' && !titlesKeeping.has(line)) {
       const t = cleanText(firstText(line));
-      if (t.length > 0) out.push(t);
+      if (t.length > 0) out.push(prefix(line) + t);
       continue;
     }
     const cells = line.Cells.map((c) => c.Text);
@@ -38,7 +41,7 @@ function exportRow(row) {
     if (values) for (let c = 1; c < cells.length && c - 1 < values.length; c++) cells[c] = values[c - 1];
     const parts = cells.map((t, c) => (c === 0 ? cleanText(t) : cleanValue(t)));
     while (parts.length > 0 && parts[parts.length - 1].length === 0) parts.pop();
-    if (parts.length > 0) out.push(parts.join('\t'));
+    if (parts.length > 0) out.push(prefix(line) + parts.join('\t'));
   }
   return out;
 }
@@ -54,9 +57,10 @@ function looksLikeFormula(cell) {
 /** Une ligne par ligne imprimée, tabulations, titres seuls, fins de ligne Windows. */
 export function buildTxt(project) {
   const output = [];
+  const lots = lotsActive(project);
   for (const page of project.Pages)
     for (const table of page.Tables) {
-      const tableLines = table.Rows.flatMap(exportRow);
+      const tableLines = table.Rows.flatMap((r) => exportRow(r, lots));
       const first = table.Rows.flatMap((r) => r.Lines).find((l) => l.Kind !== 'Ignoree');
       if (tableLines.length > 0 && first?.Kind === 'EnTete' && output.length > 0 && output[output.length - 1].length > 0) output.push('');
       output.push(...tableLines);
@@ -104,8 +108,8 @@ export function paperColor(image, box) {
 export function composeIntoSource(orientedSource, page, editedPage) {
   const src = toRgba(orientedSource), edited = toRgba(editedPage);
   const out = raster(src.w, src.h, 4, new Uint8ClampedArray(src.data));
-  const fields = editedFields(page);
-  if (fields.length === 0) return out;
+  const boxes = [...editedFields(page).map((f) => f.Box), ...lotLabels(page).map((l) => l.box)];
+  if (boxes.length === 0) return out;
   const crop = page.Crop ?? Quad.full(src.w, src.h);
   const W = page.Width, H = page.Height;
   const a = (page.Skew * Math.PI) / 180, cos = Math.cos(a), sin = Math.sin(a), cx = W / 2, cy = H / 2;
@@ -114,8 +118,7 @@ export function composeIntoSource(orientedSource, page, editedPage) {
   const forward = (u, v) => { const du = u - cx, dv = v - cy; return toSource(cx + cos * du - sin * dv, cy + sin * du + cos * dv); };
   const backward = (x, y) => { const p = toFlat(x, y); const du = p.X - cx, dv = p.Y - cy; return pt(cx + cos * du + sin * dv, cy - sin * du + cos * dv); };
 
-  for (const f of fields) {
-    const b = f.Box;
+  for (const b of boxes) {
     const c = [forward(b.X, b.Y), forward(Rect.right(b), b.Y), forward(Rect.right(b), Rect.bottom(b)), forward(b.X, Rect.bottom(b))];
     const sx0 = Math.max(0, Math.floor(Math.min(...c.map((p) => p.X))) - 1), sx1 = Math.min(src.w - 1, Math.ceil(Math.max(...c.map((p) => p.X))) + 1);
     const sy0 = Math.max(0, Math.floor(Math.min(...c.map((p) => p.Y))) - 1), sy1 = Math.min(src.h - 1, Math.ceil(Math.max(...c.map((p) => p.Y))) + 1);

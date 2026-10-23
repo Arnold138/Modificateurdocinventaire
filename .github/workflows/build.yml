@@ -20,7 +20,8 @@ jobs:
         run: |
           dotnet build tests/RetoucheInventaire.Core.Tests -c Release -v q
           tests/RetoucheInventaire.Core.Tests/bin/Release/net10.0/RetoucheInventaire.Core.Tests export-file /tmp/windows.txt page1 page2 page5
-          node web/tests/test.mjs /tmp/windows.txt
+          tests/RetoucheInventaire.Core.Tests/bin/Release/net10.0/RetoucheInventaire.Core.Tests export-file /tmp/windows-lots.txt --lots page1 page2 page5
+          node web/tests/test.mjs /tmp/windows.txt /tmp/windows-lots.txt
 
   # Version iPad : application web publiée sur GitHub Pages (branche gh-pages).
   site:

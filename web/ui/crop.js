@@ -16,7 +16,7 @@ export function cropDialog(source, quad) {
     function show() {
       const k = Math.min(1, 1600 / Math.max(src.w, src.h));
       const preview = k < 1 ? resize(src, Math.round(src.w * k), Math.round(src.h * k)) : src;
-      canvas?.remove();
+      if (canvas) { canvas.remove(); canvas.width = canvas.height = 0; }
       canvas = rasterToCanvas(preview);
       stage.prepend(canvas);
       layout();
@@ -52,7 +52,7 @@ export function cropDialog(source, quad) {
     const close = (result) => {
       overlay.hidden = true;
       handles.forEach((h) => h.remove());
-      canvas?.remove();
+      if (canvas) { canvas.remove(); canvas.width = canvas.height = 0; }
       window.removeEventListener('resize', layout);
       for (const id of ['cropRotate', 'cropAuto', 'cropFull', 'cropCancel', 'cropApply']) $(id).onclick = null;
       resolve(result);

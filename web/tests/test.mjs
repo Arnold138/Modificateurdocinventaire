@@ -11,6 +11,7 @@ import { newPage, newProject, analyze, reclassify, allFields, cycleKind, addLock
 import { buildTxt, composeIntoSource, paperColor } from '../core/exports.js';
 import { parseDelimited, buildDataPage } from '../core/importers.js';
 import { packProject, unpackProject } from '../core/store.js';
+import { numberLots, setLot, resyncLots, clearLots, lotsActive, objectLines, repairName } from '../core/lots.js';
 
 const FIX = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tests', 'fixtures');
 
@@ -143,6 +144,27 @@ test('Import CSV', () => {
   eq("Désignation\texploitation\tréalisation|DANS L'ENTREPOT|2 laves; inox\t130\t70|TOTAL\t15000\t8000", lines(p).join('|'), 'export CSV');
 });
 
+test('Lots : un par objet, continus, resynchro après saisie', () => {
+  const p = threePages();
+  numberLots(p, 1);
+  const objs = [...objectLines(p)].map((o) => o.line);
+  eq('1', objs[0].Lot, 'premier');
+  eq(String(objs.length), objs[objs.length - 1].Lot, 'dernier');
+  setLot(p, objs[9], '81');
+  eq('9', objs[8].Lot, 'avant inchangé');
+  eq('82', objs[10].Lot, 'suite recalée');
+  objs[11].Kind = 'Titre'; objs[11].KindChosenByUser = true;
+  resyncLots(p);
+  eq('', objs[11].Lot, 'titre sans lot');
+  eq('83', objs[12].Lot, 'suite reprend');
+  clearLots(p);
+  check(!lotsActive(p), 'enlevés');
+});
+
+test('Nom de fichier abîmé réparé', () => {
+  eq('BEENDHI prisé.pdf', repairName('BEENDHI prisÃ©.pdf'), 'réparation');
+});
+
 const windowsTxt = process.argv[2];
 if (windowsTxt) {
   test('Export .txt identique à la version Windows (octet pour octet)', () => {
@@ -152,6 +174,21 @@ if (windowsTxt) {
       const a = win.split('\r\n'), b = js.split('\r\n');
       const k = a.findIndex((l, i) => l !== b[i]);
       throw new Error(`différence ligne ${k + 1} : Windows « ${a[k]} » / iPad « ${b[k]} »`);
+    }
+  });
+}
+
+const windowsLots = process.argv[3];
+if (windowsLots) {
+  test('Export .txt avec lots identique à Windows', () => {
+    const win = readFileSync(windowsLots, 'utf8').replace(/^\uFEFF/, '');
+    const p = threePages();
+    numberLots(p, 1);
+    const js = buildTxt(p).text;
+    if (win !== js) {
+      const a = win.split('\r\n'), b = js.split('\r\n');
+      const k = a.findIndex((l, i) => l !== b[i]);
+      throw new Error(`ligne ${k + 1} : Windows « ${a[k]} » / iPad « ${b[k]} »`);
     }
   });
 }

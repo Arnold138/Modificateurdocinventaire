@@ -10,7 +10,8 @@ public static class PdfService
     /// <summary>Largeur de rendu : environ 200 ppp pour une page A4, suffisant pour l'OCR.</summary>
     private const uint RenderWidth = 1700;
 
-    public static async Task<List<byte[]>> RenderPagesAsync(StorageFile file)
+    /// <summary>Pages rendues une par une (une seule en mémoire à la fois), avec leur numéro et le total.</summary>
+    public static async IAsyncEnumerable<(int Index, int Count, byte[] Png)> RenderPagesAsync(StorageFile file)
     {
         PdfDocument doc;
         try
@@ -22,17 +23,20 @@ public static class PdfService
             throw new InvalidOperationException("Ce PDF est protégé par un mot de passe.");
         }
 
-        var pages = new List<byte[]>();
+        int count = (int)doc.PageCount;
         for (uint i = 0; i < doc.PageCount; i++)
         {
-            using var page = doc.GetPage(i);
-            using var stream = new InMemoryRandomAccessStream();
-            await page.RenderToStreamAsync(stream, new PdfPageRenderOptions { DestinationWidth = RenderWidth });
-            stream.Seek(0);
-            using var ms = new MemoryStream();
-            await stream.AsStreamForRead().CopyToAsync(ms);
-            pages.Add(ms.ToArray());
+            byte[] png;
+            using (var page = doc.GetPage(i))
+            using (var stream = new InMemoryRandomAccessStream())
+            {
+                await page.RenderToStreamAsync(stream, new PdfPageRenderOptions { DestinationWidth = RenderWidth });
+                stream.Seek(0);
+                using var ms = new MemoryStream();
+                await stream.AsStreamForRead().CopyToAsync(ms);
+                png = ms.ToArray();
+            }
+            yield return ((int)i + 1, count, png);
         }
-        return pages;
     }
 }

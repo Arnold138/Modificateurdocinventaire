@@ -1,7 +1,7 @@
 // Lecture des photos et des PDF en images (dans le navigateur, rien n'est envoyé).
 import { raster } from '../core/imaging.js';
 import { roundHalfEven } from '../core/geometry.js';
-import { makeCanvas, canvasToRaster, canvasToBlob } from './canvas.js';
+import { makeCanvas, canvasToRaster, canvasToBlob, freeCanvas } from './canvas.js';
 
 const MAX_SIDE = 4000;
 
@@ -20,7 +20,9 @@ export async function decodeImage(bytes, type = '') {
     ctx.fillRect(0, 0, w, h);
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(img, 0, 0, w, h);
-    return canvasToRaster(c);
+    const r = canvasToRaster(c);
+    freeCanvas(c);
+    return r;
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -35,17 +37,21 @@ async function loadPdfJs() {
   return pdfjs;
 }
 
-/** Chaque page du PDF → image PNG (environ 200 ppp pour une page A4). */
-export async function renderPdf(bytes) {
+/**
+ * Pages du PDF une par une → image PNG (environ 200 ppp pour une page A4).
+ * Une seule page en mémoire à la fois : indispensable sur iPhone/iPad pour les longs inventaires.
+ */
+export async function* pdfPages(bytes) {
   const lib = await loadPdfJs();
+  const task = lib.getDocument({ data: bytes.slice() });
   let doc;
   try {
-    doc = await lib.getDocument({ data: bytes.slice() }).promise;
+    doc = await task.promise;
   } catch (e) {
     if (e?.name === 'PasswordException') throw new Error('Ce PDF est protégé par un mot de passe.');
     throw e;
   }
-  const pages = [];
+  try {
   for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i);
     const scale = 1700 / page.getViewport({ scale: 1 }).width;
@@ -56,9 +62,13 @@ export async function renderPdf(bytes) {
     ctx.fillRect(0, 0, c.width, c.height);
     await page.render({ canvasContext: ctx, viewport: vp, canvas: c }).promise;
     const png = new Uint8Array(await (await canvasToBlob(c, 'image/png')).arrayBuffer());
-    pages.push(png);
+    freeCanvas(c);
+    page.cleanup();
+    yield { index: i, count: doc.numPages, png };
   }
-  return pages;
+  } finally {
+    await task.destroy();
+  }
 }
 
 export const isImageName = (n) => /\.(jpe?g|png|bmp|tiff?|heic|heif|webp)$/i.test(n);

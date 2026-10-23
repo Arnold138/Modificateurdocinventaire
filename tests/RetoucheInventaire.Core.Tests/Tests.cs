@@ -333,6 +333,64 @@ public static class Tests
         Check(r > 200 && g > 200 && b > 200, $"papier trop sombre : {r},{g},{b}");
     }
 
+    // ---------- Lots ----------
+
+    public static void T_Lots_un_par_objet_continus_entre_les_pages()
+    {
+        var p = ThreePages();
+        Lots.Number(p, 1);
+        var objects = Lots.ObjectLines(p).ToList();
+        Equal("1", objects[0].Line.Lot, "premier lot");
+        Equal(objects.Count.ToString(), objects[^1].Line.Lot, "dernier lot = nombre d'objets");
+        var lines = p.Pages.SelectMany(pg => pg.AllLines()).ToList();
+        Check(lines.Where(l => l.Kind is LineKind.Titre or LineKind.Total or LineKind.EnTete).All(l => l.Lot == ""), "pas de lot sur titres, totaux, en-têtes");
+        var cd3 = lines.First(l => l.Cells[0].Text.StartsWith("CD3+"));
+        Equal("", cd3.Lot, "pas de lot sur la suite d'un objet");
+        var laves = lines.First(l => l.Cells[0].Text.StartsWith("2 laves"));
+        Equal("1", laves.Lot, "l'objet sous « DANS L'ENTREPOT » porte le lot 1");
+        var page2First = Lots.ObjectLines(p).First(o => o.Page == p.Pages[1]).Line;
+        var page1Last = Lots.ObjectLines(p).Last(o => o.Page == p.Pages[0]).Line;
+        Equal(int.Parse(page1Last.Lot) + 1, int.Parse(page2First.Lot), "numérotation continue d'une page à l'autre");
+    }
+
+    public static void T_Lots_resynchro_apres_saisie()
+    {
+        var p = ThreePages();
+        Lots.Number(p, 1);
+        var objects = Lots.ObjectLines(p).Select(o => o.Line).ToList();
+        Lots.Set(p, objects[9], "81");
+        Equal("9", objects[8].Lot, "les lots d'avant ne bougent pas");
+        Equal("81", objects[9].Lot, "lot saisi");
+        Equal("82", objects[10].Lot, "le suivant suit");
+        Equal((81 + objects.Count - 10).ToString(), objects[^1].Lot, "toute la suite est recalée");
+        // Un objet devient titre : la suite se recale sans perdre le 81.
+        PageEdits.CycleKind(objects[11]); // Article → Titre
+        Lots.Resync(p);
+        Equal("", objects[11].Lot, "plus de lot sur un titre");
+        Equal("82", objects[10].Lot, "inchangé");
+        Equal("83", objects[12].Lot, "la suite reprend après");
+        Lots.Clear(p);
+        Check(!Lots.IsActive(p), "numérotation enlevée");
+    }
+
+    public static void T_Lots_dans_le_txt()
+    {
+        var p = ThreePages();
+        Lots.Number(p, 1);
+        var lines = ExportLines(p);
+        Equal("Lot\tI - MOBILIER ET MATERIEL\texploitation\tréalisation", lines[0], "en-tête");
+        Equal("\tDANS L'ENTREPOT", lines[1], "titre sans lot");
+        Equal("1\t2 laves main en inox + 1 sanibroyeur SPEED\t130\t70", lines[2], "objet avec lot");
+        Check(lines.Contains("\tCD3+ +/- 14130 heures"), "suite d'objet sans lot");
+        Check(lines.Any(l => l.StartsWith("\tTOTAL STOCK\t44550")), "total sans lot");
+    }
+
+    public static void T_Nom_de_fichier_abime_repare()
+    {
+        Equal("BEENDHI prisé.pdf", RetoucheInventaire.Core.Import.Names.Repair("BEENDHI prisÃ©.pdf"), "réparation");
+        Equal("Prix 50 €", RetoucheInventaire.Core.Import.Names.Repair("Prix 50 €"), "nom correct inchangé");
+    }
+
     // ---------- Sauvegarde ----------
 
     public static void T_Sauvegarde_et_reprise()

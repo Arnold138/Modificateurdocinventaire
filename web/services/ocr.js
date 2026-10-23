@@ -1,5 +1,5 @@
 // Reconnaissance du texte hors ligne : Tesseract (moteur et données françaises embarqués dans l'app).
-import { rasterToCanvas } from './canvas.js';
+import { rasterToCanvas, freeCanvas } from './canvas.js';
 
 let workerPromise = null;
 
@@ -28,7 +28,10 @@ export const warmUp = () => getWorker().then(() => true, () => false);
 export async function recognize(image, psm) {
   const worker = await getWorker();
   await worker.setParameters({ tessedit_pageseg_mode: String(psm) });
-  const { data } = await worker.recognize(rasterToCanvas(image), {}, { blocks: true, text: false });
+  const canvas = rasterToCanvas(image);
+  let data;
+  try { ({ data } = await worker.recognize(canvas, {}, { blocks: true, text: false })); }
+  finally { freeCanvas(canvas); }
   const words = [];
   for (const b of data.blocks ?? [])
     for (const p of b.paragraphs ?? [])

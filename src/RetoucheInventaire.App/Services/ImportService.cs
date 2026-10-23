@@ -23,10 +23,13 @@ public sealed partial class ImportService(OcrService ocr)
     [GeneratedRegex(@"^\p{L}{3,}$")]
     private static partial Regex WordLike();
 
-    public async Task<List<ImportedPage>> ImportAsync(StorageFile file, IDictionary<string, byte[]> sources, IProgress<string> progress)
+    /// <summary>
+    /// Pages du fichier, rendues au fur et à mesure (une page de PDF à la fois).
+    /// <paramref name="step"/> reçoit l'avancement dans le fichier (0 → 1) et le texte à afficher.
+    /// </summary>
+    public async IAsyncEnumerable<ImportedPage> ImportAsync(StorageFile file, string name, IDictionary<string, byte[]> sources, Action<double, string> step)
     {
         string ext = Path.GetExtension(file.Name).ToLowerInvariant();
-        var result = new List<ImportedPage>();
         switch (ext)
         {
             case ".txt":
@@ -34,49 +37,47 @@ public sealed partial class ImportService(OcrService ocr)
             {
                 var bytes = await File.ReadAllBytesAsync(file.Path);
                 var rows = DelimitedReader.Parse(DelimitedReader.DecodeText(bytes), ext);
-                result.Add(new(DataPageBuilder.Build(file.Name, rows), null, null));
+                yield return new(DataPageBuilder.Build(name, rows), null, null);
                 break;
             }
             case ".xlsx":
             {
-                await using var fs = File.OpenRead(file.Path);
-                foreach (var (sheet, rows) in XlsxReader.Read(fs))
-                    result.Add(new(DataPageBuilder.Build($"{file.Name} – {sheet}", rows), null, null));
+                var sheets = XlsxReader.Read(file.Path);
+                foreach (var (sheet, rows) in sheets)
+                    yield return new(DataPageBuilder.Build($"{name} – {sheet}", rows), null, null);
                 break;
             }
             case ".pdf":
             {
-                progress.Report($"{file.Name} : lecture du PDF…");
-                var rendered = await PdfService.RenderPagesAsync(file);
-                for (int i = 0; i < rendered.Count; i++)
+                step(0, $"{name} : ouverture du PDF…");
+                await foreach (var (index, count, png) in PdfService.RenderPagesAsync(file))
                 {
-                    progress.Report($"{file.Name} : page {i + 1}/{rendered.Count}, reconnaissance du texte…");
+                    void PageStep(double f, string text) => step((index - 1 + f) / count, $"Page {index} sur {count} : {text}");
+                    PageStep(0, "préparation…");
                     var entry = NewEntry(".png");
-                    sources[entry] = rendered[i];
-                    result.Add(await FromImageAsync(rendered[i], entry, $"{file.Name} – page {i + 1}"));
+                    sources[entry] = png;
+                    yield return await FromImageAsync(png, entry, $"{name} – page {index}", PageStep);
                 }
                 break;
             }
             default:
             {
-                progress.Report($"{file.Name} : redressement et reconnaissance du texte…");
                 var bytes = await File.ReadAllBytesAsync(file.Path);
                 var entry = NewEntry(ext);
                 sources[entry] = bytes;
-                result.Add(await FromImageAsync(bytes, entry, file.Name));
+                yield return await FromImageAsync(bytes, entry, name, (f, text) => step(f, $"{name} : {text}"));
                 break;
             }
         }
-        return result;
     }
 
     private static string NewEntry(string ext) => $"sources/{Guid.NewGuid():N}{ext}";
 
-    private async Task<ImportedPage> FromImageAsync(byte[] bytes, string entry, string name)
+    private async Task<ImportedPage> FromImageAsync(byte[] bytes, string entry, string name, Action<double, string> step)
     {
         var source = await WinImaging.DecodeAsync(bytes);
         var page = new ModelPage { Source = PageSource.Image, SourceName = name, SourceEntry = entry };
-        var (image, words) = await ProcessAsync(page, source, crop: null);
+        var (image, words) = await ProcessAsync(page, source, crop: null, step);
 
         // Page tournée d'un quart de tour (photo prise en paysage sans EXIF) : on essaie les autres sens.
         int found = Readable(words);
@@ -85,6 +86,7 @@ public sealed partial class ImportService(OcrService ocr)
             int bestTurns = 0, best = found;
             for (int k = 1; k <= 3; k++)
             {
+                step(0.9, $"recherche du bon sens ({k}/3)…");
                 var rotated = await Task.Run(() => ImageOps.Rotate90(image, k));
                 var (prep, scale) = await Task.Run(() => OcrPreparation.Prepare(rotated, []));
                 int n = Readable(await ocr.RecognizeAsync(prep));
@@ -94,7 +96,7 @@ public sealed partial class ImportService(OcrService ocr)
             {
                 page.QuarterTurns = bestTurns;
                 source = await Task.Run(() => ImageOps.Rotate90(source, bestTurns));
-                (image, _) = await ProcessAsync(page, source, crop: null);
+                (image, _) = await ProcessAsync(page, source, crop: null, step);
             }
         }
         return new ImportedPage(page, image, source);
@@ -107,8 +109,10 @@ public sealed partial class ImportService(OcrService ocr)
     /// Traite une source déjà orientée. Utilisé à l'import et après un recadrage manuel.
     /// Le modèle de page est rempli ; l'image redressée est renvoyée pour l'affichage.
     /// </summary>
-    public async Task<(Raster Image, List<OcrWord> Words)> ProcessAsync(ModelPage page, Raster orientedSource, Quad? crop)
+    public async Task<(Raster Image, List<OcrWord> Words)> ProcessAsync(ModelPage page, Raster orientedSource, Quad? crop, Action<double, string>? step = null)
     {
+        step ??= (_, _) => { };
+        step(0.05, "redressement…");
         var normalized = await Task.Run(() => PageNormalizer.Normalize(orientedSource, crop));
         page.Crop = normalized.Crop;
         page.Skew = normalized.SkewDegrees;
@@ -116,12 +120,16 @@ public sealed partial class ImportService(OcrService ocr)
 
         var grids = await Task.Run(() => RuleDetector.Detect(image));
         var (prep, scale) = await Task.Run(() => OcrPreparation.Prepare(image, grids));
+        step(0.15, "lecture du texte…");
         var words = OcrPreparation.MapBack(await ocr.RecognizeAsync(prep), scale);
         await Task.Run(() => PageAnalyzer.Analyze(page, image, words, grids));
 
         // Seconde lecture des cases vides qui contiennent de l'encre (nombres isolés oubliés).
-        foreach (var field in OcrPreparation.EmptyFieldsWithInk(page, image))
+        var empty = OcrPreparation.EmptyFieldsWithInk(page, image).ToList();
+        for (int i = 0; i < empty.Count; i++)
         {
+            var field = empty[i];
+            step(0.6 + 0.4 * i / empty.Count, $"relecture des cases ({i + 1}/{empty.Count})…");
             var (cell, cellScale, origin) = OcrPreparation.PrepareCell(image, field.Box);
             OcrPreparation.ApplyCellWords(field, await ocr.RecognizeAsync(cell), cellScale, origin);
         }

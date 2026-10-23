@@ -4,6 +4,7 @@
 import { Rect } from '../core/geometry.js';
 import { isModified, addLockZone, removeLockZoneAt } from '../core/model.js';
 import { paperColor } from '../core/exports.js';
+import { lotLabels } from '../core/lots.js';
 import { rasterToCanvas, baseSize, fitSize, font } from '../services/canvas.js';
 
 const BADGES = { Titre: ['T', '#0067c0'], Total: ['Σ', '#107c10'], EnTete: ['E', '#606060'], Ignoree: ['×', '#b42828'] };
@@ -12,15 +13,19 @@ const px = (e, r) => Object.assign(e.style, { left: r.X + 'px', top: r.Y + 'px',
 
 export class PageView {
   /** @param page modèle ; @param image raster redressé (null pour TXT/CSV/XLSX) ; @param zoom fonction qui renvoie le zoom courant */
-  constructor(page, image, { onFocus, onEdited, onTouch, onLocks, zoom }) {
+  constructor(page, image, { onFocus, onEdited, onTouch, onLocks, onLot, zoom }) {
     this.page = page;
     this.image = image;
-    this.cb = { onFocus, onEdited, onTouch, onLocks, zoom };
+    this.cb = { onFocus, onEdited, onTouch, onLocks, onLot, zoom };
     this.inputs = new Map();
     this.base = new Map();
     this.paper = new Map();
 
-    this.root = el('div', 'page');
+    // Colonne des lots à gauche, en dehors de la page : la mise en page du document n'est pas touchée.
+    this.row = el('div', 'page-row');
+    this.gutter = el('div', 'gutter', this.row);
+    this.gutter.style.height = page.Height + 'px';
+    this.root = el('div', 'page', this.row);
     Object.assign(this.root.style, { width: page.Width + 'px', height: page.Height + 'px' });
     if (image) {
       this.canvas = rasterToCanvas(image);
@@ -33,6 +38,29 @@ export class PageView {
     this.root.addEventListener('pointerdown', () => onTouch?.(this), true);
     this.initLockPad();
     this.build();
+  }
+
+  /** Libère la mémoire de l'image (important sur iPhone/iPad). */
+  dispose() {
+    if (this.canvas) { this.canvas.width = 0; this.canvas.height = 0; }
+    this.row.remove();
+  }
+
+  /** Champs « Lot » de la colonne de gauche, à la hauteur de chaque objet. */
+  refreshLots() {
+    this.gutter.replaceChildren();
+    for (const { line, box } of lotLabels(this.page)) {
+      const input = el('input', 'lot', this.gutter);
+      input.type = 'text';
+      input.inputMode = 'numeric';
+      input.value = line.Lot;
+      input.setAttribute('aria-label', 'Numéro de lot');
+      const h = Math.max(28, Math.min(40, box.Height + 8));
+      Object.assign(input.style, { top: Rect.cy(box) - h / 2 + 'px', height: h + 'px' });
+      const commit = () => { if (input.value.trim() !== line.Lot) this.cb.onLot?.(this, line, input.value); };
+      input.addEventListener('change', commit);
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } });
+    }
   }
 
   refresh() {
@@ -64,6 +92,7 @@ export class PageView {
           for (const f of line.Cells) if (!f.Locked) this.addField(f);
         }
     this.loupe = el('div', 'loupe', this.overlay);
+    this.refreshLots();
   }
 
   addField(f) {

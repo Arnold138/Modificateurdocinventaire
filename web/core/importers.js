@@ -121,7 +121,7 @@ export function buildDataPage(sourceName, rows) {
   for (let i = 0; i < Math.max(1, rows.length); i++) ys.push(ys[ys.length - 1] + ROW_HEIGHT);
   const table = { Bounds: Rect.fromEdges(xs[0], ys[0], xs[xs.length - 1], ys[ys.length - 1]), HasGrid: true, ColumnXs: xs, RowYs: ys, Rows: [] };
   rows.forEach((row, r) => {
-    const line = { Kind: 'Article', KindChosenByUser: false, OutsideTable: false, Cells: [] };
+    const line = { Kind: 'Article', KindChosenByUser: false, OutsideTable: false, Cells: [], Lot: '', LotManual: false };
     for (let c = 0; c < nCols; c++) {
       const text = c < row.length ? row[c].trim() : '';
       const numeric = text.length > 0 && [...text].every((ch) => /\p{Nd}/u.test(ch) || ' ,.-+ '.includes(ch));

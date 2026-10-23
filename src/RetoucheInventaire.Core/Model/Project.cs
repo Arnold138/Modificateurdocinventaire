@@ -63,6 +63,11 @@ public sealed class PrintedLine
     public bool OutsideTable { get; set; }
     public List<Field> Cells { get; set; } = [];
 
+    /// <summary>Numéro de lot (vide si aucun). Uniquement sur les lignes d'objet.</summary>
+    public string Lot { get; set; } = "";
+    /// <summary>Numéro saisi à la main : la numérotation automatique repart de lui.</summary>
+    public bool LotManual { get; set; }
+
     [JsonIgnore] public RectD Bounds => Cells.Aggregate(RectD.Empty, (r, f) => r.Union(f.Box));
     [JsonIgnore] public string FirstText => Cells.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c.Text))?.Text.Trim() ?? "";
 }

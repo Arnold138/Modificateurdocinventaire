@@ -54,10 +54,20 @@ public sealed class PageView
     public ModelPage Page { get; }
     public Grid Root { get; }
 
+    /// <summary>Ce qui est affiché : la colonne des lots à gauche, puis la page encadrée.</summary>
+    public Grid Host { get; }
+
+    /// <summary>Colonne des numéros de lot, en dehors de la page : la mise en page du document n'est pas touchée.</summary>
+    private readonly Canvas _gutter = new() { Width = GutterWidth };
+    public const double GutterWidth = 72;
+    private static readonly SolidColorBrush LotBorder = new(ColorHelper.FromArgb(255, 201, 214, 230));
+
     public event Action<PageView, Field>? FieldFocused;
     public event Action<PageView>? Edited;
     public event Action<PageView>? Touched;
     public event Action<PageView>? LocksChanged;
+    /// <summary>Numéro de lot tapé dans la colonne de gauche (ligne, valeur saisie).</summary>
+    public event Action<PageView, PrintedLine, string>? LotChanged;
 
     public PageView(ModelPage page, Raster? image)
     {
@@ -71,6 +81,20 @@ public sealed class PageView
         }
         else
             Root.Children.Add(DrawGrid());
+        _gutter.Height = page.Height;
+        Host = new Grid { HorizontalAlignment = HorizontalAlignment.Center };
+        Host.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Host.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var frame = new Border
+        {
+            BorderBrush = new SolidColorBrush(ColorHelper.FromArgb(255, 200, 200, 200)),
+            BorderThickness = new Thickness(1),
+            Child = Root,
+            VerticalAlignment = VerticalAlignment.Top,
+        };
+        Grid.SetColumn(frame, 1);
+        Host.Children.Add(_gutter);
+        Host.Children.Add(frame);
         Root.Children.Add(_fieldLayer);
         Root.Children.Add(_overlayLayer);
         Root.Children.Add(_inputLayer);
@@ -123,6 +147,45 @@ public sealed class PageView
         _overlayLayer.Children.Add(_focusFrame);
         _overlayLayer.Children.Add(_rubber);
         _overlayLayer.Children.Add(_loupe);
+        RefreshLots();
+    }
+
+    /// <summary>Champs « Lot » de la colonne de gauche, à la hauteur de chaque objet.</summary>
+    public void RefreshLots()
+    {
+        _gutter.Children.Clear();
+        foreach (var (line, box) in Lots.Labels(Page))
+        {
+            double h = Math.Max(28, Math.Min(40, box.Height + 8));
+            var tb = new TextBox
+            {
+                Text = line.Lot, Width = 58, Height = h, MinHeight = 0, MinWidth = 0, Padding = new Thickness(2, 0, 2, 0),
+                FontSize = 17, FontWeight = FontWeights.SemiBold, Foreground = Accent, TextAlignment = TextAlignment.Center,
+                VerticalContentAlignment = VerticalAlignment.Center, BorderBrush = LotBorder, BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8), Background = Paper,
+            };
+            var scope = new InputScope();
+            scope.Names.Add(new InputScopeName(InputScopeNameValue.Number));
+            tb.InputScope = scope;
+            Canvas.SetLeft(tb, GutterWidth - 8 - 58);
+            Canvas.SetTop(tb, box.CenterY - h / 2);
+            var target = line;
+            bool done = false; // le champ est remplacé après validation : une seule fois suffit
+            void Commit()
+            {
+                if (done || tb.Text.Trim() == target.Lot) return;
+                done = true;
+                LotChanged?.Invoke(this, target, tb.Text);
+            }
+            tb.LostFocus += (_, _) => Commit();
+            tb.KeyDown += (_, e) =>
+            {
+                if (e.Key != VirtualKey.Enter) return;
+                e.Handled = true;
+                Commit();
+            };
+            _gutter.Children.Add(tb);
+        }
     }
 
     // ---------- Champs ----------

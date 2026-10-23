@@ -35,11 +35,12 @@ public static partial class TxtExporter
         var output = new List<string>();
         var warnings = new List<string>();
 
+        bool lots = Lots.IsActive(project);
         foreach (var table in project.Pages.SelectMany(p => p.Tables))
         {
             var tableLines = new List<string>();
             foreach (var row in table.Rows)
-                tableLines.AddRange(ExportRow(row));
+                tableLines.AddRange(ExportRow(row, lots));
 
             bool startsWithHeader = table.Rows.SelectMany(r => r.Lines).FirstOrDefault(l => l.Kind != LineKind.Ignoree)?.Kind == LineKind.EnTete;
             if (tableLines.Count > 0 && startsWithHeader && output.Count > 0 && output[^1].Length > 0)
@@ -56,8 +57,10 @@ public static partial class TxtExporter
         return new TxtExportResult(text, output.Count, warnings);
     }
 
-    private static IEnumerable<string> ExportRow(Row row)
+    private static IEnumerable<string> ExportRow(Row row, bool lots)
     {
+        // Avec les lots : une 1re colonne « Lot » sur toutes les lignes, pour garder les colonnes alignées.
+        string Prefix(PrintedLine l) => !lots ? "" : (l.Kind == LineKind.EnTete ? "Lot" : l.Lot) + "\t";
         var lines = row.Lines.Where(l => l.Kind != LineKind.Ignoree).ToList();
 
         // Les valeurs imprimées en face d'un titre descendent sur la première ligne d'article sans valeurs.
@@ -76,7 +79,7 @@ public static partial class TxtExporter
             if (line.Kind == LineKind.Titre && !titlesKeepingValues.Contains(line))
             {
                 var title = CleanText(line.FirstText);
-                if (title.Length > 0) yield return title;
+                if (title.Length > 0) yield return Prefix(line) + title;
                 continue;
             }
 
@@ -86,7 +89,7 @@ public static partial class TxtExporter
 
             var parts = cells.Select((t, c) => c == 0 ? CleanText(t) : CleanValue(t)).ToList();
             while (parts.Count > 0 && parts[^1].Length == 0) parts.RemoveAt(parts.Count - 1);
-            if (parts.Count > 0) yield return string.Join("\t", parts);
+            if (parts.Count > 0) yield return Prefix(line) + string.Join("\t", parts);
         }
     }
 

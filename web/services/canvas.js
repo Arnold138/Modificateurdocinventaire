@@ -2,6 +2,7 @@
 import { raster, toRgba } from '../core/imaging.js';
 import { Rect } from '../core/geometry.js';
 import { editedFields, paperColor } from '../core/exports.js';
+import { lotLabels } from '../core/lots.js';
 
 export function makeCanvas(w, h) {
   const c = document.createElement('canvas');
@@ -14,6 +15,11 @@ export function rasterToCanvas(r) {
   const c = makeCanvas(rgba.w, rgba.h);
   c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(rgba.data), rgba.w, rgba.h), 0, 0);
   return c;
+}
+
+/** iPhone/iPad : la mémoire des images n'est rendue qu'en vidant le canvas, pas en l'oubliant. */
+export function freeCanvas(c) {
+  if (c) { c.width = 0; c.height = 0; }
 }
 
 export function canvasToRaster(c) {
@@ -76,5 +82,29 @@ export function renderEdits(page, flat) {
     ctx.fillText(f.Text, x, baseline);
     ctx.restore();
   }
-  return canvasToRaster(c);
+  // Numéros de lot : dans la marge gauche, à la hauteur de l'objet, même taille que son texte, en noir.
+  for (const { line, box } of lotLabels(page)) {
+    const [r, g, b] = paperColor(flat, box);
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.fillRect(box.X, box.Y, box.Width, box.Height);
+    const size = lotSize(line, box);
+    ctx.font = font(size);
+    const w = ctx.measureText(line.Lot).width;
+    ctx.fillStyle = '#000';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(line.Lot, Rect.right(box) - lotGap(size) - w, Math.min(Rect.bottom(box) - 0.2 * size, Rect.cy(box) + 0.33 * size));
+  }
+  const out = canvasToRaster(c);
+  freeCanvas(c);
+  return out;
+}
+
+/** Espace entre le numéro et le bord du tableau. */
+export const lotGap = (size) => Math.max(2, 0.35 * size);
+
+/** Taille du numéro de lot : celle du texte de l'objet, réduite si la marge est étroite. */
+export function lotSize(line, box) {
+  let size = Math.max(5, Math.min(baseSize(line.Cells[0]), box.Height / LINE_HEIGHT));
+  while (size > 5 && measure(line.Lot, size) > box.Width - 1 - lotGap(size)) size -= 0.5;
+  return size;
 }

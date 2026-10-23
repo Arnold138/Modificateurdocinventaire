@@ -5,21 +5,26 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Shapes;
 using RetoucheInventaire.App.Services;
 using RetoucheInventaire.App.Views;
 using RetoucheInventaire.Core;
 using RetoucheInventaire.Core.Export;
 using RetoucheInventaire.Core.Imaging;
+using RetoucheInventaire.Core.Import;
 using RetoucheInventaire.Core.Model;
 using RetoucheInventaire.Core.Storage;
+using Windows.Storage;
 using Windows.Storage.Pickers;
+using Windows.System;
 using ModelPage = RetoucheInventaire.Core.Model.Page;
 
 namespace RetoucheInventaire.App;
 
 /// <summary>
-/// L'écran unique : importer → corriger sur la page → exporter le .txt.
+/// L'écran unique, identique à la version iPhone/iPad : importer → corriger sur la page → exporter.
+/// Une seule page est affichée à la fois (« 3 / 10 », ◀ ▶) : les longs inventaires restent fluides.
 /// </summary>
 public sealed partial class MainWindow : Window
 {
@@ -35,14 +40,18 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherQueueTimer _autosaveTimer;
 
     private InventoryProject _project = new();
-    private readonly Dictionary<string, byte[]> _sources = [];          // entrée d'archive → fichier source
-    private readonly Dictionary<string, Raster> _orientedSources = [];  // page → source orientée (pour recadrer)
-    private readonly List<PageView> _views = [];
-    private readonly Dictionary<string, (StackPanel Panel, TextBlock Title, Border Frame)> _frames = [];
-    private PageView? _currentView;
+    private readonly Dictionary<string, byte[]> _sources = [];   // entrée d'archive → fichier source
+    // Images gardées en mémoire pour quelques pages récentes seulement.
+    private readonly Dictionary<ModelPage, Raster> _flats = [];     // page → image redressée
+    private readonly Dictionary<ModelPage, Raster> _oriented = [];  // page → photo d'origine orientée
+    private readonly List<ModelPage> _recent = [];
+    private int _index;
+    private PageView? _view;
     private Field? _currentField;
     private string? _projectPath;
     private bool _busy;
+
+    private ModelPage? CurrentPage => _index >= 0 && _index < _project.Pages.Count ? _project.Pages[_index] : null;
 
     public MainWindow()
     {
@@ -57,7 +66,12 @@ public sealed partial class MainWindow : Window
 
         InitCropHandles();
         var icon = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "app.ico");
-        if (File.Exists(icon)) AppWindow.SetIcon(icon);
+        if (File.Exists(icon))
+        {
+            AppWindow.SetIcon(icon);
+            EmptyIcon.Source = new BitmapImage(new Uri(icon));
+        }
+        Root.KeyDown += Root_KeyDown;
         Root.Loaded += async (_, _) => await StartAsync();
         Closed += (_, _) => Autosave();
     }
@@ -73,162 +87,321 @@ public sealed partial class MainWindow : Window
 
         if (File.Exists(AutosavePath))
         {
-            try
+            await RunBusyAsync(async () =>
             {
-                await OpenProjectAsync(AutosavePath, rememberPath: false);
-                if (File.Exists(LastPathFile)) _projectPath = File.ReadAllText(LastPathFile).Trim() is { Length: > 0 } p ? p : null;
-                SetStatus("Travail en cours rechargé." + (_projectPath is null ? "" : $" Enregistrement continu dans {System.IO.Path.GetFileName(_projectPath)}."));
-                ShowSaveState();
-            }
-            catch
-            {
-                SetStatus("Le travail en cours n'a pas pu être rechargé.");
-            }
+                try
+                {
+                    await OpenProjectAsync(AutosavePath, rememberPath: false);
+                    if (File.Exists(LastPathFile)) _projectPath = File.ReadAllText(LastPathFile).Trim() is { Length: > 0 } p ? p : null;
+                    SetStatus($"Travail en cours rechargé ({_project.Pages.Count} page(s))."
+                              + (_projectPath is null ? "" : $" Enregistrement continu dans {System.IO.Path.GetFileName(_projectPath)}."));
+                    ShowSaveState();
+                }
+                catch
+                {
+                    SetStatus("Le travail en cours n'a pas pu être rechargé.");
+                }
+            });
         }
         UpdateCommands();
     }
 
+    // ---------- Mémoire : quelques pages récentes seulement ----------
+
+    private void Remember(Dictionary<ModelPage, Raster> map, ModelPage page, Raster value, int max)
+    {
+        map[page] = value;
+        _recent.Remove(page);
+        _recent.Add(page);
+        foreach (var old in _recent.Where(p => map.ContainsKey(p)).SkipLast(max).ToList()) map.Remove(old);
+    }
+
+    private void Forget(ModelPage page)
+    {
+        _flats.Remove(page);
+        _oriented.Remove(page);
+        _recent.Remove(page);
+    }
+
     // ---------- Import ----------
+
+    private async void Photo_Click(object sender, RoutedEventArgs e)
+    {
+        StorageFile? file;
+        try
+        {
+            var camera = new Microsoft.Windows.Media.Capture.CameraCaptureUI(AppWindow.Id);
+            camera.PhotoSettings.Format = Microsoft.Windows.Media.Capture.CameraCaptureUIPhotoFormat.Jpeg;
+            file = await camera.CaptureFileAsync(Microsoft.Windows.Media.Capture.CameraCaptureUIMode.Photo);
+        }
+        catch (Exception ex)
+        {
+            await ShowMessageAsync("Caméra indisponible", $"La caméra n'a pas pu être ouverte ({ex.Message}). Utilisez « Importer » pour ouvrir une photo.");
+            return;
+        }
+        if (file is null) return;
+        await RunBusyAsync(() => ImportFilesAsync([file], $"Photo {DateTime.Now:dd-MM-yyyy HH-mm}.jpg"));
+    }
 
     private async void Import_Click(object sender, RoutedEventArgs e)
     {
         var picker = new FileOpenPicker { ViewMode = PickerViewMode.Thumbnail, SuggestedStartLocation = PickerLocationId.PicturesLibrary };
         InitPicker(picker);
         foreach (var ext in ImportService.Extensions) picker.FileTypeFilter.Add(ext);
+        picker.FileTypeFilter.Add(ProjectStore.Extension);
         var files = await picker.PickMultipleFilesAsync();
         if (files is null || files.Count == 0) return;
-
-        await RunBusyAsync(async () =>
-        {
-            var progress = new Progress<string>(SetStatus);
-            int added = 0;
-            foreach (var file in files.OrderBy(f => f.Name, StringComparer.CurrentCultureIgnoreCase))
-            {
-                try
-                {
-                    foreach (var imported in await _import.ImportAsync(file, _sources, progress))
-                    {
-                        _project.Pages.Add(imported.Page);
-                        ShowPage(imported.Page, imported.Image, imported.OrientedSource);
-                        added++;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    await ShowMessageAsync("Import impossible", $"{file.Name} : {ex.Message}");
-                }
-            }
-            if (_project.Pages.Count == added && files.Count > 0)
-                _project.Name = System.IO.Path.GetFileNameWithoutExtension(files[0].Name);
-            SetStatus($"{added} page(s) importée(s). Touchez une case pour la modifier ; les badges à gauche indiquent titres (T) et totaux (Σ).");
-            FitWidthSoon();
-            ScheduleAutosave();
-        });
+        await RunBusyAsync(() => ImportFilesAsync(files, null));
     }
 
-    private void ShowPage(ModelPage page, Raster? image, Raster? orientedSource)
+    private async Task ImportFilesAsync(IReadOnlyList<StorageFile> files, string? forcedName)
     {
-        if (orientedSource != null) _orientedSources[page.Id] = orientedSource;
-        var view = CreateView(page, image);
+        int firstNew = _project.Pages.Count, added = 0;
+        bool wasEmpty = firstNew == 0;
+        var sorted = files.OrderBy(f => f.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+        for (int k = 0; k < sorted.Count; k++)
+        {
+            var file = sorted[k];
+            string name = forcedName ?? Names.Repair(file.Name);
+            int fileIndex = k;
+            // Progression globale : fichier k sur N, et page i sur n à l'intérieur d'un PDF.
+            void Step(double f, string text)
+            {
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    Progress.Value = (fileIndex + f) / sorted.Count;
+                    SetStatus(sorted.Count > 1 && !text.StartsWith("Page ") ? $"Fichier {fileIndex + 1} sur {sorted.Count} · {text}" : text);
+                });
+            }
+            try
+            {
+                if (System.IO.Path.GetExtension(file.Name).Equals(ProjectStore.Extension, StringComparison.OrdinalIgnoreCase))
+                {
+                    await OpenProjectAsync(file.Path, rememberPath: true);
+                    RememberProjectPath();
+                    firstNew = _project.Pages.Count;
+                    continue;
+                }
+                await foreach (var imported in _import.ImportAsync(file, name, _sources, Step))
+                {
+                    await AddPageAsync(imported);
+                    added++;
+                }
+            }
+            catch (Exception ex)
+            {
+                await ShowMessageAsync("Import impossible", $"{name} : {ex.Message}");
+            }
+        }
+        if (added == 0) return;
+        if (wasEmpty) _project.Name = System.IO.Path.GetFileNameWithoutExtension(forcedName ?? Names.Repair(sorted[0].Name));
+        // On revient sur la première page importée.
+        if (_index != firstNew && firstNew < _project.Pages.Count) await ShowPageAsync(firstNew);
+        Autosave();
+        UpdateCommands();
+        SetStatus($"{added} page(s) ajoutée(s). Touchez une case pour la corriger ; ◀ ▶ en haut pour changer de page.");
+    }
 
-        var title = new TextBlock { FontSize = 15, VerticalAlignment = VerticalAlignment.Center, Opacity = 0.85 };
-        var remove = new Button { Content = "Retirer la page", MinHeight = 44, Padding = new Thickness(14, 4, 14, 4) };
-        string pageId = page.Id;
-        remove.Click += async (_, _) => await RemovePageAsync(pageId);
-        var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 16 };
+    /// <summary>Ajoute une page, l'affiche et enregistre aussitôt : rien n'est perdu si l'application est fermée en route.</summary>
+    private async Task AddPageAsync(ImportedPage imported)
+    {
+        _project.Pages.Add(imported.Page);
+        Lots.Resync(_project);
+        if (imported.OrientedSource != null) Remember(_oriented, imported.Page, imported.OrientedSource, 2);
+        await ShowPageAsync(_project.Pages.Count - 1, imported.Image);
+        Autosave();
+    }
+
+    // ---------- Affichage d'une page ----------
+
+    /// <summary>Affiche la page n (et seulement elle).</summary>
+    private async Task ShowPageAsync(int n, Raster? flat = null, bool fit = true)
+    {
+        PagesPanel.Children.Clear();
+        _view = null;
+        _currentField = null;
+        if (_project.Pages.Count == 0) { _index = 0; UpdateCommands(); return; }
+        _index = Math.Clamp(n, 0, _project.Pages.Count - 1);
+        var page = _project.Pages[_index];
+        UpdateCommands();
+
+        Raster? image = null;
+        if (page.Source == PageSource.Image)
+        {
+            image = flat ?? (_flats.TryGetValue(page, out var cached) ? cached : null);
+            if (image is null)
+            {
+                SetStatus($"Ouverture de la page {_index + 1}…");
+                image = await RestoreFlatAsync(page);
+            }
+            if (image != null) Remember(_flats, page, image, 3);
+            if (CurrentPage != page) return; // l'utilisateur a déjà changé de page
+        }
+
+        var title = new TextBlock { FontSize = 15, VerticalAlignment = VerticalAlignment.Center, Opacity = 0.7,
+                                    Text = $"Page {_index + 1} sur {_project.Pages.Count} · {page.SourceName}" };
+        var remove = new Button { Content = "Retirer la page", MinHeight = 40, Padding = new Thickness(14, 4, 14, 4), CornerRadius = new CornerRadius(20) };
+        remove.Click += async (_, _) => await RemovePageAsync(page);
+        var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Margin = new Thickness(PageView.GutterWidth, 0, 0, 0) };
         header.Children.Add(title);
         header.Children.Add(remove);
-        var frame = new Border
+
+        var view = new PageView(page, image);
+        view.FieldFocused += (_, f) => { _currentField = f; UpdateEditBar(); };
+        view.Edited += v => { AfterEdit(v); UpdateEditBar(); ScheduleAutosave(); };
+        view.LocksChanged += _ => { ScheduleAutosave(); SetStatus("Zones verrouillées mises à jour."); };
+        view.LotChanged += (v, line, value) =>
         {
-            BorderBrush = new SolidColorBrush(ColorHelper.FromArgb(255, 160, 160, 160)),
-            BorderThickness = new Thickness(1),
-            Child = view.Root,
+            Lots.Set(_project, line, value);
+            v.RefreshLots();
+            SetStatus($"Lot {(line.Lot.Length > 0 ? line.Lot : "(automatique)")} : les numéros suivants ont été recalés.");
+            ScheduleAutosave();
         };
-        var panel = new StackPanel { Spacing = 8 };
-        panel.Children.Add(header);
-        panel.Children.Add(frame);
-        _frames[page.Id] = (panel, title, frame);
-        PagesPanel.Children.Add(panel);
-        EmptyHint.Visibility = Visibility.Collapsed;
-        RenumberPages();
+        view.SetLockMode(LockToggle.IsChecked == true);
+        _view = view;
+        PagesPanel.Children.Add(header);
+        PagesPanel.Children.Add(view.Host);
+        SetStatus(page.Source == PageSource.Image
+            ? "Touchez une case pour la corriger ; l'original s'affiche en loupe au-dessus."
+            : "Touchez une case pour la corriger.");
+        if (fit) FitWidthSoon();
+        else PageScroller.ChangeView(null, 0, null, disableAnimation: true);
         UpdateCommands();
     }
 
-    private PageView CreateView(ModelPage page, Raster? image)
+    private static string LotSignature(ModelPage page) =>
+        string.Join("|", Lots.Labels(page).Select(l => l.Line.Cells.FirstOrDefault()?.Id + ":" + l.Line.Lot));
+
+    /// <summary>Après une saisie : si une ligne devient (ou cesse d'être) un objet, les lots se recalent.</summary>
+    private void AfterEdit(PageView view)
     {
-        var view = new PageView(page, image);
-        view.FieldFocused += (v, f) => { _currentView = v; _currentField = f; UpdateSelection(); };
-        view.Edited += _ => { UpdateSelection(); ScheduleAutosave(); };
-        view.Touched += v => { _currentView = v; UpdateCommands(); };
-        view.LocksChanged += _ => { ScheduleAutosave(); SetStatus("Zones verrouillées mises à jour."); };
-        view.SetLockMode(LockToggle.IsChecked == true);
-        _views.Add(view);
-        return view;
+        if (!Lots.IsActive(_project)) return;
+        string before = LotSignature(view.Page);
+        Lots.Resync(_project);
+        if (LotSignature(view.Page) != before) view.RefreshLots();
     }
 
-    private void RenumberPages()
+    private async void GoTo(int n)
     {
+        if (_busy || n == _index || n < 0 || n >= _project.Pages.Count) return;
+        Autosave();
+        await RunBusyAsync(() => ShowPageAsync(n));
+    }
+
+    private void PagePrev_Click(object sender, RoutedEventArgs e) => GoTo(_index - 1);
+    private void PageNext_Click(object sender, RoutedEventArgs e) => GoTo(_index + 1);
+
+    private void Root_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.OriginalSource is TextBox) return;
+        if (e.Key == VirtualKey.PageUp || e.Key == VirtualKey.Left) { GoTo(_index - 1); e.Handled = true; }
+        else if (e.Key == VirtualKey.PageDown || e.Key == VirtualKey.Right) { GoTo(_index + 1); e.Handled = true; }
+    }
+
+    /// <summary>Liste des pages : toucher une page pour y aller.</summary>
+    private async void PageLabel_Click(object sender, RoutedEventArgs e)
+    {
+        if (_busy || _project.Pages.Count == 0) return;
+        int? target = null;
+        ContentDialog? dialog = null;
+        var list = new StackPanel { Spacing = 4 };
         for (int i = 0; i < _project.Pages.Count; i++)
-            if (_frames.TryGetValue(_project.Pages[i].Id, out var f))
-                f.Title.Text = $"Page {i + 1}/{_project.Pages.Count} · {_project.Pages[i].SourceName}";
+        {
+            var p = _project.Pages[i];
+            int edits = p.AllFields().Count(f => f.IsModified);
+            int index = i;
+            var row = new Grid { ColumnSpacing = 12, Padding = new Thickness(4, 6, 4, 6) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var num = new Border
+            {
+                Width = 36, Height = 36, CornerRadius = new CornerRadius(18),
+                Background = new SolidColorBrush(i == _index ? ColorHelper.FromArgb(255, 10, 102, 194) : ColorHelper.FromArgb(255, 232, 241, 251)),
+                Child = new TextBlock
+                {
+                    Text = (i + 1).ToString(), FontWeight = Microsoft.UI.Text.FontWeights.Bold,
+                    Foreground = new SolidColorBrush(i == _index ? Colors.White : ColorHelper.FromArgb(255, 10, 102, 194)),
+                    HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+                },
+            };
+            var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            text.Children.Add(new TextBlock { Text = p.SourceName, TextTrimming = TextTrimming.CharacterEllipsis });
+            text.Children.Add(new TextBlock { Text = edits > 0 ? $"{edits} case(s) modifiée(s)" : "non modifiée", FontSize = 13, Opacity = 0.65 });
+            Grid.SetColumn(text, 1);
+            row.Children.Add(num);
+            row.Children.Add(text);
+            var button = new Button { Content = row, HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                                      Background = new SolidColorBrush(Colors.Transparent), BorderThickness = new Thickness(0) };
+            button.Click += (_, _) => { target = index; dialog?.Hide(); };
+            list.Children.Add(button);
+        }
+        dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot, Title = $"{_project.Pages.Count} page(s)",
+            Content = new ScrollViewer { Content = list, MaxHeight = 520 },
+            CloseButtonText = "Fermer",
+        };
+        await dialog.ShowAsync();
+        if (target is int t) GoTo(t);
     }
 
-    private async Task RemovePageAsync(string pageId)
+    private async Task RemovePageAsync(ModelPage page)
     {
-        var page = _project.Pages.FirstOrDefault(p => p.Id == pageId);
-        if (page is null || _busy || !await ConfirmAsync("Retirer cette page ?", $"« {page.SourceName} » sera retirée du projet et de l'export.")) return;
-        var view = _views.FirstOrDefault(v => v.Page == page);
-        if (view != null) _views.Remove(view);
-        if (_frames.Remove(page.Id, out var f)) PagesPanel.Children.Remove(f.Panel);
-        _project.Pages.Remove(page);
-        _orientedSources.Remove(page.Id);
+        if (_busy || !await ConfirmAsync("Retirer cette page ?", $"« {page.SourceName} » sera retirée du projet et des exports.", "Retirer")) return;
+        int i = _project.Pages.IndexOf(page);
+        if (i < 0) return;
+        _project.Pages.RemoveAt(i);
+        Forget(page);
         if (page.SourceEntry != null && _project.Pages.All(p => p.SourceEntry != page.SourceEntry)) _sources.Remove(page.SourceEntry);
-        if (_currentView == view) { _currentView = null; _currentField = null; }
-        EmptyHint.Visibility = _project.Pages.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        RenumberPages();
-        UpdateSelection();
+        Lots.Resync(_project);
+        await ShowPageAsync(Math.Min(i, _project.Pages.Count - 1));
         ScheduleAutosave();
     }
 
     // ---------- Édition ----------
 
-    private void UpdateSelection()
+    private void UpdateEditBar()
     {
         var found = _currentField is null ? null : PageEdits.FindLine(_project, _currentField);
-        if (found is { } hit)
-        {
-            KindButtonText.Text = $"Type : {PageEdits.Label(hit.Line.Kind)}";
-            string text = hit.Line.FirstText.Length > 40 ? hit.Line.FirstText[..40] + "…" : hit.Line.FirstText;
-            SetStatus($"{hit.Page.SourceName} · « {text} » · {PageEdits.Label(hit.Line.Kind)}"
-                      + (_currentField!.IsModified ? $" · original : « {_currentField.OriginalText} »" : ""));
-        }
-        else KindButtonText.Text = "Type de ligne";
-        UpdateCommands();
+        EditBar.Visibility = found is null ? Visibility.Collapsed : Visibility.Visible;
+        if (found is not { } hit) return;
+        KindButtonText.Text = PageEdits.Label(hit.Line.Kind);
+        RevertButton.IsEnabled = !_busy && _currentField!.IsModified;
+        KindButton.IsEnabled = !_busy;
+        string text = hit.Line.FirstText.Length > 48 ? hit.Line.FirstText[..48] + "…" : hit.Line.FirstText;
+        EditInfo.Text = _currentField!.IsModified
+            ? $"Original : « {(_currentField.OriginalText.Length > 0 ? _currentField.OriginalText : "(vide)")} »"
+            : $"« {text} »";
     }
 
     private void Kind_Click(object sender, RoutedEventArgs e)
     {
-        if (_currentField is null || _currentView is null) return;
+        if (_currentField is null || _view is null) return;
         if (PageEdits.FindLine(_project, _currentField) is not { } hit) return;
         PageEdits.CycleKind(hit.Line);
+        Lots.Resync(_project);
         var field = _currentField;
-        _currentView.Refresh();
-        _currentView.Focus(field);
-        UpdateSelection();
+        _view.Refresh();
+        _view.Focus(field);
+        _currentField = field;
+        UpdateEditBar();
+        SetStatus($"Type de ligne : {PageEdits.Label(hit.Line.Kind)}.");
         ScheduleAutosave();
     }
 
     private void Revert_Click(object sender, RoutedEventArgs e)
     {
-        if (_currentField is null || _currentView is null) return;
-        _currentView.Revert(_currentField);
-        UpdateSelection();
+        if (_currentField is null || _view is null) return;
+        _view.Revert(_currentField);
+        AfterEdit(_view);
+        UpdateEditBar();
+        ScheduleAutosave();
     }
 
     private void LockToggle_Changed(object sender, RoutedEventArgs e)
     {
         bool on = LockToggle.IsChecked == true;
-        foreach (var v in _views) v.SetLockMode(on);
+        _view?.SetLockMode(on);
         // Pendant le tracé, le doigt dessine au lieu de faire défiler la page.
         PageScroller.HorizontalScrollMode = on ? ScrollMode.Disabled : ScrollMode.Enabled;
         PageScroller.VerticalScrollMode = on ? ScrollMode.Disabled : ScrollMode.Enabled;
@@ -238,7 +411,78 @@ public sealed partial class MainWindow : Window
             : "Verrouillage terminé.");
     }
 
-    // ---------- Fichiers ----------
+    // ---------- Lots ----------
+
+    private async void Lots_Click(object sender, RoutedEventArgs e)
+    {
+        if (_busy || _project.Pages.Count == 0) return;
+        var objects = Lots.ObjectLines(_project).Select(o => o.Line).ToList();
+        bool active = Lots.IsActive(_project);
+        string first = objects.FirstOrDefault()?.Lot ?? "", last = objects.LastOrDefault()?.Lot ?? "";
+
+        var panel = new StackPanel { Spacing = 12, MaxWidth = 480 };
+        panel.Children.Add(new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            Text = "Un numéro de lot par objet, dans une colonne à gauche de la page. Il apparaît dans le .txt (1re colonne) "
+                 + "et sur le JPEG (marge gauche). Les titres, totaux et en-têtes n'en ont pas.",
+        });
+        panel.Children.Add(new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Text = active
+                ? $"{objects.Count} objets numérotés de {first} à {last}, toutes pages confondues."
+                : $"{objects.Count} objets trouvés sur {_project.Pages.Count} page(s).",
+        });
+        if (active)
+            panel.Children.Add(new TextBlock
+            {
+                TextWrapping = TextWrapping.Wrap, Opacity = 0.7,
+                Text = "Pour changer un numéro, touchez-le dans la colonne de gauche : les suivants se recalent tout seuls.",
+            });
+        var start = new NumberBox
+        {
+            Header = "Commencer à", Minimum = 0, SmallChange = 1, Width = 180, HorizontalAlignment = HorizontalAlignment.Left,
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline,
+            Value = active && int.TryParse(first, out var f0) ? f0 : 1,
+        };
+        panel.Children.Add(start);
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot, Title = "Numéros de lot", Content = panel,
+            PrimaryButtonText = active ? "Renuméroter" : "Numéroter",
+            SecondaryButtonText = active ? "Enlever les numéros" : "",
+            CloseButtonText = "Fermer", DefaultButton = ContentDialogButton.Primary,
+        };
+        var result = await dialog.ShowAsync();
+        if (result == ContentDialogResult.Primary)
+        {
+            Lots.Number(_project, double.IsNaN(start.Value) ? 1 : (int)Math.Round(start.Value));
+            SetStatus($"Lots numérotés de {objects.FirstOrDefault()?.Lot} à {objects.LastOrDefault()?.Lot}.");
+        }
+        else if (result == ContentDialogResult.Secondary)
+        {
+            if (!await ConfirmAsync("Enlever les numéros de lot ?", "Tous les numéros seront retirés (texte et images).", "Enlever")) return;
+            Lots.Clear(_project);
+            SetStatus("Numéros de lot enlevés.");
+        }
+        else return;
+        _view?.RefreshLots();
+        UpdateCommands();
+        ScheduleAutosave();
+    }
+
+    // ---------- Exports ----------
+
+    private void ExportMenu_Opening(object sender, object e)
+    {
+        int images = _project.Pages.Count(p => p.Source == PageSource.Image);
+        ExportAllJpegItem.Visibility = images > 0 ? Visibility.Visible : Visibility.Collapsed;
+        ExportAllJpegItem.Text = images > 1 ? $"Toutes les images JPEG ({images})" : "Image JPEG";
+        ExportOneJpegItem.Visibility = images > 1 && CurrentPage?.Source == PageSource.Image ? Visibility.Visible : Visibility.Collapsed;
+        ExportOneJpegItem.Text = $"Image de la page {_index + 1} seulement";
+    }
 
     private async void ExportTxt_Click(object sender, RoutedEventArgs e)
     {
@@ -250,17 +494,25 @@ public sealed partial class MainWindow : Window
         if (file is null) return;
 
         var result = TxtExporter.Write(_project, file.Path);
-        SetStatus($"Fichier texte exporté : {file.Name} ({result.LineCount} lignes, UTF-8).");
+        SetStatus($"Fichier texte exporté : {file.Name} ({result.LineCount} lignes, UTF-8)."
+                  + (Lots.IsActive(_project) ? " La 1re colonne contient le numéro de lot." : ""));
         if (result.Warnings.Count > 0)
             await ShowMessageAsync("À vérifier avant envoi",
                 string.Join("\n", result.Warnings.Take(8)) + (result.Warnings.Count > 8 ? $"\n… et {result.Warnings.Count - 8} autre(s)." : ""));
     }
 
-    /// <summary>Une image JPEG par photo ou page de PDF : l'original, avec seulement les cases modifiées.</summary>
-    private async void ExportJpeg_Click(object sender, RoutedEventArgs e)
+    private async void ExportJpeg_Click(object sender, RoutedEventArgs e) =>
+        await ExportJpegAsync(_project.Pages.Where(p => p.Source == PageSource.Image).ToList());
+
+    private async void ExportOneJpeg_Click(object sender, RoutedEventArgs e)
     {
-        var views = _project.Pages.Select(p => _views.FirstOrDefault(v => v.Page == p)).OfType<PageView>().Where(v => v.Image != null).ToList();
-        if (views.Count == 0) { SetStatus("Pas de photo ni de PDF à exporter en image (les TXT, CSV et XLSX s'exportent en .txt)."); return; }
+        if (CurrentPage is { Source: PageSource.Image } page) await ExportJpegAsync([page]);
+    }
+
+    /// <summary>Une image JPEG par photo ou page de PDF : l'original, avec seulement les cases modifiées et les lots.</summary>
+    private async Task ExportJpegAsync(List<ModelPage> pages)
+    {
+        if (pages.Count == 0) { SetStatus("Pas de photo ni de PDF à exporter en image (les TXT, CSV et XLSX s'exportent en .txt)."); return; }
         var picker = new FolderPicker { SuggestedStartLocation = PickerLocationId.PicturesLibrary };
         picker.FileTypeFilter.Add("*");
         InitPicker(picker);
@@ -270,14 +522,17 @@ public sealed partial class MainWindow : Window
         await RunBusyAsync(async () =>
         {
             int done = 0;
-            foreach (var view in views)
+            for (int i = 0; i < pages.Count; i++)
             {
-                SetStatus($"Création de l'image {done + 1}/{views.Count}…");
-                var source = await GetOrientedSourceAsync(view.Page);
-                if (source is null) continue;
-                var edited = ImageExportService.RenderEdits(view.Page, view.Image!);
-                var final = await Task.Run(() => ImageExporter.ComposeIntoSource(source, view.Page, edited));
-                await ImageExportService.SaveJpegAsync(final, System.IO.Path.Combine(folder.Path, ImageExportService.OutputName(view.Page)));
+                var page = pages[i];
+                Progress.Value = (double)i / pages.Count;
+                SetStatus($"Création de l'image {i + 1} sur {pages.Count}…");
+                var flat = _flats.TryGetValue(page, out var cached) ? cached : await RestoreFlatAsync(page);
+                var source = await GetOrientedSourceAsync(page);
+                if (flat is null || source is null) continue;
+                var edited = ImageExportService.RenderEdits(page, flat);
+                var final = await Task.Run(() => ImageExporter.ComposeIntoSource(source, page, edited));
+                await ImageExportService.SaveJpegAsync(final, System.IO.Path.Combine(folder.Path, ImageExportService.OutputName(page)));
                 done++;
             }
             SetStatus($"{done} image(s) JPEG exportée(s) dans « {folder.Name} » (nom d'origine + « - modifié »).");
@@ -286,32 +541,38 @@ public sealed partial class MainWindow : Window
 
     private async Task<Raster?> GetOrientedSourceAsync(ModelPage page)
     {
-        if (_orientedSources.TryGetValue(page.Id, out var source)) return source;
+        if (_oriented.TryGetValue(page, out var source)) return source;
         if (page.SourceEntry is null || !_sources.TryGetValue(page.SourceEntry, out var bytes)) return null;
         (_, source) = await ImportService.RestoreImageAsync(page, bytes);
-        _orientedSources[page.Id] = source;
+        Remember(_oriented, page, source, 2);
         return source;
     }
+
+    /// <summary>Image affichée d'une page enregistrée : recalculée à l'identique, sans relire le texte.</summary>
+    private async Task<Raster?> RestoreFlatAsync(ModelPage page)
+    {
+        if (page.SourceEntry is null || !_sources.TryGetValue(page.SourceEntry, out var bytes)) return null;
+        var (image, oriented) = await ImportService.RestoreImageAsync(page, bytes);
+        Remember(_oriented, page, oriented, 2);
+        return image;
+    }
+
+    // ---------- Projet ----------
 
     private async void Save_Click(object sender, RoutedEventArgs e)
     {
         if (_project.Pages.Count == 0) { SetStatus("Rien à enregistrer."); return; }
-        var path = _projectPath;
-        if (path is null)
-        {
-            var picker = new FileSavePicker { SuggestedFileName = _project.Name, SuggestedStartLocation = PickerLocationId.DocumentsLibrary };
-            InitPicker(picker);
-            picker.FileTypeChoices.Add("Projet d'inventaire", new List<string> { ProjectStore.Extension });
-            var file = await picker.PickSaveFileAsync();
-            if (file is null) return;
-            path = file.Path;
-        }
+        var picker = new FileSavePicker { SuggestedFileName = _project.Name, SuggestedStartLocation = PickerLocationId.DocumentsLibrary };
+        InitPicker(picker);
+        picker.FileTypeChoices.Add("Projet d'inventaire", new List<string> { ProjectStore.Extension });
+        var file = await picker.PickSaveFileAsync();
+        if (file is null) return;
         try
         {
-            _projectPath = path;
+            _projectPath = file.Path;
             RememberProjectPath();
             Autosave();
-            SetStatus($"Projet enregistré : {System.IO.Path.GetFileName(path)}. Chaque modification y est maintenant enregistrée automatiquement.");
+            SetStatus($"Projet enregistré : {file.Name}. Chaque modification y est maintenant enregistrée automatiquement.");
         }
         catch (Exception ex)
         {
@@ -330,9 +591,24 @@ public sealed partial class MainWindow : Window
         {
             await OpenProjectAsync(file.Path, rememberPath: true);
             RememberProjectPath();
-            SetStatus($"Projet ouvert : {file.Name}. Les modifications y sont enregistrées automatiquement.");
+            SetStatus($"Projet ouvert : {file.Name} ({_project.Pages.Count} page(s)). Les modifications y sont enregistrées automatiquement.");
             ScheduleAutosave();
         });
+    }
+
+    private async void Rename_Click(object sender, RoutedEventArgs e)
+    {
+        var box = new TextBox { Text = _project.Name, MinWidth = 320 };
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot, Title = "Nom du projet", Content = box,
+            PrimaryButtonText = "Renommer", CloseButtonText = "Annuler", DefaultButton = ContentDialogButton.Primary,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary || box.Text.Trim().Length == 0) return;
+        _project.Name = box.Text.Trim();
+        UpdateCommands();
+        ScheduleAutosave();
+        SetStatus($"Projet renommé : {_project.Name}");
     }
 
     private async Task OpenProjectAsync(string path, bool rememberPath)
@@ -340,16 +616,11 @@ public sealed partial class MainWindow : Window
         var (project, sources) = await Task.Run(() => ProjectStore.Load(path));
         ClearAll();
         _project = project;
+        _project.Name = Names.Repair(_project.Name);
+        foreach (var p in _project.Pages) p.SourceName = Names.Repair(p.SourceName);
         foreach (var (k, v) in sources) _sources[k] = v;
         _projectPath = rememberPath ? path : null;
-        foreach (var page in _project.Pages)
-        {
-            Raster? image = null, oriented = null;
-            if (page.Source == PageSource.Image && page.SourceEntry != null && _sources.TryGetValue(page.SourceEntry, out var bytes))
-                (image, oriented) = await ImportService.RestoreImageAsync(page, bytes);
-            ShowPage(page, image, oriented);
-        }
-        FitWidthSoon();
+        await ShowPageAsync(0);
     }
 
     private async void New_Click(object sender, RoutedEventArgs e)
@@ -360,37 +631,41 @@ public sealed partial class MainWindow : Window
         _projectPath = null;
         try { File.Delete(AutosavePath); File.Delete(LastPathFile); } catch { /* sans importance */ }
         SaveState.Text = "";
-        SetStatus("Nouveau projet.");
+        UpdateCommands();
+        SetStatus("Nouveau projet : touchez « Photo » ou « Importer ».");
     }
 
     private void ClearAll()
     {
-        foreach (var f in _frames.Values) PagesPanel.Children.Remove(f.Panel);
-        _frames.Clear();
-        _views.Clear();
-        _sources.Clear();
-        _orientedSources.Clear();
-        _currentView = null;
+        PagesPanel.Children.Clear();
+        _view = null;
         _currentField = null;
-        EmptyHint.Visibility = Visibility.Visible;
-        UpdateSelection();
+        _index = 0;
+        _sources.Clear();
+        _flats.Clear();
+        _oriented.Clear();
+        _recent.Clear();
+        UpdateCommands();
     }
 
     private void ScheduleAutosave()
     {
+        SaveState.Text = "…";
         _autosaveTimer.Stop();
         _autosaveTimer.Start();
     }
 
     /// <summary>
-    /// Enregistrement en continu, une seconde après chaque modification et à la fermeture :
+    /// Enregistrement en continu, une seconde après chaque modification, après chaque page importée et à la fermeture :
     /// dans le fichier projet choisi (dès le premier « Enregistrer ») et dans une copie de secours.
     /// </summary>
     private void Autosave()
     {
+        _autosaveTimer.Stop();
         if (_project.Pages.Count == 0) return;
         try
         {
+            Directory.CreateDirectory(DataDir);
             ProjectStore.Save(AutosavePath, _project, _sources);
             if (_projectPath != null) ProjectStore.Save(_projectPath, _project, _sources);
             ShowSaveState();
@@ -404,8 +679,8 @@ public sealed partial class MainWindow : Window
 
     private void ShowSaveState() =>
         SaveState.Text = _projectPath is null
-            ? $"✓ Copie de secours {DateTime.Now:HH:mm:ss} — « Enregistrer » pour choisir le fichier"
-            : $"✓ Enregistré {DateTime.Now:HH:mm:ss} · {System.IO.Path.GetFileName(_projectPath)}";
+            ? $"✓ {DateTime.Now:HH:mm} · copie de secours"
+            : $"✓ {DateTime.Now:HH:mm} · {System.IO.Path.GetFileName(_projectPath)}";
 
     private void RememberProjectPath()
     {
@@ -456,9 +731,7 @@ public sealed partial class MainWindow : Window
 
     private async void Crop_Click(object sender, RoutedEventArgs e)
     {
-        var view = _currentView is { Page.Source: PageSource.Image } ? _currentView : _views.FirstOrDefault(v => v.Page.Source == PageSource.Image);
-        if (view is null) { SetStatus("Le recadrage concerne les photos et les PDF. Touchez d'abord la page voulue."); return; }
-        var page = view.Page;
+        if (CurrentPage is not { Source: PageSource.Image } page) { SetStatus("Le recadrage concerne les photos et les PDF."); return; }
         var source = await GetOrientedSourceAsync(page);
         if (source is null) return;
         _cropPage = page;
@@ -552,18 +825,14 @@ public sealed partial class MainWindow : Window
                 Id = page.Id, Source = page.Source, SourceName = page.SourceName, SourceEntry = page.SourceEntry,
                 QuarterTurns = (page.QuarterTurns + turns) % 4,
             };
-            var (image, _) = await _import.ProcessAsync(fresh, source, quad);
+            var (image, _) = await _import.ProcessAsync(fresh, source, quad, (f, text) => { Progress.Value = f; SetStatus($"Recadrage : {text}"); });
             int index = _project.Pages.IndexOf(page);
             if (index < 0) return; // page retirée entre-temps
             _project.Pages[index] = fresh;
-            _orientedSources[fresh.Id] = source;
-
-            var old = _views.First(v => v.Page == page);
-            var view = CreateView(fresh, image);
-            _views.Remove(old);
-            _frames[fresh.Id].Frame.Child = view.Root;
-            if (_currentView == old) { _currentView = view; _currentField = null; }
-            UpdateSelection();
+            Forget(page);
+            Remember(_oriented, fresh, source, 2);
+            Lots.Resync(_project);
+            await ShowPageAsync(index, image);
             SetStatus("Page recadrée et relue. Vérifiez les zones à verrouiller.");
             ScheduleAutosave();
         });
@@ -580,21 +849,32 @@ public sealed partial class MainWindow : Window
 
     private void UpdateCommands()
     {
-        bool any = _project.Pages.Count > 0;
-        CropButton.IsEnabled = !_busy && _project.Pages.Any(p => p.Source == PageSource.Image);
-        LockToggle.IsEnabled = !_busy && any;
-        KindButton.IsEnabled = !_busy && _currentField != null;
-        RevertButton.IsEnabled = !_busy && _currentField?.IsModified == true;
-        ExportButton.IsEnabled = SaveButton.IsEnabled = !_busy && any;
-        ExportJpegButton.IsEnabled = !_busy && _project.Pages.Any(p => p.Source == PageSource.Image);
-        ImportButton.IsEnabled = OpenButton.IsEnabled = NewButton.IsEnabled = !_busy;
+        int n = _project.Pages.Count;
+        var page = CurrentPage;
+        PhotoButton.IsEnabled = ImportButton.IsEnabled = ProjectButton.IsEnabled = !_busy;
+        CropButton.IsEnabled = !_busy && page?.Source == PageSource.Image;
+        LockToggle.IsEnabled = !_busy && page != null;
+        LotsButton.IsEnabled = ExportButton.IsEnabled = !_busy && n > 0;
+        SaveItem.IsEnabled = RenameItem.IsEnabled = n > 0;
+        Pager.Visibility = n > 0 ? Visibility.Visible : Visibility.Collapsed;
+        PageLabel.Content = n > 0 ? $"{_index + 1} / {n}" : "";
+        PagePrev.IsEnabled = !_busy && _index > 0;
+        PageNext.IsEnabled = !_busy && _index < n - 1;
+        PageLabel.IsEnabled = !_busy;
+        EmptyHint.Visibility = n == 0 ? Visibility.Visible : Visibility.Collapsed;
+        ProjectName.Text = _project.Name;
+        LotsButton.Background = Lots.IsActive(_project)
+            ? new SolidColorBrush(ColorHelper.FromArgb(255, 232, 241, 251))
+            : new SolidColorBrush(Colors.Transparent);
+        UpdateEditBar();
     }
 
     private async Task RunBusyAsync(Func<Task> work)
     {
         if (_busy) return;
         _busy = true;
-        Busy.IsActive = true;
+        Progress.Value = 0;
+        Progress.Visibility = Visibility.Visible;
         UpdateCommands();
         try
         {
@@ -607,19 +887,28 @@ public sealed partial class MainWindow : Window
         finally
         {
             _busy = false;
-            Busy.IsActive = false;
+            Progress.Visibility = Visibility.Collapsed;
             UpdateCommands();
         }
     }
 
-    /// <summary>Ajuste le zoom pour que la page tienne en largeur.</summary>
+    // ---------- Zoom ----------
+
+    /// <summary>Ajuste le zoom pour que la page (et sa colonne de lots) tienne en largeur.</summary>
     private void FitWidthSoon() => DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
     {
-        if (_project.Pages.Count == 0 || PageScroller.ViewportWidth <= 0) return;
-        double width = _project.Pages.Max(p => p.Width) + 48;
+        if (CurrentPage is not { } page || PageScroller.ViewportWidth <= 0) return;
+        double width = page.Width + PageView.GutterWidth + 36;
         float zoom = (float)Math.Clamp(PageScroller.ViewportWidth / width, PageScroller.MinZoomFactor, 1.5);
-        PageScroller.ChangeView(0, null, zoom, disableAnimation: true);
+        PageScroller.ChangeView(0, 0, zoom, disableAnimation: true);
     });
+
+    private void Zoom(double factor) =>
+        PageScroller.ChangeView(null, null, (float)Math.Clamp(PageScroller.ZoomFactor * factor, PageScroller.MinZoomFactor, PageScroller.MaxZoomFactor));
+
+    private void ZoomIn_Click(object sender, RoutedEventArgs e) => Zoom(1.25);
+    private void ZoomOut_Click(object sender, RoutedEventArgs e) => Zoom(1 / 1.25);
+    private void ZoomFit_Click(object sender, RoutedEventArgs e) => FitWidthSoon();
 
     private async Task ShowMessageAsync(string title, string message)
     {
@@ -632,13 +921,13 @@ public sealed partial class MainWindow : Window
         await dialog.ShowAsync();
     }
 
-    private async Task<bool> ConfirmAsync(string title, string message)
+    private async Task<bool> ConfirmAsync(string title, string message, string ok = "Continuer")
     {
         var dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot, Title = title,
             Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
-            PrimaryButtonText = "Continuer", CloseButtonText = "Annuler", DefaultButton = ContentDialogButton.Close,
+            PrimaryButtonText = ok, CloseButtonText = "Annuler", DefaultButton = ContentDialogButton.Close,
         };
         return await dialog.ShowAsync() == ContentDialogResult.Primary;
     }

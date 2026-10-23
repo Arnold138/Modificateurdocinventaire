@@ -38,7 +38,7 @@ public static class ImageExporter
     }
 
     /// <summary>
-    /// Recopie les cases modifiées de la page redressée (déjà retouchée par l'application)
+    /// Recopie les cases modifiées (et les numéros de lot) de la page redressée (déjà retouchée par l'application)
     /// dans la photo d'origine orientée. Tout le reste de la photo est inchangé.
     /// </summary>
     public static Raster ComposeIntoSource(Raster orientedSource, Page page, Raster editedPage)
@@ -46,8 +46,8 @@ public static class ImageExporter
         var src = orientedSource.ToBgra();
         var edited = editedPage.ToBgra();
         var output = new Raster(src.Width, src.Height, 4, (byte[])src.Data.Clone());
-        var fields = EditedFields(page);
-        if (fields.Count == 0) return output;
+        var boxes = EditedFields(page).Select(f => f.Box).Concat(Lots.Labels(page).Select(l => l.Box)).ToList();
+        if (boxes.Count == 0) return output;
 
         var crop = page.Crop ?? Quad.FullImage(src.Width, src.Height);
         int W = page.Width, H = page.Height;
@@ -69,9 +69,8 @@ public static class ImageExporter
             return new PointD(cx + cos * du + sin * dv, cy - sin * du + cos * dv);
         }
 
-        foreach (var f in fields)
+        foreach (var box in boxes)
         {
-            var box = f.Box;
             var corners = new[] { Forward(box.Left, box.Top), Forward(box.Right, box.Top), Forward(box.Right, box.Bottom), Forward(box.Left, box.Bottom) };
             int sx0 = Math.Max(0, (int)Math.Floor(corners.Min(p => p.X)) - 1), sx1 = Math.Min(src.Width - 1, (int)Math.Ceiling(corners.Max(p => p.X)) + 1);
             int sy0 = Math.Max(0, (int)Math.Floor(corners.Min(p => p.Y)) - 1), sy1 = Math.Min(src.Height - 1, (int)Math.Ceiling(corners.Max(p => p.Y)) + 1);

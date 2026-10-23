@@ -72,7 +72,9 @@ if (args.Length > 0 && args[0] == "export-file")
 {
     // Fichier réel (BOM UTF-8, CRLF), exactement comme le bouton « Exporter .txt ».
     var project = new InventoryProject();
-    foreach (var name in args.Skip(2)) project.Pages.Add(Fixtures.Analyze(name));
+    bool withLots = args.Contains("--lots");
+    foreach (var name in args.Skip(2).Where(a => a != "--lots")) project.Pages.Add(Fixtures.Analyze(name));
+    if (withLots) Lots.Number(project, 1);
     var r = RetoucheInventaire.Core.Export.TxtExporter.Write(project, args[1]);
     Console.WriteLine($"{r.LineCount} lignes, {r.Warnings.Count} avertissement(s)");
     return 0;
