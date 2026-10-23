@@ -25,12 +25,19 @@
 ## Rendu à l'écran
 
 - Le texte modifié est écrit en **Times New Roman**, taille calée sur la largeur du texte d'origine. Si le document utilise une autre police, la différence se voit.
-- Le texte modifié est en noir, comme l'original : pour retrouver une correction, toucher la case (la barre d'état affiche le texte d'origine).
+- Le texte modifié est en noir, comme l'original : pour retrouver une correction, toucher la case (la barre du bas affiche le texte d'origine) ou ouvrir la liste des pages (« 3 / 10 ») qui indique le nombre de cases modifiées par page.
+- **Une page à la fois** : passer d'une page à l'autre recalcule l'image redressée (environ une seconde par page) ; seules les dernières pages vues restent en mémoire, ce qui permet de longs inventaires sur iPhone.
 
 ## Export JPEG
 
 - L'image exportée est la photo d'origine : seules les cases modifiées changent (fond couleur papier + nouveau texte en noir). Les photos très grandes sont réduites à 4000 px de côté.
 - Une case modifiée est réécrite en entier avec le texte du champ : si la reconnaissance avait mal lu un mot de cette ligne, le corriger aussi avant de valider (la loupe montre l'original).
+
+## Numéros de lot
+
+- **Un objet = la ligne d'article qui porte les valeurs** (ou la première ligne de la rangée) : les lignes de suite (« CD3+ +/- 14130 heures ») n'ont pas de numéro. Si une rangée imprimée contient en réalité deux objets, l'un des deux n'aura pas de numéro : corriger le type de ligne ou taper le numéro voulu.
+- **Sur le JPEG**, le numéro est écrit dans la marge gauche, à la hauteur de l'objet. Si la marge est très étroite (tableau collé au bord de la photo), le numéro est réduit et peut devenir petit.
+- Un numéro non numérique (« 12 bis ») est gardé tel quel ; la suite reprend après le dernier numéro de la colonne.
 
 ## Export texte
 

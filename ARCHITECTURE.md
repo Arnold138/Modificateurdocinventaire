@@ -23,7 +23,7 @@ src/RetoucheInventaire.Core    Logique métier, sans Windows : testable partout
   Import/     TXT, CSV, XLSX → page tableau
   Storage/    fichier projet .inventaire
 src/RetoucheInventaire.App     WinUI 3 : l'écran, OCR Windows, PDF Windows, décodage d'images
-tests/                         21 tests sur les pages fournies
+tests/                         27 tests sur les pages fournies
 ```
 
 ## L'écran (unique)
@@ -32,6 +32,8 @@ tests/                         21 tests sur les pages fournies
 - **Pages** l'une sous l'autre, zoom au pincement. Chaque case de chaque ligne est un champ posé à sa position exacte.
 - **Barre d'état** : ce qui se passe, la ligne sélectionnée et son type, le texte d'origine d'une case modifiée.
 - **Recadrage** (par-dessus l'écran, à la demande) : 4 poignées, Pivoter, Détection auto, Page entière, Valider.
+
+Une seule page affichée à la fois (navigation ◀ 3 / 10 ▶, liste des pages), avec à sa gauche la colonne des numéros de lot, hors de la page.
 
 Repères sur la page : badge à gauche de la ligne (**T** titre, **Σ** total, **E** en-tête, **×** non exportée), zones verrouillées en orange.
 
@@ -52,7 +54,7 @@ La géométrie est figée à l'analyse ; l'édition ne change que `Text`. C'est 
 
 ## Flux import → édition → export texte
 
-1. **Import** — photo/scan : orientation EXIF appliquée ; PDF : chaque page rendue en image ; TXT/CSV/XLSX : tableau reconstruit directement (pas d'OCR).
+1. **Import** — photo/scan : orientation EXIF appliquée ; PDF : pages rendues une par une en image (une seule en mémoire), chaque page analysée est enregistrée aussitôt ; TXT/CSV/XLSX : tableau reconstruit directement (pas d'OCR).
 2. **Redressement** — coins de la feuille trouvés automatiquement (zone claire sur fond sombre), perspective corrigée, puis inclinaison résiduelle mesurée et corrigée, en un seul rééchantillonnage. Si la page paraît illisible, les autres quarts de tour sont essayés.
 3. **Grille** — détection des filets horizontaux et verticaux (tolère traits fins, ondulés, interrompus).
 4. **OCR** — sur une copie préparée : filets effacés, seuil adaptatif (fonds tramés, ombres), agrandie ×2. Puis **seconde lecture** case par case des cases vides qui contiennent de l'encre (nombres isolés que l'OCR de page oublie).
@@ -70,3 +72,10 @@ Application web installable (« Sur l'écran d'accueil »), sans étape de compi
 - **Hors ligne** : un service worker met toute l'application en cache à la première ouverture (~15 Mo).
 - **Stockage** : IndexedDB de l'iPad, enregistrement continu une seconde après chaque frappe. Format `.inventaire` identique à Windows (copie de sauvegarde échangeable).
 - **Exports** : JPEG (photo d'origine, seules les cases modifiées changent) et .txt, remis via le menu Partager de l'iPad.
+- **Mémoire (iPhone/iPad)** : une seule page à l'écran ; les images des 3 dernières pages vues sont gardées, les autres recalculées à la demande ; chaque canvas est vidé après usage (sur iOS la mémoire des images n'est rendue qu'ainsi — c'était la cause des pages blanches).
+
+## Numéros de lot (`Model/Lots.cs`, `web/core/lots.js`)
+
+- Objet = première ligne d'article de chaque rangée (celle qui porte des valeurs si plusieurs). Titres, totaux, en-têtes, lignes ignorées : pas de numéro.
+- `Lot` et `LotManual` sont enregistrés sur la ligne. Un numéro tapé est « manuel » ; `Resync` garde les manuels et numérote les autres à la suite, toutes pages confondues. Appelé après chaque saisie de lot, changement de type, ajout/retrait/recadrage de page, et quand une saisie fait apparaître ou disparaître un objet.
+- Export .txt : 1re colonne « Lot » sur toutes les lignes quand des lots existent (« Lot » sur l'en-tête, vide sur titres/totaux). Export JPEG : numéro dans la marge gauche (`LabelBox`), même taille que le texte de l'objet, en noir sur la couleur du papier ; zone recopiée dans la photo d'origine comme une case modifiée.
