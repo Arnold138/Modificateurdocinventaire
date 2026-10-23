@@ -34,6 +34,22 @@ jobs:
           dotnet-version: '10.0.x'
       - name: Publication autonome (sans installation sur la tablette)
         run: dotnet publish src/RetoucheInventaire.App -c Release -r ${{ matrix.rid }} -p:Platform=${{ matrix.platform }} -o publish/${{ matrix.rid }}
+      - name: Vérification du contenu (interface compilée présente)
+        shell: pwsh
+        run: |
+          $d = "publish/${{ matrix.rid }}"
+          Get-ChildItem $d -Filter *.pri | ForEach-Object { $_.Name }
+          if (-not (Test-Path "$d/RetoucheInventaire.pri") -and -not (Test-Path "$d/resources.pri")) { Write-Error "Fichier .pri de l'application absent"; exit 1 }
+      - name: Essai de lancement (x64)
+        if: matrix.rid == 'win-x64'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $p = Start-Process "publish/win-x64/RetoucheInventaire.exe" -PassThru
+          Start-Sleep -Seconds 20
+          if ($p.HasExited) { Write-Error "L'application s'est fermée (code $($p.ExitCode))"; Get-WinEvent -LogName Application -MaxEvents 15 | Where-Object { $_.ProviderName -match '.NET Runtime|Application Error' } | Format-List TimeCreated,Message; exit 1 }
+          Write-Host "Application toujours ouverte après 20 s : OK"
+          Stop-Process -Id $p.Id -Force
       - name: Ajout de l'installeur (raccourcis Bureau et menu Démarrer)
         run: Copy-Item installer\* publish\${{ matrix.rid }}\
       - uses: actions/upload-artifact@v4
