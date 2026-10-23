@@ -40,3 +40,25 @@ jobs:
         with:
           name: RetoucheInventaire-${{ matrix.rid }}
           path: publish/${{ matrix.rid }}
+
+  # Publie l'application prête à installer : lien direct, sans passer par l'onglet Actions.
+  publication:
+    needs: [tests, application]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+      - name: Création de la version téléchargeable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dl
+          for d in RetoucheInventaire-win-*; do (cd "$d" && zip -qr "../$d.zip" .); done
+          gh release delete derniere-version --yes --cleanup-tag -R "$GITHUB_REPOSITORY" || true
+          gh release create derniere-version RetoucheInventaire-win-*.zip -R "$GITHUB_REPOSITORY" \
+            --title "Retouche d'inventaire — dernière version" --latest \
+            --notes "Télécharger le zip qui correspond à la Surface (x64 ou arm64), le débloquer, l'extraire, puis double-cliquer sur Installer.cmd."

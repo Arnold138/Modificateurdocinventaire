@@ -18,13 +18,14 @@ Application Windows pour tablette Surface, au doigt, **sans Internet** : on impo
 
 ## Installer sur la Surface
 
-1. Sur GitHub, onglet **Actions** → dernière exécution « Compilation » (coche verte) → en bas, **Artifacts** :
-   - `RetoucheInventaire-win-x64` pour une Surface Intel ou AMD,
-   - `RetoucheInventaire-win-arm64` pour une Surface Snapdragon.
-   (Pour savoir : Paramètres › Système › Informations › *Type de système* : « x64 » ou « ARM64 ».)
-2. Sur la Surface : clic droit sur le zip téléchargé → **Propriétés** → cocher **Débloquer** → OK, puis **Extraire tout**.
-3. Dans le dossier extrait, double-cliquer **Installer.cmd**. L'application est copiée dans votre profil et l'icône **« Retouche d'inventaire »** apparaît sur le Bureau et dans le menu Démarrer (épinglable à la barre des tâches).
-4. Au premier lancement, si Windows affiche « Windows a protégé votre ordinateur » : **Informations complémentaires** → **Exécuter quand même** (l'application n'est pas signée).
+1. Télécharger le zip qui correspond à la Surface (Paramètres › Système › Informations › *Type de système*) :
+   - x64 : https://github.com/Arnold138/Modificateurdocinventaire/releases/latest/download/RetoucheInventaire-win-x64.zip
+   - ARM64 : https://github.com/Arnold138/Modificateurdocinventaire/releases/latest/download/RetoucheInventaire-win-arm64.zip
+2. Clic droit sur le zip → **Propriétés** → cocher **Débloquer** → OK, puis clic droit → **Extraire tout**.
+3. Dans le dossier extrait, double-cliquer **Installer.cmd**. L'icône **« Retouche d'inventaire »** apparaît sur le Bureau et dans le menu Démarrer.
+4. Si Windows affiche « Windows a protégé votre ordinateur » : **Informations complémentaires** → **Exécuter quand même** (l'application n'est pas signée).
+
+Attention : le bouton vert « Code › Download ZIP » donne le code source, pas l'application.
 
 Ensuite, plus besoin d'Internet. Pour une nouvelle version : refaire les étapes 1 à 3 (les projets ne sont pas touchés).
 
