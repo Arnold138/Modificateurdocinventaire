@@ -17,7 +17,6 @@ using RetoucheInventaire.Core.Model;
 using RetoucheInventaire.Core.Storage;
 using Windows.Storage;
 using Windows.Storage.Pickers;
-using Windows.System;
 using ModelPage = RetoucheInventaire.Core.Model.Page;
 
 namespace RetoucheInventaire.App;
@@ -294,8 +293,8 @@ public sealed partial class MainWindow : Window
     private void Root_KeyDown(object sender, KeyRoutedEventArgs e)
     {
         if (e.OriginalSource is TextBox) return;
-        if (e.Key == VirtualKey.PageUp || e.Key == VirtualKey.Left) { GoTo(_index - 1); e.Handled = true; }
-        else if (e.Key == VirtualKey.PageDown || e.Key == VirtualKey.Right) { GoTo(_index + 1); e.Handled = true; }
+        if (e.Key == Windows.System.VirtualKey.PageUp || e.Key == Windows.System.VirtualKey.Left) { GoTo(_index - 1); e.Handled = true; }
+        else if (e.Key == Windows.System.VirtualKey.PageDown || e.Key == Windows.System.VirtualKey.Right) { GoTo(_index + 1); e.Handled = true; }
     }
 
     /// <summary>Liste des pages : toucher une page pour y aller.</summary>
