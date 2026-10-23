@@ -2,6 +2,7 @@ using RetoucheInventaire.Core;
 using RetoucheInventaire.Core.Analysis;
 using RetoucheInventaire.Core.Imaging;
 using Windows.Media.Ocr;
+using OcrWord = RetoucheInventaire.Core.Analysis.OcrWord;
 
 namespace RetoucheInventaire.App.Services;
 

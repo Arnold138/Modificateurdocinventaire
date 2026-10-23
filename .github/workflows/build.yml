@@ -20,6 +20,7 @@ jobs:
   application:
     runs-on: windows-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - rid: win-x64      # Surface Intel / AMD
