@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <title>Retouche d'inventaire</title>
+  <meta name="description" content="Corriger un inventaire imprimé sur la page, hors ligne, puis l'exporter en JPEG ou en texte.">
+  <meta name="theme-color" content="#0067c0">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Inventaire">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="app.css">
+  <script src="vendor/tesseract/tesseract.min.js" defer></script>
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="toolbar" id="toolbar">
+    <button id="btnPhoto" class="accent"><span class="ico">📷</span>Photo</button>
+    <button id="btnImport" class="accent"><span class="ico">📂</span>Importer</button>
+    <button id="btnCrop"><span class="ico">⛶</span>Recadrer</button>
+    <button id="btnLock" aria-pressed="false"><span class="ico">🔒</span>Verrouiller</button>
+    <button id="btnKind" class="wide"><span class="ico">☰</span><span id="kindLabel">Type de ligne</span></button>
+    <button id="btnRevert"><span class="ico">↺</span>Rétablir</button>
+    <span class="sep"></span>
+    <button id="btnJpeg" class="accent"><span class="ico">🖼</span>Exporter JPEG</button>
+    <button id="btnTxt" class="accent"><span class="ico">📄</span>Exporter .txt</button>
+    <button id="btnProjects"><span class="ico">🗂</span>Projets</button>
+  </header>
+
+  <main id="viewport">
+    <div id="sizer"><div id="zoomer"><div id="pages"></div></div></div>
+    <p id="emptyHint">Touchez « Photo » pour photographier un inventaire, ou « Importer » pour ouvrir une photo, un PDF, un fichier texte ou un tableur.<br>Tout reste sur l'iPad.</p>
+  </main>
+
+  <footer class="statusbar">
+    <span id="busy" class="spinner" hidden></span>
+    <span id="status">Chargement…</span>
+    <span class="zoom">
+      <button id="zoomOut" aria-label="Dézoomer">−</button>
+      <button id="zoomFit" aria-label="Ajuster à la largeur">↔</button>
+      <button id="zoomIn" aria-label="Zoomer">+</button>
+    </span>
+    <span id="saveState"></span>
+  </footer>
+
+  <input id="filePhoto" type="file" accept="image/*" capture="environment" hidden>
+  <input id="fileImport" type="file" multiple hidden
+         accept="image/*,.jpg,.jpeg,.png,.heic,.pdf,application/pdf,.txt,text/plain,.csv,text/csv,.xlsx,.inventaire">
+
+  <!-- Recadrage -->
+  <section id="crop" class="modal" hidden>
+    <div class="crop-area"><div id="cropStage"><svg id="cropSvg"><polygon id="cropPoly"/></svg></div></div>
+    <div class="dialog-buttons">
+      <button id="cropRotate">Pivoter ↻</button>
+      <button id="cropAuto">Détection auto</button>
+      <button id="cropFull">Page entière</button>
+      <button id="cropCancel">Annuler</button>
+      <button id="cropApply" class="accent">Valider</button>
+    </div>
+  </section>
+
+  <!-- Boîte de dialogue générique -->
+  <section id="dialog" class="modal center" hidden>
+    <div class="card">
+      <h2 id="dialogTitle"></h2>
+      <div id="dialogBody"></div>
+      <div class="dialog-buttons" id="dialogButtons"></div>
+    </div>
+  </section>
+</body>
+</html>

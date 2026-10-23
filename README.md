@@ -18,6 +18,18 @@ Application Windows pour tablette Surface, au doigt, **sans Internet** : on impo
 7. **Exporter .txt** : le texte en tableau (lignes, tabulations). Il est construit à partir de ce que la reconnaissance a lu : vérifier les lignes non corrigées.
 8. **Enregistrer** une fois pour choisir le fichier projet : ensuite tout est enregistré en continu.
 
+## Version iPad (application web, hors ligne)
+
+Même logique que la version Windows (le .txt produit est identique), dans Safari :
+
+1. Sur l'iPad, ouvrir **Safari** à l'adresse https://arnold138.github.io/Modificateurdocinventaire/ (avec Internet, une seule fois).
+2. Bouton **Partager** (carré avec une flèche) → **Sur l'écran d'accueil** → **Ajouter**.
+3. Lancer l'app depuis l'icône **« Inventaire »**. Elle fonctionne ensuite **sans Internet** ; tout reste sur l'iPad.
+
+Particularités iPad : bouton **Photo** (appareil photo de l'iPad), exports via le menu **Partager** (Enregistrer dans Fichiers, Enregistrer l'image, Mail, AirDrop), projets enregistrés en continu dans l'iPad (bouton **Projets** : ouvrir, renommer, supprimer, copie de sauvegarde `.inventaire` ouvrable aussi sur la Surface). Lecture du texte : Tesseract (plus lent et un peu moins précis que l'OCR de Windows).
+
+Code : dossier `web/` (aucune étape de compilation). Tests : `node web/tests/test.mjs`.
+
 ## Installer sur la Surface
 
 1. Télécharger le zip qui correspond à la Surface (Paramètres › Système › Informations › *Type de système*) :
