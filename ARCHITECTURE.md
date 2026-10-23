@@ -60,3 +60,13 @@ La géométrie est figée à l'analyse ; l'édition ne change que `Text`. C'est 
 6. **Édition** — un champ invisible par case. Toucher : il s'affiche. Modifier : il masque l'original dans sa case et montre le nouveau texte en noir, comme l'original, police réduite si besoin pour ne jamais sortir de la case. Entrée : case suivante de la colonne.
 7. **Export .txt** — une ligne par ligne imprimée, tabulations entre colonnes, titres seuls (leurs valeurs descendent sur la première ligne d'article), totaux comme les autres lignes, nombres sans espace de milliers, ligne vide entre deux tableaux, UTF-8 avec BOM, fins de ligne Windows.
 8. **Sauvegarde** — `.inventaire` = zip (`projet.json` + fichiers sources tels qu'importés). Enregistrement en continu : chaque modification est écrite une seconde après la frappe (et à la fermeture), dans le fichier projet choisi au premier « Enregistrer » et dans une copie de secours rechargée au lancement.
+
+## Version iPad (dossier `web/`)
+
+Application web installable (« Sur l'écran d'accueil »), sans étape de compilation, publiée sur GitHub Pages (branche `gh-pages`) à chaque envoi sur `main`.
+
+- **Cœur** : portage fidèle du cœur C# en JavaScript (`web/core/`). Sur les 3 pages de test, le .txt produit est identique octet pour octet à celui de Windows (vérifié à chaque compilation).
+- **Lecture du texte** : Tesseract.js (Apache-2.0), moteur et données françaises embarqués. **PDF** : pdf.js (Apache-2.0). **Zip / XLSX / .inventaire** : fflate (MIT).
+- **Hors ligne** : un service worker met toute l'application en cache à la première ouverture (~15 Mo).
+- **Stockage** : IndexedDB de l'iPad, enregistrement continu une seconde après chaque frappe. Format `.inventaire` identique à Windows (copie de sauvegarde échangeable).
+- **Exports** : JPEG (photo d'origine, seules les cases modifiées changent) et .txt, remis via le menu Partager de l'iPad.
