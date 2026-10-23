@@ -1,0 +1,100 @@
+﻿I - MOBILIER ET MATERIEL	exploitation	réalisation
+DANS L'ENTREPOT
+2 laves main en inox + 1 sanibroyeur SPEED	130	70
+1 aspirateur KARSHER WDS cuve en inox	80	40
+2 souffiants STANLEY	100	50
+2 rolls en métal	60	30
+2 distributeurs de savon + 1 distributeur papier	30	10
+2 vestiaires avec 1 porte en métal	50	25
+1 diable à plateau à roulettes	10	5
++/- 60 racks ADETECH de stockage L 320 cm H 480 cm +/- 549 places	15000	8000
+1 banderolkeuse ROBOPACK de 2017 + masterplat TP	2200	800
+1 table pliante	10	mémoire
+1 trepier à 3 marches	10	5
+2 servantes à roulettes en inox	130	70
+1 étiqueteuse CLS 631 + douchette NETUN	30	15
+1 escabeau en alu à 6 marches	70	35
+1 compresseur à vis ATLASCAPCO avec cuve 250L + 1 sécheur ATLASCAPCO	2800	1800
+CD3+ +/- 14130 heures
+1 petit convoyeur éléctrique NEOPAC	350	250
+1 détécteur de métaux LOMA SYSTEMS 1Q3+ST	S 500	2500
+l déchargeur BIGBAC SCHICK ESTEVE avec palan EUROCHAIN UR12 1600kgs	60000	10000
+1 servante inox à 2 plateaux 100 cm / 50 cm + 1 avec dosseret	220	120
+2 balances digitales PRECIA MOLEN CIS + 1 ordinateur portable ACER CB53127	500	250
+l étagère en métal	10	mémoire
++/- 20 palettes plastiques	300	150
+1 mélangeur MAP MIXING TECHNOLOGY + 1 balance digitale ESTEVE	15000	5000
+SIMATIC HMI touch + 1 armoire de commande
+1 trémie en inox ESTEVE + 1 panneau de commandes éléctrique	2500	800
+2 dérouleurs à air comprimé sans marque apparante	250	120
+1 table de travail plateau médium 130 cm / 60 cm	20	10
+SALLE LAVAGE :
+1 gazelle TULESCA inox	200	100
+1 plonge en inox avec 2 bacs et 1 douchette	150	80
+1 centrale de lavage PROSEUS	60	30
+1 petit broyeur SANISPEED	2000	1000
+1 petit mélangeur MAP MIXING TECHNOLOGY ELVEM	5000	2500
+S étagères en métal avec 3 plateaux	150	60
++/- 8 palettes plastiques	80	30
+1 autolaveuse NILFISK SC351	900	450
+1 armoire en métal avec 15 casiers	60	30
+1 plateau à roulette en inox	40	20
++/- 100 seaux 20L	500	250
++/- 100 fûts plastiques bleus SOL / 20L
+SALLE DE CONDITIONNEMENT
+1 escabeau en alu avec 4 marches	60	30
+1 ensacheuse NEOPACK année 2020 SPEEDY WORK + 2 conformateurs NEOPAC	25000	8000
+1 gazelle en alu avec 6 marches	200	100
+3 étagères en métal	30	15
+2 servantes en inox à 2 plateaux +/- 100 cm / 60 cm	550	250
+1 servante à roulettes en inox 2 plateaux +/- 70 cm / 50 cm
+1 petite servante à roulette MAPAL 30 cm / 40 cm
+1 poubelle à pied en métal	10	5
+6 tables de travail avec plateau médium	150	60
+1 tue-mouches	20	10
+4 chaises	10	5
+1 moule en métal pour dessiner les opercules	400	150
+2 doseuses VEVOR inox POWDER FILLING machine	700	450
+2 balances digitales DINI ARCEO KERN	130	70
+6 scotcheuses à mains	60	25
+3 pistolets à colle	20	10
+1 palan BOMACO (année 2019)	300	150
+1 petite soudeuse pour sac plastique LGC	20	10
+1 aspirateur KARCHER WDS cuve inox	80	40
+1 aspirateur KARCHER WDS cuve plastique WD3p	70	35
+1 transpalette peseur PRECIA MOLEN (balance HS) 1,5T	120	70
+1 transpalette peseur TIMBER 2T	250	150
++/- 150 palettes europe	400	250
+1 balayeuse NILFISK SW250	300	150
+10 tables de travail plateau médium +/- 110 cm / 60 cm	200	100
+1 table de travail usagé	10	mémoire
+
+II - STOCK	exploitation	réalisation
+Liste détaillée disponible à l'étude	25000	3000
+matières premières (céréales ess
+67461 € à l'achat HT
+CARTONNAGE	16000	5000
+42057 € à l'achat HT
+EN COURS DE FABRICATION	50	mémoire
+valorisé à 82 € HT
+PRODUITS FINIS	3500	1000
+valorisés à 6134 € HT
+TOTAL STOCK	44550	9000
+
+I - ACTIFS MOBILIERS INCORPORELS	exploitation	réalisation
+Dépôt de la marque BEENDI à l'INPI	5000	mémoire
+Extention à la Polynésie
+numéro d'enregistrement : 4795089
+TOTAL ACTIFS MOBILIERS INCORPORELS	5000	mémoire
+
+IV - MATERIEL EN LOCATION LONGUE DUREE	exploitation	réalisation
+Appartient à VDM TECHNOLOGY	mémoire	mémoire
+1 transpalette MITSUBISHI PBP20N3
+1 gerbeur PRAMAC RX10/09
+1 gerbeur MISTUBISHI SBP 12N3
+client n° 250217-84
+Durée 36 mois
+loyer : 585 € HT / mois
+Appartient à Orange	mémoire	mémoire
+1 box internet
+Appartenant à ULMA	mémoire	mémoire

@@ -1,0 +1,41 @@
+# Compile l'application sur un poste Windows de GitHub et fournit l'exe à télécharger
+# (onglet Actions → dernier passage → Artifacts). Aucun Visual Studio nécessaire.
+name: Compilation
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Tests du cœur (structure, export .txt, sauvegarde, imports)
+        run: dotnet run --project tests/RetoucheInventaire.Core.Tests -c Release
+
+  application:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          - rid: win-x64      # Surface Intel / AMD
+            platform: x64
+          - rid: win-arm64    # Surface Snapdragon (ARM)
+            platform: ARM64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Publication autonome (sans installation sur la tablette)
+        run: dotnet publish src/RetoucheInventaire.App -c Release -r ${{ matrix.rid }} -p:Platform=${{ matrix.platform }} -o publish/${{ matrix.rid }}
+      - name: Ajout de l'installeur (raccourcis Bureau et menu Démarrer)
+        run: Copy-Item installer\* publish\${{ matrix.rid }}\
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RetoucheInventaire-${{ matrix.rid }}
+          path: publish/${{ matrix.rid }}
