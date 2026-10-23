@@ -256,6 +256,43 @@ public sealed partial class MainWindow : Window
                 string.Join("\n", result.Warnings.Take(8)) + (result.Warnings.Count > 8 ? $"\n… et {result.Warnings.Count - 8} autre(s)." : ""));
     }
 
+    /// <summary>Une image JPEG par photo ou page de PDF : l'original, avec seulement les cases modifiées.</summary>
+    private async void ExportJpeg_Click(object sender, RoutedEventArgs e)
+    {
+        var views = _project.Pages.Select(p => _views.FirstOrDefault(v => v.Page == p)).OfType<PageView>().Where(v => v.Image != null).ToList();
+        if (views.Count == 0) { SetStatus("Pas de photo ni de PDF à exporter en image (les TXT, CSV et XLSX s'exportent en .txt)."); return; }
+        var picker = new FolderPicker { SuggestedStartLocation = PickerLocationId.PicturesLibrary };
+        picker.FileTypeFilter.Add("*");
+        InitPicker(picker);
+        var folder = await picker.PickSingleFolderAsync();
+        if (folder is null) return;
+
+        await RunBusyAsync(async () =>
+        {
+            int done = 0;
+            foreach (var view in views)
+            {
+                SetStatus($"Création de l'image {done + 1}/{views.Count}…");
+                var source = await GetOrientedSourceAsync(view.Page);
+                if (source is null) continue;
+                var edited = ImageExportService.RenderEdits(view.Page, view.Image!);
+                var final = await Task.Run(() => ImageExporter.ComposeIntoSource(source, view.Page, edited));
+                await ImageExportService.SaveJpegAsync(final, System.IO.Path.Combine(folder.Path, ImageExportService.OutputName(view.Page)));
+                done++;
+            }
+            SetStatus($"{done} image(s) JPEG exportée(s) dans « {folder.Name} » (nom d'origine + « - modifié »).");
+        });
+    }
+
+    private async Task<Raster?> GetOrientedSourceAsync(ModelPage page)
+    {
+        if (_orientedSources.TryGetValue(page.Id, out var source)) return source;
+        if (page.SourceEntry is null || !_sources.TryGetValue(page.SourceEntry, out var bytes)) return null;
+        (_, source) = await ImportService.RestoreImageAsync(page, bytes);
+        _orientedSources[page.Id] = source;
+        return source;
+    }
+
     private async void Save_Click(object sender, RoutedEventArgs e)
     {
         if (_project.Pages.Count == 0) { SetStatus("Rien à enregistrer."); return; }
@@ -422,12 +459,8 @@ public sealed partial class MainWindow : Window
         var view = _currentView is { Page.Source: PageSource.Image } ? _currentView : _views.FirstOrDefault(v => v.Page.Source == PageSource.Image);
         if (view is null) { SetStatus("Le recadrage concerne les photos et les PDF. Touchez d'abord la page voulue."); return; }
         var page = view.Page;
-        if (!_orientedSources.TryGetValue(page.Id, out var source))
-        {
-            if (page.SourceEntry is null || !_sources.TryGetValue(page.SourceEntry, out var bytes)) return;
-            (_, source) = await ImportService.RestoreImageAsync(page, bytes);
-            _orientedSources[page.Id] = source;
-        }
+        var source = await GetOrientedSourceAsync(page);
+        if (source is null) return;
         _cropPage = page;
         _cropSource = source;
         _cropTurns = 0;
@@ -553,6 +586,7 @@ public sealed partial class MainWindow : Window
         KindButton.IsEnabled = !_busy && _currentField != null;
         RevertButton.IsEnabled = !_busy && _currentField?.IsModified == true;
         ExportButton.IsEnabled = SaveButton.IsEnabled = !_busy && any;
+        ExportJpegButton.IsEnabled = !_busy && _project.Pages.Any(p => p.Source == PageSource.Image);
         ImportButton.IsEnabled = OpenButton.IsEnabled = NewButton.IsEnabled = !_busy;
     }
 

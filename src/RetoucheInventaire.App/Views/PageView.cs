@@ -4,9 +4,11 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Shapes;
 using RetoucheInventaire.App.Services;
 using RetoucheInventaire.Core;
+using RetoucheInventaire.Core.Export;
 using RetoucheInventaire.Core.Imaging;
 using RetoucheInventaire.Core.Model;
 using Windows.Foundation;
@@ -40,7 +42,14 @@ public sealed class PageView
     private readonly Rectangle _rubber = new() { Stroke = LockStroke, StrokeThickness = 2, Fill = LockFill, Visibility = Visibility.Collapsed };
     private readonly Dictionary<Field, TextBox> _boxes = [];
     private readonly Dictionary<Field, double> _baseSize = [];
+    private readonly Dictionary<Field, SolidColorBrush> _paper = [];
+    private readonly Border _loupe = new() { BorderBrush = Accent, BorderThickness = new Thickness(2), Background = Paper, Visibility = Visibility.Collapsed };
+    private readonly Raster? _image;
+    private readonly WriteableBitmap? _bitmap;
     private Point? _dragStart;
+
+    /// <summary>Image redressée d'origine (null pour les pages TXT/CSV/XLSX).</summary>
+    public Raster? Image => _image;
 
     public ModelPage Page { get; }
     public Grid Root { get; }
@@ -53,9 +62,13 @@ public sealed class PageView
     public PageView(ModelPage page, Raster? image)
     {
         Page = page;
+        _image = image;
         Root = new Grid { Width = page.Width, Height = page.Height, Background = Paper, HorizontalAlignment = HorizontalAlignment.Center };
         if (image != null)
-            Root.Children.Add(new Image { Source = WinImaging.ToBitmap(image), Width = page.Width, Height = page.Height, Stretch = Stretch.Fill });
+        {
+            _bitmap = WinImaging.ToBitmap(image);
+            Root.Children.Add(new Image { Source = _bitmap, Width = page.Width, Height = page.Height, Stretch = Stretch.Fill });
+        }
         else
             Root.Children.Add(DrawGrid());
         Root.Children.Add(_fieldLayer);
@@ -109,6 +122,7 @@ public sealed class PageView
             }
         _overlayLayer.Children.Add(_focusFrame);
         _overlayLayer.Children.Add(_rubber);
+        _overlayLayer.Children.Add(_loupe);
     }
 
     // ---------- Champs ----------
@@ -137,8 +151,13 @@ public sealed class PageView
         Layout(tb, f);
         ApplyVisual(tb, f, focused: false);
 
-        tb.GotFocus += (_, _) => { ApplyVisual(tb, f, focused: true); ShowFrame(f); FieldFocused?.Invoke(this, f); };
-        tb.LostFocus += (_, _) => { ApplyVisual(tb, f, focused: false); _focusFrame.Visibility = Visibility.Collapsed; };
+        tb.GotFocus += (_, _) => { ApplyVisual(tb, f, focused: true); ShowFrame(f); ShowLoupe(f); FieldFocused?.Invoke(this, f); };
+        tb.LostFocus += (_, _) =>
+        {
+            ApplyVisual(tb, f, focused: false);
+            _focusFrame.Visibility = Visibility.Collapsed;
+            _loupe.Visibility = Visibility.Collapsed;
+        };
         tb.TextChanged += (_, _) =>
         {
             if (f.Text == tb.Text) return;
@@ -200,12 +219,58 @@ public sealed class PageView
         return Meter.DesiredSize.Width;
     }
 
+    /// <summary>
+    /// Case non modifiée : totalement invisible (opacité 0, mais toujours touchable),
+    /// on ne voit que la photo d'origine, rien ne s'y superpose.
+    /// Case modifiée ou en cours d'édition : fond couleur papier qui masque l'original, texte noir.
+    /// </summary>
     private void ApplyVisual(TextBox tb, Field f, bool focused)
     {
-        bool onImage = Page.Source == PageSource.Image;
+        bool onImage = _image != null;
         bool show = focused || f.IsModified || !onImage;
-        tb.Foreground = show ? Ink : Clear; // texte modifié en noir, comme l'original
-        tb.Background = onImage && show ? Paper : Clear;
+        tb.Opacity = show ? 1 : 0;
+        tb.Foreground = Ink;
+        tb.Background = onImage ? PaperOf(f) : Clear;
+    }
+
+    private SolidColorBrush PaperOf(Field f)
+    {
+        if (_image is null) return Paper;
+        if (!_paper.TryGetValue(f, out var brush))
+        {
+            var (r, g, b) = ImageExporter.PaperColor(_image, f.Box);
+            _paper[f] = brush = new SolidColorBrush(ColorHelper.FromArgb(255, r, g, b));
+        }
+        return brush;
+    }
+
+    /// <summary>
+    /// Pendant l'édition, l'original de la case est montré en loupe juste au-dessus :
+    /// on compare avec ce que l'OCR a lu, sans texte superposé.
+    /// </summary>
+    private void ShowLoupe(Field f)
+    {
+        if (_bitmap is null) return;
+        var b = RectD.FromEdges(Math.Max(0, f.Box.Left - 4), Math.Max(0, f.Box.Top - 2),
+                                Math.Min(Page.Width, f.Box.Right + 4), Math.Min(Page.Height, f.Box.Bottom + 2));
+        var holder = new Canvas { Width = b.Width, Height = b.Height, Clip = new RectangleGeometry { Rect = new Rect(0, 0, b.Width, b.Height) } };
+        var img = new Image { Source = _bitmap, Width = Page.Width, Height = Page.Height, Stretch = Stretch.Fill };
+        Canvas.SetLeft(img, -b.X);
+        Canvas.SetTop(img, -b.Y);
+        holder.Children.Add(img);
+        var stack = new StackPanel();
+        stack.Children.Add(new TextBlock { Text = "Original", FontSize = 11, Foreground = Accent, Margin = new Thickness(4, 0, 0, 1) });
+        stack.Children.Add(holder);
+        _loupe.Child = stack;
+
+        const double scale = 1.4;
+        _loupe.RenderTransform = new ScaleTransform { ScaleX = scale, ScaleY = scale };
+        double height = (b.Height + 20) * scale;
+        double top = b.Top - height - 6;
+        if (top < 0) top = b.Bottom + 6;
+        Canvas.SetLeft(_loupe, Math.Max(0, Math.Min(b.Left, Page.Width - (b.Width + 4) * scale)));
+        Canvas.SetTop(_loupe, top);
+        _loupe.Visibility = Visibility.Visible;
     }
 
     private void ShowFrame(Field f)

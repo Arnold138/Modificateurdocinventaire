@@ -37,6 +37,8 @@
     <!-- Licence MIT. Versions « flottantes » : la dernière correction de la branche est prise à la compilation. -->
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.*" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.*" />
+    <!-- Win2D (MIT) : écrit le texte modifié dans l'image exportée. -->
+    <PackageReference Include="Microsoft.Graphics.Win2D" Version="1.*" />
   </ItemGroup>
 
   <ItemGroup>

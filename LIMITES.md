@@ -27,7 +27,14 @@
 - Le texte modifié est écrit en **Times New Roman**, taille calée sur la largeur du texte d'origine. Si le document utilise une autre police, la différence se voit.
 - Le texte modifié est en noir, comme l'original : pour retrouver une correction, toucher la case (la barre d'état affiche le texte d'origine).
 
+## Export JPEG
+
+- L'image exportée est la photo d'origine : seules les cases modifiées changent (fond couleur papier + nouveau texte en noir). Les photos très grandes sont réduites à 4000 px de côté.
+- Une case modifiée est réécrite en entier avec le texte du champ : si la reconnaissance avait mal lu un mot de cette ligne, le corriger aussi avant de valider (la loupe montre l'original).
+
 ## Export texte
+
+- Le .txt reprend ce que la reconnaissance a lu : les lignes non touchées peuvent contenir ses erreurs (« march » pour « marches »).
 
 - Une case qui commence par `=`, `-`, `+` ou `@` peut être lue comme une formule par Excel : l'export affiche un avertissement. Les « +/- » de tes pages ne forment pas une formule valide, Excel devrait les garder en texte — à confirmer au test.
 - Double-clic sur le .txt : Windows l'ouvre dans le Bloc-notes. Dans Excel (Fichier › Ouvrir), l'assistant d'importation peut s'afficher : les choix proposés (délimité, tabulation, UTF-8) conviennent tels quels.

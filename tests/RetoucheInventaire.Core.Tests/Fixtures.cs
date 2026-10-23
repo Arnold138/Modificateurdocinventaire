@@ -22,12 +22,17 @@ public static class Fixtures
     }
 
     private static readonly Dictionary<string, (Raster Image, List<OcrWord> Words)> Cache = [];
+    private static readonly Dictionary<string, NormalizedPage> Normalized = [];
+
+    public static Raster Source(string name) => Pgm.Read(Path.Combine(Dir, name + ".pgm.gz"));
 
     public static (Raster Image, List<OcrWord> Words) Load(string name)
     {
         if (Cache.TryGetValue(name, out var c)) return c;
         var src = Pgm.Read(Path.Combine(Dir, name + ".pgm.gz"));
-        var norm = PageNormalizer.Normalize(src).Image;
+        var n = PageNormalizer.Normalize(src);
+        Normalized[name] = n;
+        var norm = n.Image;
         var words = new List<OcrWord>();
         foreach (var line in File.ReadAllLines(Path.Combine(Dir, name + ".words.tsv")))
         {
@@ -44,7 +49,7 @@ public static class Fixtures
     public static Page Analyze(string name)
     {
         var (img, words) = Load(name);
-        var page = new Page { Source = PageSource.Image, SourceName = name + ".jpg", Id = name };
+        var page = new Page { Source = PageSource.Image, SourceName = name + ".jpg", Id = name, Crop = Normalized[name].Crop, Skew = Normalized[name].SkewDegrees };
         PageAnalyzer.Analyze(page, img, words);
 
         // Seconde lecture des cases vides (résultats Tesseract enregistrés, comme le ferait l'application).

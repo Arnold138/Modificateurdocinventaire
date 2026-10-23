@@ -286,6 +286,53 @@ public static class Tests
         Equal("42057 € à l'achat HT\t16000\t5000", exported[i + 1], "valeurs descendues sous le titre");
     }
 
+    // ---------- Export image ----------
+
+    public static void T_Export_image_ne_touche_que_les_cases_modifiees()
+    {
+        var page = Fixtures.Analyze("page5");
+        var (flat, _) = Fixtures.Load("page5");
+        var source = Fixtures.Source("page5");
+        var field = page.Tables[0].Rows.SelectMany(r => r.Lines).First(l => l.Cells[0].Text == "CARTONNAGE").Cells[1];
+        field.Text = "17000";
+
+        // Simule le rendu de l'application : la case modifiée peinte en noir sur la page redressée.
+        var edited = flat.ToBgra();
+        var data = (byte[])edited.Data.Clone();
+        for (int y = (int)field.Box.Top + 1; y < (int)field.Box.Bottom; y++)
+            for (int x = (int)field.Box.Left + 1; x < (int)field.Box.Right; x++)
+                for (int c = 0; c < 3; c++) data[(y * edited.Width + x) * 4 + c] = 0;
+        var result = ImageExporter.ComposeIntoSource(source, page, new Raster(edited.Width, edited.Height, 4, data));
+
+        Equal(source.Width, result.Width, "largeur de la photo conservée");
+        Equal(source.Height, result.Height, "hauteur de la photo conservée");
+        var src = source.ToBgra();
+        int changed = 0, darkInside = 0, inside = 0;
+        for (int i = 0; i < src.Data.Length; i += 4)
+            if (src.Data[i] != result.Data[i]) changed++;
+        // Le centre de la case, reporté dans la photo, doit être noir.
+        double cxp = field.Box.CenterX + page.Crop!.TopLeft.X, cyp = field.Box.CenterY + page.Crop.TopLeft.Y;
+        for (int dy = -3; dy <= 3; dy++)
+            for (int dx = -10; dx <= 10; dx++)
+            {
+                inside++;
+                if (result.Data[(((int)cyp + dy) * src.Width + (int)cxp + dx) * 4] < 60) darkInside++;
+            }
+        Check(darkInside > inside * 0.9, $"la case modifiée n'est pas au bon endroit ({darkInside}/{inside})");
+        double boxArea = field.Box.Width * field.Box.Height;
+        Check(changed < boxArea * 1.2, $"trop de pixels modifiés hors de la case : {changed} pour {boxArea:0}");
+        Check(result.Data[(5 * src.Width + 5) * 4] == src.Data[(5 * src.Width + 5) * 4], "le bord de la photo a changé");
+    }
+
+    public static void T_Couleur_du_papier()
+    {
+        var (flat, _) = Fixtures.Load("page1");
+        var page = Fixtures.Analyze("page1");
+        var f = page.Tables[0].Rows[3].Lines[0].Cells[0];
+        var (r, g, b) = ImageExporter.PaperColor(flat, f.Box);
+        Check(r > 200 && g > 200 && b > 200, $"papier trop sombre : {r},{g},{b}");
+    }
+
     // ---------- Sauvegarde ----------
 
     public static void T_Sauvegarde_et_reprise()

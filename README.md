@@ -11,10 +11,12 @@ Application Windows pour tablette Surface, au doigt, **sans Internet** : on impo
 
 1. **Importer** une ou plusieurs photos, PDF, TXT, CSV ou XLSX. Les photos sont redressées automatiquement.
 2. Si une photo est mal cadrée : toucher la page, puis **Recadrer** (4 poignées).
-3. **Toucher une case** pour voir ce qui a été lu, puis taper la correction. **Entrée** passe à la case suivante de la colonne. **Rétablir** remet le texte d'origine.
+3. **Toucher une case** : elle s'ouvre avec ce qui a été lu, et l'original s'affiche en loupe juste au-dessus. Taper la correction. **Entrée** passe à la case suivante de la colonne. **Rétablir** remet le texte d'origine.
 4. Vérifier les badges à gauche des lignes : **T** titre, **Σ** total, **E** en-tête, **×** non exportée. Pour corriger : toucher la ligne, puis **Type de ligne**.
 5. **Verrouiller** : tracer un rectangle au doigt sur une signature ou un tampon (le texte hors tableau est déjà verrouillé). Toucher une zone orange la retire.
-6. **Exporter .txt**. **Enregistrer** une fois pour choisir le fichier projet : ensuite tout est enregistré en continu.
+6. **Exporter JPEG** : pour chaque photo (ou page de PDF), une image « nom - modifié.jpg » identique à l'original, sauf les cases modifiées.
+7. **Exporter .txt** : le texte en tableau (lignes, tabulations). Il est construit à partir de ce que la reconnaissance a lu : vérifier les lignes non corrigées.
+8. **Enregistrer** une fois pour choisir le fichier projet : ensuite tout est enregistré en continu.
 
 ## Installer sur la Surface
 
