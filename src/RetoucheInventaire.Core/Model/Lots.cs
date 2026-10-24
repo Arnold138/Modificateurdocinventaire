@@ -39,6 +39,9 @@ public static class Lots
     public static bool CanAdd(PrintedLine line) =>
         line.Lot.Length == 0 && !line.OutsideTable && line.Kind is not (LineKind.EnTete or LineKind.Ignoree) && line.FirstText.Length > 0;
 
+    /// <summary>Lot 0 : objet absent ou barré (regroupé à la fin du .txt).</summary>
+    public static bool IsZero(PrintedLine line) => int.TryParse(line.Lot.Trim(), out var v) && v == 0;
+
     public static bool IsActive(InventoryProject project) =>
         project.Pages.SelectMany(p => p.AllLines()).Any(l => l.Lot.Length > 0);
 
@@ -100,7 +103,10 @@ public static class Lots
         int next = 1;
         foreach (var (_, _, line) in ObjectLines(project))
         {
-            if (line.LotManual && int.TryParse(line.Lot, out var v)) next = v + 1;
+            if (line.LotManual && int.TryParse(line.Lot, out var v))
+            {
+                if (v != 0) next = v + 1; // 0 : objet absent ou barré, ne prend pas de numéro
+            }
             else if (line.LotManual && line.Lot.Length > 0) { /* « 12 bis » : gardé tel quel */ }
             else { line.Lot = next.ToString(); line.LotManual = false; next++; }
         }
@@ -132,6 +138,7 @@ public static class Lots
     public static RectD NumberBox(Table table, PrintedLine line, double columnWidth)
     {
         var b = line.Bounds;
+        b = b with { Height = b.Height - line.Extra }; // à la hauteur de la 1re ligne de texte, même si la case a grandi
         double right = TableLeft(table), left = Math.Max(0, right - columnWidth);
         double h = Math.Max(8, b.Height);
         return new RectD(left + 2, b.CenterY - h / 2, Math.Max(4, right - left - 4), h);

@@ -33,36 +33,43 @@ public static class ImageExportService
         {
             ds.Clear(Colors.White);
             ds.DrawImage(bitmap);
-            foreach (var f in ImageExporter.EditedFields(page))
-            {
-                var (r, g, b) = ImageExporter.PaperColor(flat, f.Box);
-                ds.FillRectangle(new Rect(f.Box.X, f.Box.Y, f.Box.Width, f.Box.Height), ColorHelper.FromArgb(255, r, g, b));
-                if (f.Text.Trim().Length == 0) continue;
+            var edited = ImageExporter.EditedFields(page).ToHashSet();
+            foreach (var line in page.AllLines())
+                foreach (var f in line.Cells.Where(edited.Contains))
+                {
+                    var (r, g, b) = ImageExporter.PaperColor(flat, f.Box);
+                    ds.FillRectangle(new Rect(f.Box.X, f.Box.Y, f.Box.Width, f.Box.Height), ColorHelper.FromArgb(255, r, g, b));
+                    if (f.Text.Trim().Length == 0) continue;
 
-                double size = BaseSize(device, f);
-                double avail = Math.Max(4, f.Box.Width - f.Indent - 3);
-                CanvasTextLayout layout = Layout(device, f.Text, size);
-                while (size > 5 && layout.LayoutBounds.Width > avail)
-                {
-                    layout.Dispose();
-                    size -= 0.5;
-                    layout = Layout(device, f.Text, size);
-                }
-                using (layout)
-                {
-                    double w = layout.LayoutBounds.Width;
-                    double x = f.Align switch
+                    // Même mise en page qu'à l'écran : désignation sur plusieurs lignes à la taille de l'imprimé,
+                    // valeurs sur une ligne (réduites si besoin).
+                    var bb = PageLayout.BaseBox(line, f);
+                    double size = BaseSize(device, f, bb.Height);
+                    double avail = Math.Max(4, f.Box.Width - f.Indent - 3);
+                    List<string> lines;
+                    if (TextWrap.IsMultiline(f))
+                        lines = TextWrap.Wrap(f.Text, avail, t => Width(device, t, size));
+                    else
                     {
-                        TextAlign.Right => f.Box.Right - f.Indent - w,
-                        TextAlign.Center => f.Box.X + (f.Box.Width - w) / 2,
-                        _ => f.Box.X + f.Indent,
-                    };
-                    double center = f.Ink.IsEmpty ? f.Box.CenterY : f.Ink.CenterY;
-                    double y = Math.Clamp(center - 0.58 * size, f.Box.Top, Math.Max(f.Box.Top, f.Box.Bottom - LineHeightRatio * size));
+                        while (size > 5 && Width(device, f.Text, size) > avail) size -= 0.5;
+                        lines = [f.Text];
+                    }
+                    double center = f.Ink.IsEmpty ? bb.CenterY : f.Ink.CenterY;
+                    double top = Math.Clamp(center - 0.58 * size, bb.Top, Math.Max(bb.Top, bb.Bottom - LineHeightRatio * size));
                     using var clip = ds.CreateLayer(1f, new Rect(f.Box.X, f.Box.Y, f.Box.Width, f.Box.Height));
-                    ds.DrawTextLayout(layout, (float)x, (float)y, Colors.Black);
+                    for (int i = 0; i < lines.Count; i++)
+                    {
+                        using var layout = Layout(device, lines[i], size);
+                        double w = layout.LayoutBounds.Width;
+                        double x = f.Align switch
+                        {
+                            TextAlign.Right => f.Box.Right - f.Indent - w,
+                            TextAlign.Center => f.Box.X + (f.Box.Width - w) / 2,
+                            _ => f.Box.X + f.Indent,
+                        };
+                        ds.DrawTextLayout(layout, (float)x, (float)(top + i * LineHeightRatio * size), Colors.Black);
+                    }
                 }
-            }
 
             // Numéros de lot : centrés dans la colonne, à la hauteur de l'objet, même taille que son texte, en noir.
             var labels = Lots.Labels(page);
@@ -75,7 +82,8 @@ public static class ImageExportService
                         var (pr, pg, pb) = ImageExporter.PaperColor(flat, box);
                         ds.FillRectangle(new Rect(box.X, box.Y, box.Width, box.Height), ColorHelper.FromArgb(255, pr, pg, pb));
                     }
-                    double size = Math.Max(5, Math.Min(BaseSize(device, line.Cells[0]), box.Height / LineHeightRatio));
+                    var c0 = line.Cells[0];
+                    double size = Math.Max(5, Math.Min(BaseSize(device, c0, c0.Box.Height - line.Extra), box.Height / LineHeightRatio));
                     CanvasTextLayout layout = Layout(device, line.Lot, size);
                     while (size > 5 && layout.LayoutBounds.Width > box.Width - 2)
                     {
@@ -98,7 +106,15 @@ public static class ImageExportService
         new(device, text, new CanvasTextFormat { FontFamily = "Times New Roman", FontSize = (float)size, WordWrapping = CanvasWordWrapping.NoWrap }, float.MaxValue, float.MaxValue);
 
     /// <summary>Même règle qu'à l'écran : taille qui redonne la largeur du texte imprimé.</summary>
-    private static double BaseSize(CanvasDevice device, Field f)
+    private static double Width(CanvasDevice device, string text, double size)
+    {
+        using var layout = Layout(device, text.Length == 0 ? " " : text, size);
+        return layout.LayoutBounds.Width;
+    }
+
+    private static double BaseSize(CanvasDevice device, Field f) => BaseSize(device, f, f.Box.Height);
+
+    private static double BaseSize(CanvasDevice device, Field f, double boxHeight)
     {
         double size = f.FontSize;
         if (!f.Ink.IsEmpty && f.OriginalText.Length > 0)
@@ -107,7 +123,7 @@ public static class ImageExportService
             double w100 = reference.LayoutBounds.Width;
             if (w100 > 0) size = Math.Clamp(100 * f.Ink.Width / w100, 0.7 * f.FontSize, 1.3 * f.FontSize);
         }
-        return Math.Max(5, Math.Min(size, f.Box.Height / LineHeightRatio));
+        return Math.Max(5, Math.Min(size, boxHeight / LineHeightRatio));
     }
 
     /// <summary>Photo d'origine + cases modifiées → fichier JPEG.</summary>

@@ -9,11 +9,13 @@ import { newPage, newProject, analyze, reclassify, allFields, isModified, cycleK
 import { buildTxt, txtBlob, composeIntoSource, outputName } from './core/exports.js';
 import { decodeText, parseDelimited, readXlsx, buildDataPage } from './core/importers.js';
 import { packProject, unpackProject, EXTENSION } from './core/store.js';
-import { objectLines, lotsActive, numberLots, clearLots, setLot, resyncLots, removeLot, addLot, lotLabels, repairName } from './core/lots.js';
+import { objectLines, lotsActive, numberLots, clearLots, setLot, resyncLots, removeLot, addLot, lotLabels, repairName, naturalCompare } from './core/lots.js';
+import { unzipSync } from './vendor/fflate.js';
+import { stretch, setExtra, baseHeight, totalExtra } from './core/layout.js';
 import { drawLotColumns, framedTables, frameSignature, lotFrameEnabled } from './core/lotcolumn.js';
 import { decodeImage, pdfPages, isImageName, mimeOf } from './services/decode.js';
 import { recognize, warmUp } from './services/ocr.js';
-import { rasterToCanvas, canvasToBlob, renderEdits, freeCanvas } from './services/canvas.js';
+import { rasterToCanvas, canvasToBlob, renderEdits, freeCanvas, lineExtra } from './services/canvas.js';
 import * as db from './services/db.js';
 import { PageView } from './ui/pageview.js';
 import { cropDialog } from './ui/crop.js';
@@ -203,6 +205,9 @@ async function showPage(n, { flat = null, fit = true } = {}) {
     if (image) remember(state.flats, page, image, 3);
     if (list[state.index] !== page) return; // l'utilisateur a déjà changé de page
   }
+  // Page agrandie (textes sur plusieurs lignes) : l'image d'origine est étirée aux bons endroits.
+  const base = image;
+  if (base) image = stretch(base, page);
 
   const head = document.createElement('div');
   head.className = 'page-head';
@@ -223,7 +228,7 @@ async function showPage(n, { flat = null, fit = true } = {}) {
     lotFrame: () => lotFrameEnabled(state.project),
     zoom: () => state.zoom,
     onFocus: (v, f) => { state.field = f; updateEditBar(); },
-    onEdited: (v) => { afterEdit(v); updateEditBar(); scheduleSave(); },
+    onEdited: (v, f) => { afterEdit(v, f); updateEditBar(); scheduleSave(); },
     onTouch: () => {},
     onLocks: () => { status('Zones verrouillées mises à jour.'); scheduleSave(); },
     onLot: (v, line, value) => {
@@ -247,6 +252,7 @@ async function showPage(n, { flat = null, fit = true } = {}) {
     },
   });
   view.frameSig = frameSignature(page, lotFrameEnabled(state.project));
+  view.baseFlat = base;
   view.setLockMode(state.lock);
   state.view = view;
   $('pages').append(head, view.row);
@@ -287,8 +293,17 @@ function syncLots() {
   scheduleSave();
 }
 
-/** Après une saisie : si une ligne devient (ou cesse d'être) un objet, les lots se recalent. */
-function afterEdit(view) {
+/**
+ * Après une saisie : la rangée grandit si le texte passe sur plus de lignes (tout ce qui est en dessous descend),
+ * et si une ligne devient (ou cesse d'être) un objet, les lots se recalent.
+ */
+function afterEdit(view, f = null) {
+  const line = f ? view.lineOf.get(f) : null;
+  if (line && setExtra(view.page, line, lineExtra(line))) {
+    const img = view.baseFlat ? stretch(view.baseFlat, view.page) : null;
+    view.frameSig = frameSignature(view.page, lotFrameEnabled(state.project));
+    view.relayout(img, img ? displayFor(view.page, img) : null);
+  }
   if (!lotsActive(state.project)) return;
   const before = lotSignature(view.page);
   resyncLots(state.project);
@@ -389,11 +404,45 @@ async function addPage(page, flat = null) {
   await saveNow();
 }
 
-async function importFiles(files) {
+const SUPPORTED = /\.(jpe?g|png|bmp|tiff?|heic|heif|webp|gif|pdf|txt|csv|xlsx|inventaire)$/i;
+
+/**
+ * Dossier ou .zip : on prend tous les fichiers utilisables qu'il contient (sous-dossiers compris),
+ * dans l'ordre des noms (« page 2 » avant « page 10 »). Le reste est ignoré.
+ */
+async function expandFiles(files) {
+  const out = [];
+  let ignored = 0;
+  for (const file of files) {
+    const path = repairName(file.webkitRelativePath || file.name || '');
+    if (/\.zip$/i.test(path) || file.type === 'application/zip') {
+      const entries = unzipSync(new Uint8Array(await file.arrayBuffer()));
+      for (const [name, bytes] of Object.entries(entries)) {
+        const base = name.split('/').pop();
+        if (name.endsWith('/') || name.startsWith('__MACOSX/') || base.startsWith('.')) continue;
+        if (!SUPPORTED.test(base)) { ignored++; continue; }
+        out.push({ path: path + '/' + repairName(name), file: new File([bytes], repairName(base)) });
+      }
+      continue;
+    }
+    const base = path.split('/').pop();
+    if (file.webkitRelativePath && (base.startsWith('.') || !SUPPORTED.test(base))) { ignored++; continue; }
+    out.push({ path, file });
+  }
+  out.sort((a, b) => naturalCompare(a.path, b.path));
+  return { files: out.map((x) => x.file), ignored };
+}
+
+async function importFiles(picked) {
   let added = 0;
   const wasEmpty = pages().length === 0;
   const firstNew = pages().length;
-  const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+  const blankPages = [];
+  const { files: sorted, ignored } = await expandFiles(picked);
+  if (sorted.length === 0) {
+    await dialog('Rien à importer', '<p>Aucune photo, PDF ou tableau trouvé dans ce que vous avez choisi.</p>', [{ label: 'OK' }]);
+    return;
+  }
   for (let k = 0; k < sorted.length; k++) {
     const file = sorted[k];
     const name = repairName(file.name || `Photo ${new Date().toLocaleString('fr-FR')}.jpg`);
@@ -412,7 +461,8 @@ async function importFiles(files) {
         for (const { sheet, rows } of readXlsx(bytes)) await addPage(buildDataPage(`${name} – ${sheet}`, rows));
       } else if (ext === '.pdf' || file.type === 'application/pdf') {
         report(0, `${name} : ouverture du PDF…`); await tick();
-        for await (const { index, count, png } of pdfPages(bytes)) {
+        for await (const { index, count, png, blank } of pdfPages(bytes)) {
+          if (blank) blankPages.push(`${name} – page ${index}`);
           const label = `${name} – page ${index}`;
           const step = (f, text) => report((index - 1 + f) / count, `Page ${index} sur ${count} : ${text}`);
           step(0, 'préparation…');
@@ -436,13 +486,15 @@ async function importFiles(files) {
       await dialog('Import impossible', `<p>${escapeHtml(name)} : ${escapeHtml(e?.message ?? String(e))}</p>`, [{ label: 'OK' }]);
     }
   }
-  if (added && wasEmpty) state.project.Name = repairName(sorted[0].name || 'Inventaire').replace(/\.[^.]+$/, '');
+  if (added && wasEmpty) state.project.Name = repairName((picked[0].webkitRelativePath || '').split('/')[0] || sorted[0].name || 'Inventaire').replace(/\.[^.]+$/, '');
+  if (blankPages.length > 0)
+    await dialog('Pages vides', `<p>Ces pages du PDF n'ont rien donné à l'écran (image illisible ou page blanche) :</p><ul>${blankPages.map((n) => `<li>${escapeHtml(n)}</li>`).join('')}</ul><p>Si elles ne sont pas vides sur l'original, retirez-les et importez une photo de la page à la place.</p>`, [{ label: 'OK' }]);
   if (added) {
     // On revient sur la première page importée.
     if (firstNew < pages().length && state.index !== firstNew) await showPage(firstNew);
     await saveNow();
     const n = pages().length - firstNew;
-    status(`${n} page(s) ajoutée(s). Touchez une case pour la corriger ; ◀ ▶ en haut pour changer de page.`);
+    status(`${n} page(s) ajoutée(s)${ignored ? ` (${ignored} fichier(s) ignoré(s))` : ''}. Touchez une case pour la corriger ; ◀ ▶ en haut pour changer de page.`);
   }
 }
 
@@ -458,7 +510,7 @@ async function orientedSource(page) {
 async function restoreFlat(page) {
   const src = await orientedSource(page);
   if (!src) return null;
-  return render(src, page.Crop ?? Quad.full(src.w, src.h), page.Skew, page.Width, page.Height);
+  return render(src, page.Crop ?? Quad.full(src.w, src.h), page.Skew, page.Width, baseHeight(page));
 }
 
 // ---------- Enregistrement continu ----------
@@ -571,11 +623,17 @@ async function exportJpeg(only = null) {
     const page = list[i];
     progress(i / list.length);
     status(`Création de l'image ${i + 1} sur ${list.length}…`); await tick();
-    const flat = state.flats.get(page) ?? (await restoreFlat(page));
-    const src = await orientedSource(page);
-    if (!flat || !src) continue;
+    const base = state.flats.get(page) ?? (await restoreFlat(page));
+    if (!base) continue;
     const frame = lotFrameEnabled(state.project);
-    const final = composeIntoSource(src, page, renderEdits(page, flat, frame), frame);
+    const edited = renderEdits(page, stretch(base, page), frame);
+    // Page agrandie : on exporte la page scannée bien droite (on ne peut plus la reposer sur la photo d'origine).
+    let final = edited;
+    if (totalExtra(page) === 0) {
+      const src = await orientedSource(page);
+      if (!src) continue;
+      final = composeIntoSource(src, page, edited, frame);
+    }
     const canvas = rasterToCanvas(final);
     const blob = await canvasToBlob(canvas, 'image/jpeg', 0.93);
     freeCanvas(canvas);
@@ -645,8 +703,15 @@ async function lotsDialog() {
 
 function initButtons() {
   $('btnPhoto').onclick = () => $('filePhoto').click();
-  $('btnImport').onclick = () => $('fileImport').click();
-  for (const id of ['filePhoto', 'fileImport'])
+  $('btnImport').onclick = () => {
+    if (state.busy) return;
+    dialog('Importer', '<p>Photos, PDF, TXT, CSV, XLSX, projet <b>.inventaire</b> ou dossier compressé <b>.zip</b>. Plusieurs fichiers à la fois : dans Fichiers, « Sélectionner » puis touchez-les tous.</p>', [
+      { label: 'Fichiers ou photos', className: 'accent', action: () => { $('fileImport').click(); } },
+      { label: 'Un dossier entier', action: () => { $('fileFolder').click(); } },
+      { label: 'Annuler' },
+    ]);
+  };
+  for (const id of ['filePhoto', 'fileImport', 'fileFolder'])
     $(id).onchange = (e) => {
       const files = [...e.target.files];
       e.target.value = '';
@@ -690,7 +755,7 @@ function initButtons() {
     const f = state.field;
     if (!f || !state.view) return;
     state.view.revert(f);
-    afterEdit(state.view);
+    afterEdit(state.view, f);
     updateEditBar();
     scheduleSave();
   };

@@ -41,10 +41,12 @@ public sealed class PageView
     private readonly Rectangle _focusFrame = new() { Stroke = Accent, StrokeThickness = 2, Visibility = Visibility.Collapsed };
     private readonly Rectangle _rubber = new() { Stroke = LockStroke, StrokeThickness = 2, Fill = LockFill, Visibility = Visibility.Collapsed };
     private readonly Dictionary<Field, TextBox> _boxes = [];
-    private readonly Dictionary<Field, double> _baseSize = [];
     private readonly Dictionary<Field, SolidColorBrush> _paper = [];
     private readonly Border _loupe = new() { BorderBrush = Accent, BorderThickness = new Thickness(2), Background = Paper, Visibility = Visibility.Collapsed };
-    private readonly Raster? _image;
+    private Raster? _image;
+    private readonly Dictionary<Field, PrintedLine> _lineOf = [];
+    private readonly List<UIElement> _lockMarks = [];
+    private Canvas? _grid;
     private WriteableBitmap? _bitmap;
     private Image? _background;
     private Point? _dragStart;
@@ -70,7 +72,7 @@ public sealed class PageView
     private static readonly SolidColorBrush LotBorder = new(ColorHelper.FromArgb(255, 201, 214, 230));
 
     public event Action<PageView, Field>? FieldFocused;
-    public event Action<PageView>? Edited;
+    public event Action<PageView, Field>? Edited;
     public event Action<PageView>? Touched;
     public event Action<PageView>? LocksChanged;
     /// <summary>Numéro de lot tapé sur la page (ligne, valeur saisie).</summary>
@@ -95,7 +97,7 @@ public sealed class PageView
             Root.Children.Add(_background);
         }
         else
-            Root.Children.Add(DrawGrid());
+            Root.Children.Add(_grid = DrawGrid());
         _gutter.Height = page.Height;
         Host = new Grid { HorizontalAlignment = HorizontalAlignment.Center };
         Host.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -129,8 +131,8 @@ public sealed class PageView
     {
         _fieldLayer.Children.Clear();
         _overlayLayer.Children.Clear();
+        _lockMarks.Clear();
         _boxes.Clear();
-        _baseSize.Clear();
         Build();
     }
 
@@ -142,7 +144,7 @@ public sealed class PageView
 
     public void Revert(Field field)
     {
-        if (_boxes.TryGetValue(field, out var tb)) tb.Text = field.OriginalText;
+        if (_boxes.TryGetValue(field, out var tb)) tb.Text = ToBox(field.OriginalText);
         else field.Text = field.OriginalText;
     }
 
@@ -157,7 +159,11 @@ public sealed class PageView
         foreach (var table in Page.Tables)
             foreach (var line in table.Rows.SelectMany(r => r.Lines))
             {
-                foreach (var f in line.Cells.Where(c => !c.Locked)) AddField(f);
+                foreach (var f in line.Cells)
+                {
+                    _lineOf[f] = line;
+                    if (!f.Locked) AddField(f);
+                }
             }
         _overlayLayer.Children.Add(_focusFrame);
         _overlayLayer.Children.Add(_rubber);
@@ -214,21 +220,11 @@ public sealed class PageView
         Canvas.SetTop(tb, box.Y);
         LayoutLot(tb, line, box);
 
-        // Pendant la frappe, la suite se recale toute seule (petite pause après le dernier chiffre).
-        var timer = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread().CreateTimer();
-        timer.Interval = TimeSpan.FromMilliseconds(700);
-        timer.IsRepeating = false;
+        // La suite se recale quand on quitte la case (Entrée ou toucher ailleurs), pas pendant la frappe.
         void Commit()
         {
-            timer.Stop();
             if (tb.Text.Trim() != line.Lot) LotChanged?.Invoke(this, line, tb.Text);
         }
-        timer.Tick += (_, _) => Commit();
-        tb.TextChanged += (_, _) =>
-        {
-            timer.Stop();
-            if (tb.Text.Trim().Length > 0 && tb.FocusState != FocusState.Unfocused) timer.Start();
-        };
         tb.LostFocus += (_, _) => Commit();
         tb.KeyDown += (_, e) =>
         {
@@ -243,7 +239,8 @@ public sealed class PageView
     /// <summary>Taille du numéro : celle du texte de l'objet, réduite si la colonne est étroite ; à la hauteur de la ligne.</summary>
     private void LayoutLot(TextBox tb, PrintedLine line, RectD box)
     {
-        double size = Math.Max(5, Math.Min(BaseFontSize(line.Cells[0]), box.Height / LineHeightRatio));
+        var c0 = line.Cells[0];
+        double size = Math.Max(5, Math.Min(BaseFontSize(c0, c0.Box.Height - line.Extra), box.Height / LineHeightRatio));
         string text = line.Lot.Length == 0 ? " " : line.Lot;
         while (size > 5 && Measure(text, size) > box.Width - 2) size -= 0.5;
         tb.FontSize = size;
@@ -262,6 +259,8 @@ public sealed class PageView
         {
             var tb = _lotBoxes[line];
             if (tb.FocusState == FocusState.Unfocused && tb.Text != line.Lot) tb.Text = line.Lot;
+            Canvas.SetTop(tb, box.Y);
+            tb.Height = Math.Max(1, box.Height);
             LayoutLot(tb, line, box);
         }
         RefreshGutter();
@@ -279,7 +278,8 @@ public sealed class PageView
                 if (!active) continue;
                 bool has = line.Lot.Length > 0;
                 if (!has && !Lots.CanAdd(line)) continue;
-                double h = Math.Max(26, Math.Min(40, line.Bounds.Height + 6));
+                double baseHeight = line.Bounds.Height - line.Extra, centerY = line.Bounds.Top + baseHeight / 2;
+                double h = Math.Max(26, Math.Min(40, baseHeight + 6));
                 var button = new Button
                 {
                     Width = 42, Height = h, Padding = new Thickness(0), MinWidth = 0, MinHeight = 0,
@@ -290,7 +290,7 @@ public sealed class PageView
                 };
                 ToolTipService.SetToolTip(button, has ? "Pas un objet : retirer ce numéro (les suivants se décalent)" : "Ajouter un numéro de lot sur cette ligne");
                 Canvas.SetLeft(button, GutterWidth - 6 - 42);
-                Canvas.SetTop(button, line.Bounds.CenterY - h / 2);
+                Canvas.SetTop(button, centerY - h / 2);
                 var target = line;
                 button.Click += (_, _) => { if (has) LotRemoved?.Invoke(this, target); else LotAdded?.Invoke(this, target); };
                 _gutter.Children.Add(button);
@@ -308,14 +308,21 @@ public sealed class PageView
 
     private void AddField(Field f)
     {
+        bool multi = TextWrap.IsMultiline(f);
         var tb = new TextBox
         {
             Style = (Style)Application.Current.Resources["FieldBox"],
-            Text = f.Text,
+            Text = ToBox(f.Text),
             Width = Math.Max(1, f.Box.Width),
             Height = Math.Max(1, f.Box.Height),
             TextAlignment = f.Align switch { TextAlign.Right => TextAlignment.Right, TextAlign.Center => TextAlignment.Center, _ => TextAlignment.Left },
         };
+        if (multi)
+        {
+            // Désignation : passe à la ligne, même taille d'écriture ; Entrée = nouvelle ligne dans la case.
+            tb.TextWrapping = TextWrapping.Wrap;
+            tb.AcceptsReturn = true;
+        }
         if (f.Column > 0 && (f.OriginalText.Length == 0 || f.OriginalText.Any(char.IsDigit)))
         {
             // Clavier tactile numérique pour les colonnes de valeurs (les lettres restent accessibles).
@@ -326,7 +333,6 @@ public sealed class PageView
         Canvas.SetLeft(tb, f.Box.X);
         Canvas.SetTop(tb, f.Box.Y);
 
-        _baseSize[f] = BaseFontSize(f);
         Layout(tb, f);
         ApplyVisual(tb, f, focused: false);
 
@@ -339,18 +345,20 @@ public sealed class PageView
         };
         tb.TextChanged += (_, _) =>
         {
-            if (f.Text == tb.Text) return;
-            f.Text = tb.Text;
+            string text = FromBox(tb.Text);
+            if (f.Text == text) return;
+            f.Text = text;
             Layout(tb, f);
             ApplyVisual(tb, f, tb.FocusState != FocusState.Unfocused);
-            Edited?.Invoke(this);
+            Edited?.Invoke(this, f);
         };
-        tb.KeyDown += (_, e) =>
-        {
-            if (e.Key != VirtualKey.Enter) return;
-            e.Handled = true;
-            FocusNextInColumn(f);
-        };
+        if (!multi)
+            tb.KeyDown += (_, e) =>
+            {
+                if (e.Key != VirtualKey.Enter) return;
+                e.Handled = true;
+                FocusNextInColumn(f);
+            };
 
         _boxes[f] = tb;
         _fieldLayer.Children.Add(tb);
@@ -360,7 +368,13 @@ public sealed class PageView
     /// Taille de police de référence : celle qui redonne la largeur du texte imprimé
     /// (plus fiable que la hauteur des boîtes OCR), bornée autour de l'estimation du cœur.
     /// </summary>
-    private static double BaseFontSize(Field f)
+    /// <summary>Retours à la ligne : « \n » dans le projet (comme sur iPhone/iPad), « \r » dans les champs Windows.</summary>
+    private static string ToBox(string s) => s.Replace("\r\n", "\n").Replace('\n', '\r');
+    private static string FromBox(string s) => s.Replace("\r\n", "\n").Replace('\r', '\n');
+
+    private static double BaseFontSize(Field f) => BaseFontSize(f, f.Box.Height);
+
+    private static double BaseFontSize(Field f, double boxHeight)
     {
         double size = f.FontSize;
         if (!f.Ink.IsEmpty && f.OriginalText.Length > 0)
@@ -368,26 +382,90 @@ public sealed class PageView
             double w100 = Measure(f.OriginalText, 100);
             if (w100 > 0) size = Math.Clamp(100 * f.Ink.Width / w100, 0.7 * f.FontSize, 1.3 * f.FontSize);
         }
-        return Math.Max(5, Math.Min(size, f.Box.Height / LineHeightRatio));
+        return Math.Max(5, Math.Min(size, boxHeight / LineHeightRatio));
     }
 
-    /// <summary>Réduit la police jusqu'à ce que le texte tienne dans sa case, et le place à la hauteur de l'original.</summary>
+    /// <summary>
+    /// Mise en page du texte d'une case : désignation à la taille de l'imprimé sur plusieurs lignes,
+    /// valeurs sur une ligne réduites si besoin ; 1re ligne à la hauteur du texte d'origine.
+    /// </summary>
+    public (double Size, List<string> Lines, double Top) TextLayout(PrintedLine line, Field f, string text)
+    {
+        var b = PageLayout.BaseBox(line, f);
+        double size = BaseFontSize(f, b.Height);
+        var lines = new List<string> { text };
+        if (TextWrap.IsMultiline(f))
+            lines = TextWrap.Wrap(text, Math.Max(4, f.Box.Width - f.Indent - 3), s => Measure(s, size));
+        else
+        {
+            double avail = Math.Max(4, f.Box.Width - f.Indent - 3);
+            string t = text.Length == 0 ? " " : text;
+            while (size > 5 && Measure(t, size) > avail) size -= 0.5;
+        }
+        double center = f.Ink.IsEmpty ? b.CenterY : f.Ink.CenterY;
+        double top = Math.Clamp(center - 0.58 * size, b.Top, Math.Max(b.Top, b.Bottom - LineHeightRatio * size));
+        return (size, lines, top);
+    }
+
+    /// <summary>Hauteur à ajouter sous la ligne pour que le texte de toutes ses cases tienne.</summary>
+    public int LineExtra(PrintedLine line)
+    {
+        int extra = 0;
+        foreach (var f in line.Cells.Where(c => TextWrap.IsMultiline(c) && !c.Locked))
+        {
+            var t = TextLayout(line, f, f.Text);
+            extra = Math.Max(extra, PageLayout.ExtraFor(line, f, t.Lines.Count, t.Size));
+        }
+        return extra;
+    }
+
+    public PrintedLine? LineOf(Field f) => _lineOf.TryGetValue(f, out var l) ? l : null;
+
     private void Layout(TextBox tb, Field f)
     {
-        double size = _baseSize[f];
-        double avail = Math.Max(4, f.Box.Width - f.Indent - 3);
-        string text = tb.Text.Length == 0 ? " " : tb.Text;
-        while (size > 5 && Measure(text, size) > avail) size -= 0.5;
+        var line = _lineOf[f];
+        var (size, _, top) = TextLayout(line, f, FromBox(tb.Text));
         tb.FontSize = size;
-
-        double center = f.Ink.IsEmpty ? f.Box.CenterY : f.Ink.CenterY;
-        double top = Math.Clamp(center - f.Box.Y - 0.58 * size, 0, Math.Max(0, f.Box.Height - LineHeightRatio * size));
+        Canvas.SetLeft(tb, f.Box.X);
+        Canvas.SetTop(tb, f.Box.Y);
+        tb.Width = Math.Max(1, f.Box.Width);
+        tb.Height = Math.Max(1, f.Box.Height);
+        double pad = Math.Max(0, top - f.Box.Y);
         tb.Padding = f.Align switch
         {
-            TextAlign.Right => new Thickness(0, top, f.Indent, 0),
-            TextAlign.Center => new Thickness(0, top, 0, 0),
-            _ => new Thickness(f.Indent, top, 0, 0),
+            TextAlign.Right => new Thickness(0, pad, f.Indent, 0),
+            TextAlign.Center => new Thickness(0, pad, 0, 0),
+            _ => new Thickness(f.Indent, pad, TextWrap.IsMultiline(f) ? 3 : 0, 0),
         };
+    }
+
+    /// <summary>La page a changé de hauteur (texte sur plusieurs lignes) : tout est replacé, la case en cours reste active.</summary>
+    public void Relayout(Raster? image, Raster? display)
+    {
+        _image = image;
+        Root.Height = Page.Height;
+        _gutter.Height = Page.Height;
+        if (_background != null && (display ?? image) is { } shown)
+        {
+            _background.Height = Page.Height;
+            SetDisplay(shown);
+        }
+        if (_grid != null)
+        {
+            int i = Root.Children.IndexOf(_grid);
+            _grid = DrawGrid();
+            if (i >= 0) Root.Children[i] = _grid;
+        }
+        _paper.Clear();
+        foreach (var (f, tb) in _boxes)
+        {
+            Layout(tb, f);
+            ApplyVisual(tb, f, tb.FocusState != FocusState.Unfocused);
+        }
+        foreach (var mark in _lockMarks) _overlayLayer.Children.Remove(mark);
+        _lockMarks.Clear();
+        foreach (var zone in Page.LockZones) AddLockZone(zone);
+        UpdateLots();
     }
 
     private static double Measure(string s, double size)
@@ -507,10 +585,12 @@ public sealed class PageView
         Canvas.SetLeft(rect, z.X);
         Canvas.SetTop(rect, z.Y);
         _overlayLayer.Children.Add(rect);
+        _lockMarks.Add(rect);
         var icon = new FontIcon { Glyph = "", FontSize = 18, Foreground = LockStroke };
         Canvas.SetLeft(icon, z.X + 4);
         Canvas.SetTop(icon, z.Y + 4);
         _overlayLayer.Children.Add(icon);
+        _lockMarks.Add(icon);
     }
 
     private Canvas DrawGrid()

@@ -43,7 +43,17 @@ async function loadPdfJs() {
  */
 export async function* pdfPages(bytes) {
   const lib = await loadPdfJs();
-  const task = lib.getDocument({ data: bytes.slice() });
+  const base = new URL('../vendor/pdfjs/', import.meta.url).href;
+  const task = lib.getDocument({
+    data: bytes.slice(),
+    // Décodeurs des images de scanner (JPEG 2000, JBIG2) et polices standard : livrés avec l'app, hors ligne.
+    wasmUrl: base + 'wasm/',
+    standardFontDataUrl: base + 'standard_fonts/',
+    iccUrl: base + 'iccs/',
+    // Chemins les plus sûrs sur iPhone/iPad (pas d'OffscreenCanvas ni de décodeur d'images du système).
+    isOffscreenCanvasSupported: false,
+    isImageDecoderSupported: false,
+  });
   let doc;
   try {
     doc = await task.promise;
@@ -61,16 +71,25 @@ export async function* pdfPages(bytes) {
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, c.width, c.height);
     await page.render({ canvasContext: ctx, viewport: vp, canvas: c }).promise;
+    const blank = isBlank(ctx, c.width, c.height);
     const png = new Uint8Array(await (await canvasToBlob(c, 'image/png')).arrayBuffer());
     freeCanvas(c);
     page.cleanup();
-    yield { index: i, count: doc.numPages, png };
+    yield { index: i, count: doc.numPages, png, blank };
   }
   } finally {
     await task.destroy();
   }
 }
 
-export const isImageName = (n) => /\.(jpe?g|png|bmp|tiff?|heic|heif|webp)$/i.test(n);
+/** Page restée blanche (image du PDF illisible) : presque aucun pixel foncé. */
+function isBlank(ctx, w, h) {
+  const d = ctx.getImageData(0, 0, w, h).data;
+  let dark = 0;
+  for (let i = 0; i < d.length; i += 4 * 7) if (d[i] + d[i + 1] + d[i + 2] < 600) dark++;
+  return dark < (w * h) / 7 / 2000;
+}
+
+export const isImageName = (n) => /\.(jpe?g|png|bmp|tiff?|heic|heif|webp|gif)$/i.test(n);
 export const mimeOf = (n) => (/\.png$/i.test(n) ? 'image/png' : /\.(heic|heif)$/i.test(n) ? 'image/heic' : /\.webp$/i.test(n) ? 'image/webp' : 'image/jpeg');
 export { raster };

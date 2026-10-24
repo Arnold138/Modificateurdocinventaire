@@ -86,9 +86,13 @@ if (args.Length > 0 && args[0] == "export-frame")
     foreach (var name in args.Skip(2)) project.Pages.Add(Fixtures.Analyze(name));
     Lots.Number(project, 1);
     var page = project.Pages[^1];
-    var framed = RetoucheInventaire.Core.Export.LotColumn.Draw(Fixtures.Load(page.Id).Image, page);
+    // Une rangée agrandie (texte sur plusieurs lignes) : l'image est étirée avant de tracer la colonne.
+    var carton = page.AllLines().First(l => l.Cells[0].Text == "CARTONNAGE");
+    PageLayout.SetExtra(page, carton, 37);
+    var stretched = PageLayout.Stretch(Fixtures.Load(page.Id).Image, page);
+    var framed = RetoucheInventaire.Core.Export.LotColumn.Draw(stretched, page);
     Pgm.Write(args[1], framed);
-    foreach (var f in RetoucheInventaire.Core.Export.LotColumn.Frames(Fixtures.Load(page.Id).Image, page))
+    foreach (var f in RetoucheInventaire.Core.Export.LotColumn.Frames(stretched, page))
         Console.WriteLine($"x {f.Left}-{f.Right} y {f.Top}-{f.Bottom} traits {f.VThick}/{f.HThick} gris {f.Color[3]}");
     return 0;
 }

@@ -30,6 +30,9 @@ export const canAddLot = (line) =>
 
 const everyLine = (project) => project.Pages.flatMap((p) => [...allLines(p)]);
 
+/** Lot 0 : objet absent ou barré (regroupé à la fin du .txt). */
+export const isZeroLot = (line) => /^[+-]?\d+$/.test((line.Lot ?? '').trim()) && parseInt(line.Lot, 10) === 0;
+
 export const lotsActive = (project) => everyLine(project).some((l) => (l.Lot ?? '').length > 0);
 
 export function numberLots(project, start = 1) {
@@ -78,7 +81,7 @@ export function resyncLots(project) {
   let next = 1;
   for (const { line } of objectLines(project)) {
     const v = /^[+-]?\d+$/.test(line.Lot ?? '') ? parseInt(line.Lot, 10) : NaN;
-    if (line.LotManual && !Number.isNaN(v)) next = v + 1;
+    if (line.LotManual && !Number.isNaN(v)) { if (v !== 0) next = v + 1; } // 0 : absent ou barré, pas de numéro
     else if (line.LotManual && (line.Lot ?? '').length > 0) { /* « 12 bis » : gardé tel quel */ }
     else { line.Lot = String(next); line.LotManual = false; next++; }
   }
@@ -103,7 +106,8 @@ export function columnWidth(page) {
 
 /** Case du numéro de lot : dans la colonne, à la hauteur de la ligne d'objet. */
 export function numberBox(table, line, width) {
-  const b = lineBounds(line);
+  const lb = lineBounds(line);
+  const b = { ...lb, Height: lb.Height - (line.Extra ?? 0) }; // à la hauteur de la 1re ligne, même si la case a grandi
   const right = tableLeft(table), left = Math.max(0, right - width);
   const h = Math.max(8, b.Height);
   return Rect.make(left + 2, Rect.cy(b) - h / 2, Math.max(4, right - left - 4), h);
@@ -114,8 +118,12 @@ export function lotLabels(page) {
   return page.Tables.flatMap((t) => t.Rows.flatMap((r) => r.Lines).filter((l) => (l.Lot ?? '').length > 0).map((line) => ({ line, table: t, box: numberBox(t, line, w) })));
 }
 
+/** Tri « naturel » des noms : « page 2 » avant « page 10 ». */
+export const naturalCompare = (a, b) => a.localeCompare(b, 'fr', { numeric: true, sensitivity: 'base' });
+
 /** « prisÃ© » → « prisé » : octets UTF-8 relus comme du Latin-1. */
 export function repairName(name) {
+  name = name.normalize('NFC'); // iPhone/Mac : noms décomposés (« A » + tilde)
   if (!/[ÃÂ]/.test(name)) return name;
   try {
     const bytes = Uint8Array.from([...name].map((c) => { const k = c.charCodeAt(0); if (k > 255) throw new Error(); return k; }));

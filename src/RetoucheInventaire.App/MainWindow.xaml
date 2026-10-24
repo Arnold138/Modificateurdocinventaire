@@ -138,12 +138,22 @@
                     <TextBlock Text="Photo" VerticalAlignment="Center" />
                 </StackPanel>
             </Button>
-            <Button x:Name="ImportButton" Grid.Column="1" Style="{StaticResource TabButton}" Click="Import_Click"
-                    ToolTipService.ToolTip="Photos, PDF, TXT, CSV, XLSX ou projet .inventaire">
+            <Button x:Name="ImportButton" Grid.Column="1" Style="{StaticResource TabButton}"
+                    ToolTipService.ToolTip="Photos, PDF, TXT, CSV, XLSX, projet .inventaire, dossier ou .zip">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <FontIcon Glyph="&#xE8B5;" FontSize="20" />
                     <TextBlock Text="Importer" VerticalAlignment="Center" />
                 </StackPanel>
+                <Button.Flyout>
+                    <MenuFlyout Placement="TopEdgeAlignedLeft">
+                        <MenuFlyoutItem Text="Fichiers ou photos…" Click="Import_Click">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8E5;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem Text="Un dossier entier…" Click="ImportFolder_Click">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8B7;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                    </MenuFlyout>
+                </Button.Flyout>
             </Button>
             <Button x:Name="LotsButton" Grid.Column="2" Style="{StaticResource TabButton}" Click="Lots_Click"
                     ToolTipService.ToolTip="Numéros de lot : un par objet, dans une colonne à gauche">

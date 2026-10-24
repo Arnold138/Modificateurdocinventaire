@@ -1,6 +1,6 @@
 // Tests du cœur JavaScript (version iPad) sur les mêmes pages que la version Windows.
 // Usage : node web/tests/test.mjs [fichier .txt exporté par la version Windows, pour comparaison]
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -13,6 +13,8 @@ import { parseDelimited, buildDataPage } from '../core/importers.js';
 import { packProject, unpackProject } from '../core/store.js';
 import { numberLots, setLot, resyncLots, clearLots, lotsActive, objectLines, repairName, removeLot, addLot, canAddLot } from '../core/lots.js';
 import { drawLotColumns, frames } from '../core/lotcolumn.js';
+import { setExtra, stretch, extraFor } from '../core/layout.js';
+import { isZeroLot } from '../core/lots.js';
 
 const FIX = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tests', 'fixtures');
 
@@ -202,8 +204,66 @@ test('Colonne des lots tracée dans la marge, rien d\'autre ne change', () => {
   eq(0, outside, 'pixels modifiés hors de la colonne');
 });
 
+test('Lots à 0 : pas de numéro, regroupés à la fin du .txt', () => {
+  const p = threePages();
+  numberLots(p, 1);
+  const objs = [...objectLines(p)].map((o) => o.line);
+  setLot(p, objs[3], '0');
+  check(isZeroLot(objs[3]), 'zéro');
+  eq('4', objs[4].Lot, 'le 0 ne prend pas de numéro');
+  let l = lines(p);
+  eq('0\t2 rolls en métal\t60\t30', l[l.length - 1], 'en fin');
+  eq(1, l.filter((x) => x.includes('2 rolls en métal')).length, 'retiré de sa place');
+  const comp = p.Pages[0].Tables[0].Rows.flatMap((r) => r.Lines).find((x) => x.Cells[0].Text.startsWith('1 compresseur'));
+  setLot(p, comp, '0');
+  l = lines(p);
+  check(l[l.length - 2].startsWith('0\t1 compresseur') && l[l.length - 1] === '\tCD3+ +/- 14130 heures', 'objet et sa suite');
+});
+
+test('Rangée qui grandit puis revient', () => {
+  const page = analyzePage('page1');
+  const round = (s) => s.replace(/-?\d+\.\d+/g, (m) => String(Math.round(parseFloat(m) * 1e6) / 1e6));
+  const before = round(JSON.stringify(page));
+  const ls = page.Tables[0].Rows.flatMap((r) => r.Lines);
+  const line = ls.find((x) => x.Cells[0].Text === '2 rolls en métal');
+  const next = ls[ls.indexOf(line) + 1];
+  const y = next.Cells[0].Box.Y, h = page.Height;
+  check(setExtra(page, line, 40), 'agrandie');
+  eq(y + 40, next.Cells[0].Box.Y, 'la suite descend');
+  eq(h + 40, page.Height, 'page plus longue');
+  setExtra(page, line, 0);
+  eq(before, round(JSON.stringify(page)), 'revenue à l\'origine');
+  const img = load('page1').n.image;
+  setExtra(page, line, 30);
+  const big = stretch(img, page);
+  eq(img.h + 30, big.h, 'image allongée');
+  const at = line.ExtraAt;
+  check(img.data.subarray(at * img.w).every((v, i) => v === big.data[(at + 30) * img.w + i]), 'bas décalé intact');
+  check(extraFor(line, line.Cells[0], 3, 20) > 30, 'trois lignes');
+});
+
+test('Nom de fichier iPhone (décomposé) réparé', () => {
+  eq('BEENDHI prisé.pdf', repairName('BEENDHI prisÃ©.pdf'.normalize('NFD')), 'réparation');
+});
+
 test('Nom de fichier abîmé réparé', () => {
   eq('BEENDHI prisé.pdf', repairName('BEENDHI prisÃ©.pdf'), 'réparation');
+});
+
+test('Hors ligne : tous les fichiers de l\'app sont mis en cache', () => {
+  const sw = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'sw.js'), 'utf8');
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const missing = [];
+  const walk = (dir) => {
+    for (const e of readdirSync(join(root, dir), { withFileTypes: true })) {
+      const rel = dir ? `${dir}/${e.name}` : e.name;
+      if (e.isDirectory()) { if (rel !== 'tests') walk(rel); continue; }
+      if (['package.json', 'sw.js'].includes(rel) || e.name.includes('LICENSE')) continue;
+      if (!sw.includes(`'${rel}'`)) missing.push(rel);
+    }
+  };
+  walk('');
+  eq('', missing.join(', '), 'fichiers absents du cache');
 });
 
 const windowsTxt = process.argv[2];
@@ -225,7 +285,9 @@ if (windowsFrame) {
     const p = threePages();
     numberLots(p, 1);
     const page = p.Pages[2];
-    const js = drawLotColumns(load(page.Id).n.image, page);
+    const carton = page.Tables.flatMap((t) => t.Rows).flatMap((r) => r.Lines).find((l) => l.Cells[0].Text === 'CARTONNAGE');
+    setExtra(page, carton, 37);
+    const js = drawLotColumns(stretch(load(page.Id).n.image, page), page);
     const win = readPgm(windowsFrame);
     eq(`${win.w}x${win.h}`, `${js.w}x${js.h}`, 'taille');
     const k = win.data.findIndex((v, i) => v !== js.data[i]);

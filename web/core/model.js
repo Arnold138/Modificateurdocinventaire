@@ -101,7 +101,7 @@ function buildGridTable(grid, words, used) {
       if (li > 0) top = Math.max(top, (Rect.bottom(bandOf(lines[li - 1])) + band.Y) / 2);
       if (li < lines.length - 1) bottom = Math.min(bottom, (Rect.bottom(band) + bandOf(lines[li + 1]).Y) / 2);
       const em = estimateFontSize(lineWords.map((t) => t.W));
-      const line = { Kind: 'Article', KindChosenByUser: false, OutsideTable: false, Cells: [], Lot: '', LotManual: false };
+      const line = { Kind: 'Article', KindChosenByUser: false, OutsideTable: false, Cells: [], Lot: '', LotManual: false, NoLot: false, ForceLot: false, Extra: 0, ExtraAt: 0 };
       for (let c = 0; c < nCols; c++) {
         const cellWords = lineWords.filter((t) => t.Col === c).map((t) => t.W);
         cellWords.sort((a, b) => a.Box.X - b.Box.X);
@@ -176,7 +176,7 @@ function buildGridlessTable(words, pageWidth) {
       segments[segments.length - 1].push(sorted[i]);
     }
     const em = estimateFontSize(sorted);
-    const line = { Kind: 'Article', KindChosenByUser: false, OutsideTable: false, Cells: [], Lot: '', LotManual: false };
+    const line = { Kind: 'Article', KindChosenByUser: false, OutsideTable: false, Cells: [], Lot: '', LotManual: false, NoLot: false, ForceLot: false, Extra: 0, ExtraAt: 0 };
     segments.forEach((seg, s) => {
       const ink = seg.reduce((a, w) => Rect.union(a, w.Box), Rect.empty());
       const right = s < segments.length - 1 ? segments[s + 1][0].Box.X - 6 : Math.max(Rect.right(ink), pageWidth * 0.98);

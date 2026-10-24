@@ -148,20 +148,75 @@ public sealed partial class MainWindow : Window
         InitPicker(picker);
         foreach (var ext in ImportService.Extensions) picker.FileTypeFilter.Add(ext);
         picker.FileTypeFilter.Add(ProjectStore.Extension);
+        picker.FileTypeFilter.Add(".zip");
         var files = await picker.PickMultipleFilesAsync();
         if (files is null || files.Count == 0) return;
         await RunBusyAsync(() => ImportFilesAsync(files, null));
     }
 
-    private async Task ImportFilesAsync(IReadOnlyList<StorageFile> files, string? forcedName)
+    /// <summary>Un dossier entier : toutes les photos, PDF et tableaux qu'il contient (sous-dossiers compris).</summary>
+    private async void ImportFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var picker = new FolderPicker { SuggestedStartLocation = PickerLocationId.PicturesLibrary };
+        picker.FileTypeFilter.Add("*");
+        InitPicker(picker);
+        var folder = await picker.PickSingleFolderAsync();
+        if (folder is null) return;
+        await RunBusyAsync(async () =>
+        {
+            var files = new List<StorageFile>();
+            foreach (var path in Directory.EnumerateFiles(folder.Path, "*", SearchOption.AllDirectories))
+                if (Importable(path)) files.Add(await StorageFile.GetFileFromPathAsync(path));
+            await ImportFilesAsync(files, null, folder.Path, folder.Name);
+        });
+    }
+
+    private static bool Importable(string path)
+    {
+        string ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
+        return !System.IO.Path.GetFileName(path).StartsWith('.')
+               && (ImportService.Extensions.Contains(ext) || ext == ProjectStore.Extension || ext == ".zip");
+    }
+
+    /// <summary>
+    /// Fichiers à importer, dans l'ordre des noms (« page 2 » avant « page 10 ») ; un .zip est ouvert
+    /// et son contenu utilisable ajouté (le reste est ignoré).
+    /// </summary>
+    private static async Task<List<(StorageFile File, string Name, string Key)>> ExpandAsync(IReadOnlyList<StorageFile> files, string? root)
+    {
+        var items = new List<(StorageFile File, string Name, string Key)>();
+        foreach (var file in files)
+        {
+            string key = root != null && file.Path.StartsWith(root, StringComparison.OrdinalIgnoreCase) ? file.Path[root.Length..] : file.Name;
+            if (!System.IO.Path.GetExtension(file.Name).Equals(".zip", StringComparison.OrdinalIgnoreCase))
+            {
+                items.Add((file, Names.Repair(file.Name), Names.Repair(key)));
+                continue;
+            }
+            string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "RetoucheInventaire", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            await Task.Run(() => System.IO.Compression.ZipFile.ExtractToDirectory(file.Path, dir, System.Text.Encoding.UTF8, overwriteFiles: true));
+            foreach (var path in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+            {
+                string rel = path[(dir.Length + 1)..];
+                if (rel.StartsWith("__MACOSX") || !Importable(path) || path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) continue;
+                items.Add((await StorageFile.GetFileFromPathAsync(path), Names.Repair(System.IO.Path.GetFileName(path)), Names.Repair(key + "/" + rel)));
+            }
+        }
+        items.Sort((a, b) => Names.NaturalCompare(a.Key, b.Key));
+        return items;
+    }
+
+    private async Task ImportFilesAsync(IReadOnlyList<StorageFile> files, string? forcedName, string? root = null, string? folderName = null)
     {
         int firstNew = _project.Pages.Count, added = 0;
         bool wasEmpty = firstNew == 0;
-        var sorted = files.OrderBy(f => f.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+        var sorted = await ExpandAsync(files, root);
+        if (sorted.Count == 0) { await ShowMessageAsync("Rien à importer", "Aucune photo, PDF ou tableau trouvé dans ce que vous avez choisi."); return; }
         for (int k = 0; k < sorted.Count; k++)
         {
-            var file = sorted[k];
-            string name = forcedName ?? Names.Repair(file.Name);
+            var (file, fileName, _) = sorted[k];
+            string name = forcedName ?? fileName;
             int fileIndex = k;
             // Progression globale : fichier k sur N, et page i sur n à l'intérieur d'un PDF.
             void Step(double f, string text)
@@ -193,7 +248,7 @@ public sealed partial class MainWindow : Window
             }
         }
         if (added == 0) return;
-        if (wasEmpty) _project.Name = System.IO.Path.GetFileNameWithoutExtension(forcedName ?? Names.Repair(sorted[0].Name));
+        if (wasEmpty) _project.Name = folderName != null ? Names.Repair(folderName) : System.IO.Path.GetFileNameWithoutExtension(forcedName ?? sorted[0].Name);
         // On revient sur la première page importée.
         if (_index != firstNew && firstNew < _project.Pages.Count) await ShowPageAsync(firstNew);
         Autosave();
@@ -236,6 +291,9 @@ public sealed partial class MainWindow : Window
             if (image != null) Remember(_flats, page, image, 3);
             if (CurrentPage != page) return; // l'utilisateur a déjà changé de page
         }
+        // Page agrandie (textes sur plusieurs lignes) : l'image d'origine est étirée aux bons endroits.
+        _baseFlat = image;
+        if (image != null) image = PageLayout.Stretch(image, page);
 
         var title = new TextBlock { FontSize = 15, VerticalAlignment = VerticalAlignment.Center, Opacity = 0.7,
                                     Text = $"Page {_index + 1} sur {_project.Pages.Count} · {page.SourceName}" };
@@ -261,7 +319,7 @@ public sealed partial class MainWindow : Window
         var view = new PageView(page, image, DisplayFor(page, image), () => Lots.IsActive(_project), () => _project.LotFrame);
         _frameSignature = LotColumn.Signature(page, _project.LotFrame);
         view.FieldFocused += (_, f) => { _currentField = f; UpdateEditBar(); };
-        view.Edited += v => { AfterEdit(v); UpdateEditBar(); ScheduleAutosave(); };
+        view.Edited += (v, f) => { AfterEdit(v, f); UpdateEditBar(); ScheduleAutosave(); };
         view.LocksChanged += _ => { ScheduleAutosave(); SetStatus("Zones verrouillées mises à jour."); };
         view.LotChanged += (v, line, value) =>
         {
@@ -300,9 +358,21 @@ public sealed partial class MainWindow : Window
     private static string LotSignature(ModelPage page) =>
         string.Join("|", Lots.Labels(page).Select(l => l.Line.Cells.FirstOrDefault()?.Id + ":" + l.Line.Lot));
 
-    /// <summary>Après une saisie : si une ligne devient (ou cesse d'être) un objet, les lots se recalent.</summary>
-    private void AfterEdit(PageView view)
+    private Raster? _baseFlat;
+
+    /// <summary>
+    /// Après une saisie : la rangée grandit si le texte passe sur plus de lignes (tout ce qui est en dessous descend),
+    /// et si une ligne devient (ou cesse d'être) un objet, les lots se recalent.
+    /// </summary>
+    private void AfterEdit(PageView view, Field? field = null)
     {
+        var line = field is null ? null : view.LineOf(field);
+        if (line != null && PageLayout.SetExtra(view.Page, line, view.LineExtra(line)))
+        {
+            var img = _baseFlat is null ? null : PageLayout.Stretch(_baseFlat, view.Page);
+            _frameSignature = LotColumn.Signature(view.Page, _project.LotFrame);
+            view.Relayout(img, img is null ? null : DisplayFor(view.Page, img));
+        }
         if (!Lots.IsActive(_project)) return;
         string before = LotSignature(view.Page);
         Lots.Resync(_project);
@@ -457,7 +527,7 @@ public sealed partial class MainWindow : Window
     {
         if (_currentField is null || _view is null) return;
         _view.Revert(_currentField);
-        AfterEdit(_view);
+        AfterEdit(_view, _currentField);
         UpdateEditBar();
         ScheduleAutosave();
     }
@@ -618,12 +688,18 @@ public sealed partial class MainWindow : Window
                 var page = pages[i];
                 Progress.Value = (double)i / pages.Count;
                 SetStatus($"Création de l'image {i + 1} sur {pages.Count}…");
-                var flat = _flats.TryGetValue(page, out var cached) ? cached : await RestoreFlatAsync(page);
-                var source = await GetOrientedSourceAsync(page);
-                if (flat is null || source is null) continue;
+                var baseFlat = _flats.TryGetValue(page, out var cached) ? cached : await RestoreFlatAsync(page);
+                if (baseFlat is null) continue;
                 bool frame = _project.LotFrame;
-                var edited = ImageExportService.RenderEdits(page, flat, frame);
-                var final = await Task.Run(() => ImageExporter.ComposeIntoSource(source, page, edited, frame));
+                var edited = ImageExportService.RenderEdits(page, PageLayout.Stretch(baseFlat, page), frame);
+                // Page agrandie : on exporte la page scannée bien droite (elle ne se repose plus sur la photo d'origine).
+                var final = edited;
+                if (PageLayout.TotalExtra(page) == 0)
+                {
+                    var source = await GetOrientedSourceAsync(page);
+                    if (source is null) continue;
+                    final = await Task.Run(() => ImageExporter.ComposeIntoSource(source, page, edited, frame));
+                }
                 await ImageExportService.SaveJpegAsync(final, System.IO.Path.Combine(folder.Path, ImageExportService.OutputName(page)));
                 done++;
             }

@@ -152,3 +152,6 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 .pagelist li.current .num { background: var(--accent); color: #fff; }
 .tabbar button.on { color: var(--accent); background: var(--accent-soft); }
 .dialog-buttons button.danger { background: #fdecec; }
+
+/* Désignation sur plusieurs lignes : même taille d'écriture, la case s'agrandit vers le bas. */
+.field.multi { resize: none; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; padding-bottom: 0; }

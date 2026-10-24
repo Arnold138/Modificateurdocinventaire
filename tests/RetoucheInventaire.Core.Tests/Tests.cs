@@ -421,6 +421,79 @@ public static class Tests
             Check(box.Left >= 0 && box.Right <= page.Tables[0].ColumnXs[0] + 1, $"lot {line.Lot} hors de la colonne");
     }
 
+    public static void T_Lots_zero_en_fin_de_txt()
+    {
+        var p = ThreePages();
+        Lots.Number(p, 1);
+        var objects = Lots.ObjectLines(p).Select(o => o.Line).ToList();
+        Lots.Set(p, objects[3], "0");
+        Equal("0", objects[3].Lot, "lot 0 gardé");
+        Equal("4", objects[4].Lot, "le 0 ne prend pas de numéro");
+        Equal((objects.Count - 1).ToString(), objects[^1].Lot, "la suite continue");
+        var lines = ExportLines(p);
+        Equal("0\t2 rolls en métal\t60\t30", lines[^1], "objet à 0 regroupé à la fin");
+        Check(lines.Count(l => l.Contains("2 rolls en métal")) == 1, "retiré de sa place");
+        // Un objet avec sa suite (« CD3+ … ») part en entier.
+        var compresseur = p.Pages[0].AllLines().First(l => l.Cells[0].Text.StartsWith("1 compresseur"));
+        Lots.Set(p, compresseur, "0");
+        lines = ExportLines(p);
+        Check(lines[^2].StartsWith("0\t1 compresseur") && lines[^1] == "\tCD3+ +/- 14130 heures", "objet et sa suite en fin d'inventaire");
+    }
+
+    public static void T_Rangee_qui_grandit_puis_revient()
+    {
+        var page = Fixtures.Analyze("page1");
+        // Positions arrondies au millionième (les décalages successifs laissent des poussières de calcul).
+        string Geometry() => System.Text.RegularExpressions.Regex.Replace(System.Text.Json.JsonSerializer.Serialize(page), @"-?\d+\.\d+",
+            m => Math.Round(double.Parse(m.Value, System.Globalization.CultureInfo.InvariantCulture), 6).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var before = Geometry();
+        var lines = page.Tables[0].Rows.SelectMany(r => r.Lines).ToList();
+        var line = lines.First(l => l.Cells[0].Text == "2 rolls en métal");
+        var next = lines[lines.IndexOf(line) + 1];
+        var above = lines[lines.IndexOf(line) - 1];
+        double nextY = next.Cells[0].Box.Y, aboveY = above.Cells[0].Box.Y, h = line.Cells[0].Box.Height;
+        int height = page.Height;
+        Check(PageLayout.SetExtra(page, line, 40), "agrandie");
+        Equal(nextY + 40, next.Cells[0].Box.Y, "la ligne suivante descend");
+        Equal(aboveY, above.Cells[0].Box.Y, "la ligne du dessus ne bouge pas");
+        Equal(h + 40, line.Cells[0].Box.Height, "la case grandit");
+        Equal(height + 40, page.Height, "la page s'allonge");
+        Check(line.ExtraAt > line.Cells[0].Box.Y && line.ExtraAt < nextY, "bande entre les deux lignes");
+        PageLayout.SetExtra(page, line, 25);
+        Equal(nextY + 25, next.Cells[0].Box.Y, "réduite");
+        PageLayout.SetExtra(page, line, 0);
+        Equal(before, Geometry(), "revenue exactement à l'origine");
+
+        var image = Fixtures.Load("page1").Image;
+        PageLayout.SetExtra(page, line, 30);
+        var big = PageLayout.Stretch(image, page);
+        Equal(image.Height + 30, big.Height, "image allongée");
+        int at = line.ExtraAt;
+        Check(image.Data.AsSpan(0, at * image.Width).SequenceEqual(big.Data.AsSpan(0, at * image.Width)), "haut inchangé");
+        Check(image.Data.AsSpan(at * image.Width).SequenceEqual(big.Data.AsSpan((at + 30) * image.Width)), "bas décalé de 30 pixels, intact");
+        Equal(2, PageLayout.ExtraFor(line, line.Cells[0], 1, 20) == 0 ? 2 : 0, "une seule ligne : rien à ajouter");
+        Check(PageLayout.ExtraFor(line, line.Cells[0], 3, 20) > 30, "trois lignes : de la place en plus");
+    }
+
+    public static void T_Tri_naturel_des_noms()
+    {
+        var names = new List<string> { "page 10.jpg", "Page 2.jpg", "page 1.jpg", "annexe.pdf" };
+        names.Sort(RetoucheInventaire.Core.Import.Names.NaturalCompare);
+        Equal("annexe.pdf|page 1.jpg|Page 2.jpg|page 10.jpg", string.Join("|", names), "ordre");
+    }
+
+    public static void T_Texte_coupe_en_lignes()
+    {
+        var lines = TextWrap.Wrap("un chariot gris et blanc\nde 180 cm", 12, s => s.Length);
+        Equal("un chariot|gris et|blanc|de 180 cm", string.Join("|", lines), "lignes");
+    }
+
+    public static void T_Nom_decompose_iphone_repare()
+    {
+        var nfd = "BEENDHI prisÃ©.pdf".Normalize(System.Text.NormalizationForm.FormD);
+        Equal("BEENDHI prisé.pdf", RetoucheInventaire.Core.Import.Names.Repair(nfd), "nom iPhone réparé");
+    }
+
     public static void T_Lots_dans_le_txt()
     {
         var p = ThreePages();

@@ -72,6 +72,14 @@ public sealed class PrintedLine
     /// <summary>Numéro ajouté par l'utilisateur (« + ») sur une ligne que la règle n'avait pas retenue.</summary>
     public bool ForceLot { get; set; }
 
+    /// <summary>
+    /// Hauteur ajoutée sous cette ligne (texte saisi sur plusieurs lignes) : tout ce qui est en dessous descend d'autant.
+    /// Les positions de la page en tiennent déjà compte ; voir <see cref="PageLayout"/>.
+    /// </summary>
+    public int Extra { get; set; }
+    /// <summary>Ordonnée (page agrandie) où la bande ajoutée commence : un interligne propre sous le texte d'origine.</summary>
+    public int ExtraAt { get; set; }
+
     [JsonIgnore] public RectD Bounds => Cells.Aggregate(RectD.Empty, (r, f) => r.Union(f.Box));
     [JsonIgnore] public string FirstText => Cells.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c.Text))?.Text.Trim() ?? "";
 }

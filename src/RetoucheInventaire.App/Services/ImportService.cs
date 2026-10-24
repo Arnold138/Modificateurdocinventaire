@@ -18,7 +18,7 @@ public sealed record ImportedPage(ModelPage Page, Raster? Image, Raster? Oriente
 /// </summary>
 public sealed partial class ImportService(OcrService ocr)
 {
-    public static readonly string[] Extensions = [".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".pdf", ".txt", ".csv", ".xlsx"];
+    public static readonly string[] Extensions = [".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".gif", ".pdf", ".txt", ".csv", ".xlsx"];
 
     [GeneratedRegex(@"^\p{L}{3,}$")]
     private static partial Regex WordLike();
@@ -145,7 +145,7 @@ public sealed partial class ImportService(OcrService ocr)
         {
             var oriented = ImageOps.Rotate90(decoded, page.QuarterTurns);
             var crop = page.Crop ?? Quad.FullImage(oriented.Width, oriented.Height);
-            return (PageNormalizer.Render(oriented, crop, page.Skew, page.Width, page.Height), oriented);
+            return (PageNormalizer.Render(oriented, crop, page.Skew, page.Width, PageLayout.BaseHeight(page)), oriented);
         });
     }
 }

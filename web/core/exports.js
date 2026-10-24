@@ -2,7 +2,7 @@
 import { Rect, Quad, pt } from './geometry.js';
 import { homography, homographyPts, toRgba, raster } from './imaging.js';
 import { allFields, firstText, isModified } from './model.js';
-import { lotsActive } from './lots.js';
+import { lotsActive, isZeroLot } from './lots.js';
 import { lotRegions } from './lotcolumn.js';
 
 // ---------- Texte ----------
@@ -21,6 +21,10 @@ const hasValues = (l) => l.Cells.slice(1).some((c) => c.Text.trim().length > 0);
 function exportRow(row, lots) {
   // Avec les lots : une 1re colonne « Lot » sur toutes les lignes, pour garder les colonnes alignées.
   const prefix = (l) => (!lots ? '' : (l.Kind === 'EnTete' ? 'Lot' : l.Lot ?? '') + '\t');
+  // Lignes qui partent en fin d'inventaire : l'objet au lot 0 et, s'il est le seul objet de la rangée, sa suite.
+  const objects = row.Lines.filter((l) => (l.Lot ?? '').length > 0);
+  const allZero = lots && objects.length > 0 && objects.every(isZeroLot);
+  const zero = (l) => lots && (isZeroLot(l) || (allZero && l.Kind === 'Article' && (l.Lot ?? '').length === 0));
   const lines = row.Lines.filter((l) => l.Kind !== 'Ignoree');
   const moved = new Map();
   const titlesKeeping = new Set();
@@ -34,7 +38,7 @@ function exportRow(row, lots) {
   for (const line of lines) {
     if (line.Kind === 'Titre' && !titlesKeeping.has(line)) {
       const t = cleanText(firstText(line));
-      if (t.length > 0) out.push(prefix(line) + t);
+      if (t.length > 0) out.push({ text: prefix(line) + t, zero: zero(line) });
       continue;
     }
     const cells = line.Cells.map((c) => c.Text);
@@ -42,7 +46,7 @@ function exportRow(row, lots) {
     if (values) for (let c = 1; c < cells.length && c - 1 < values.length; c++) cells[c] = values[c - 1];
     const parts = cells.map((t, c) => (c === 0 ? cleanText(t) : cleanValue(t)));
     while (parts.length > 0 && parts[parts.length - 1].length === 0) parts.pop();
-    if (parts.length > 0) out.push(prefix(line) + parts.join('\t'));
+    if (parts.length > 0) out.push({ text: prefix(line) + parts.join('\t'), zero: zero(line) });
   }
   return out;
 }
@@ -59,13 +63,17 @@ function looksLikeFormula(cell) {
 export function buildTxt(project) {
   const output = [];
   const lots = lotsActive(project);
+  const zeroLines = []; // objets au lot 0 (absents ou barrés) : regroupés à la fin de l'inventaire
   for (const page of project.Pages)
     for (const table of page.Tables) {
-      const tableLines = table.Rows.flatMap((r) => exportRow(r, lots));
+      const rows = table.Rows.flatMap((r) => exportRow(r, lots));
+      zeroLines.push(...rows.filter((x) => x.zero).map((x) => x.text));
+      const tableLines = rows.filter((x) => !x.zero).map((x) => x.text);
       const first = table.Rows.flatMap((r) => r.Lines).find((l) => l.Kind !== 'Ignoree');
       if (tableLines.length > 0 && first?.Kind === 'EnTete' && output.length > 0 && output[output.length - 1].length > 0) output.push('');
       output.push(...tableLines);
     }
+  output.push(...zeroLines);
   const warnings = [];
   output.forEach((l, i) => {
     for (const cell of l.split('\t'))

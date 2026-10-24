@@ -36,17 +36,21 @@ public static partial class TxtExporter
         var warnings = new List<string>();
 
         bool lots = Lots.IsActive(project);
+        // Objets au lot 0 (absents ou barrés) : retirés de leur place et regroupés à la fin de l'inventaire.
+        var zeroLines = new List<string>();
         foreach (var table in project.Pages.SelectMany(p => p.Tables))
         {
             var tableLines = new List<string>();
             foreach (var row in table.Rows)
-                tableLines.AddRange(ExportRow(row, lots));
+                foreach (var (rowText, zero) in ExportRow(row, lots))
+                    (zero ? zeroLines : tableLines).Add(rowText);
 
             bool startsWithHeader = table.Rows.SelectMany(r => r.Lines).FirstOrDefault(l => l.Kind != LineKind.Ignoree)?.Kind == LineKind.EnTete;
             if (tableLines.Count > 0 && startsWithHeader && output.Count > 0 && output[^1].Length > 0)
                 output.Add(""); // une ligne vide sépare deux tableaux
             output.AddRange(tableLines);
         }
+        output.AddRange(zeroLines);
 
         for (int i = 0; i < output.Count; i++)
             foreach (var cell in output[i].Split('\t'))
@@ -57,8 +61,14 @@ public static partial class TxtExporter
         return new TxtExportResult(text, output.Count, warnings);
     }
 
-    private static IEnumerable<string> ExportRow(Row row, bool lots)
+    private static IEnumerable<(string Text, bool Zero)> ExportRow(Row row, bool lots)
     {
+        // Lignes qui partent en fin d'inventaire : l'objet au lot 0 et, s'il est le seul objet de la rangée,
+        // les lignes d'article sans numéro qui le décrivent (suite de l'objet).
+        var objects = row.Lines.Where(l => l.Lot.Length > 0).ToList();
+        bool allZero = lots && objects.Count > 0 && objects.All(Lots.IsZero);
+        bool Zero(PrintedLine l) => lots && (Lots.IsZero(l) || (allZero && l.Kind == LineKind.Article && l.Lot.Length == 0));
+
         // Avec les lots : une 1re colonne « Lot » sur toutes les lignes, pour garder les colonnes alignées.
         string Prefix(PrintedLine l) => !lots ? "" : (l.Kind == LineKind.EnTete ? "Lot" : l.Lot) + "\t";
         var lines = row.Lines.Where(l => l.Kind != LineKind.Ignoree).ToList();
@@ -79,7 +89,7 @@ public static partial class TxtExporter
             if (line.Kind == LineKind.Titre && !titlesKeepingValues.Contains(line))
             {
                 var title = CleanText(line.FirstText);
-                if (title.Length > 0) yield return Prefix(line) + title;
+                if (title.Length > 0) yield return (Prefix(line) + title, Zero(line));
                 continue;
             }
 
@@ -89,7 +99,7 @@ public static partial class TxtExporter
 
             var parts = cells.Select((t, c) => c == 0 ? CleanText(t) : CleanValue(t)).ToList();
             while (parts.Count > 0 && parts[^1].Length == 0) parts.RemoveAt(parts.Count - 1);
-            if (parts.Count > 0) yield return Prefix(line) + string.Join("\t", parts);
+            if (parts.Count > 0) yield return (Prefix(line) + string.Join("\t", parts), Zero(line));
         }
     }
 

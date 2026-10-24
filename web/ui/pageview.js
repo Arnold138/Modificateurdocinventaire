@@ -6,7 +6,8 @@ import { isModified, addLockZone, removeLockZoneAt } from '../core/model.js';
 import { paperColor } from '../core/exports.js';
 import { lotLabels, canAddLot } from '../core/lots.js';
 import { framedTables } from '../core/lotcolumn.js';
-import { rasterToCanvas, freeCanvas, baseSize, fitSize, font, lotSize } from '../services/canvas.js';
+import { rasterToCanvas, freeCanvas, font, lotSize, textLayout, isMultiline, LINE_HEIGHT } from '../services/canvas.js';
+import { baseBox } from '../core/layout.js';
 
 const BADGES = { Titre: ['T', '#0067c0'], Total: ['Σ', '#107c10'], EnTete: ['E', '#606060'], Ignoree: ['×', '#b42828'] };
 const el = (tag, cls, parent) => { const e = document.createElement(tag); if (cls) e.className = cls; parent?.appendChild(e); return e; };
@@ -23,6 +24,7 @@ export class PageView {
     this.image = image;
     this.cb = { onFocus, onEdited, onTouch, onLocks, onLot, onLotRemove, onLotAdd, lotsActive, lotFrame, zoom };
     this.lotInputs = new Map();
+    this.lineOf = new Map();
     this.inputs = new Map();
     this.base = new Map();
     this.paper = new Map();
@@ -83,16 +85,10 @@ export class PageView {
       input.style.font = font(lotSize(line, box));
       input.style.lineHeight = box.Height + 'px';
       input.style.background = framed.includes(table) || !this.image ? 'transparent' : this.paperOfBox(box);
-      let timer = null;
+      // La suite se recale quand on quitte la case (Entrée ou toucher ailleurs), pas pendant la frappe.
       const commit = () => {
-        clearTimeout(timer);
         if (input.value.trim() !== line.Lot) this.cb.onLot?.(this, line, input.value);
       };
-      // Pendant la frappe, la suite se recale toute seule (petite pause après le dernier chiffre).
-      input.addEventListener('input', () => {
-        clearTimeout(timer);
-        if (input.value.trim().length > 0) timer = setTimeout(commit, 700);
-      });
       input.addEventListener('change', commit);
       input.addEventListener('blur', commit);
       input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } });
@@ -112,9 +108,12 @@ export class PageView {
     if (!same) return this.refreshLots();
     for (const { line, box } of labels) {
       const i = this.lotInputs.get(line);
+      px(i, box);
+      i.style.lineHeight = box.Height + 'px';
       if (i !== document.activeElement) i.value = line.Lot;
       i.style.font = font(lotSize(line, box));
     }
+    this.refreshGutter();
   }
 
   refreshGutter() {
@@ -123,7 +122,8 @@ export class PageView {
     for (const t of this.page.Tables)
       for (const line of t.Rows.flatMap((r) => r.Lines)) {
         if (line.OutsideTable || line.Cells.length === 0) continue;
-        const b = line.Cells.reduce((r, f) => Rect.union(r, f.Box), Rect.empty());
+        const lb = line.Cells.reduce((r, f) => Rect.union(r, f.Box), Rect.empty());
+        const b = { ...lb, Height: lb.Height - (line.Extra ?? 0) };
         const badge = BADGES[line.Kind];
         if (badge) {
           const d = el('div', 'badge', this.gutter);
@@ -174,24 +174,27 @@ export class PageView {
     for (const t of this.page.Tables)
       for (const row of t.Rows)
         for (const line of row.Lines) {
-          for (const f of line.Cells) if (!f.Locked) this.addField(f);
+          for (const f of line.Cells) {
+            this.lineOf.set(f, line);
+            if (!f.Locked) this.addField(f);
+          }
         }
     this.loupe = el('div', 'loupe', this.overlay);
     this.refreshLots();
   }
 
   addField(f) {
-    const input = el('input', 'field', this.fields);
-    input.type = 'text';
+    // Désignation : zone de texte sur plusieurs lignes (Entrée = nouvelle ligne dans la case).
+    const multi = isMultiline(f);
+    const input = el(multi ? 'textarea' : 'input', multi ? 'field multi' : 'field', this.fields);
+    if (!multi) input.type = 'text';
     input.value = f.Text;
     input.autocomplete = 'off';
     input.setAttribute('autocorrect', 'off');
     input.setAttribute('autocapitalize', 'off');
     input.spellcheck = false;
     if (f.Column > 0 && (f.OriginalText.length === 0 || /\d/.test(f.OriginalText))) input.inputMode = 'decimal';
-    px(input, f.Box);
     input.style.textAlign = f.Align === 'Right' ? 'right' : f.Align === 'Center' ? 'center' : 'left';
-    this.base.set(f, baseSize(f));
     this.layout(input, f);
     this.visual(input, f, false);
 
@@ -203,20 +206,47 @@ export class PageView {
       this.visual(input, f, true);
       this.cb.onEdited?.(this, f);
     });
-    input.addEventListener('keydown', (e) => {
-      if (e.key !== 'Enter') return;
-      e.preventDefault();
-      this.focusNextInColumn(f);
-    });
+    if (!multi)
+      input.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        this.focusNextInColumn(f);
+      });
     this.inputs.set(f, input);
   }
 
+  /** Place le champ sur sa case : même taille d'écriture que l'imprimé, 1re ligne à la place du texte d'origine. */
   layout(input, f) {
-    const size = fitSize(f, input.value, this.base.get(f));
-    input.style.font = font(size);
-    input.style.lineHeight = f.Box.Height + 'px';
+    const line = this.lineOf.get(f);
+    const t = textLayout(line, f, input.value);
+    px(input, f.Box);
+    input.style.font = font(t.size);
+    const lh = LINE_HEIGHT * t.size;
+    input.style.lineHeight = lh + 'px';
+    input.style.paddingTop = Math.max(0, t.top - f.Box.Y) + 'px';
     input.style.paddingLeft = f.Align === 'Left' ? f.Indent + 'px' : '0';
-    input.style.paddingRight = f.Align === 'Right' ? f.Indent + 'px' : '0';
+    input.style.paddingRight = f.Align === 'Right' ? f.Indent + 'px' : isMultiline(f) ? '3px' : '0';
+  }
+
+  /** La page a changé de hauteur (texte sur plusieurs lignes) : tout est replacé sans fermer le clavier. */
+  relayout(image, display) {
+    this.image = image;
+    Object.assign(this.root.style, { height: this.page.Height + 'px' });
+    this.gutter.style.height = this.page.Height + 'px';
+    if (image) this.setDisplay(display ?? image);
+    else { this.root.querySelector('svg.grid')?.remove(); this.drawGrid(); }
+    this.paper.clear();
+    for (const [f, input] of this.inputs) {
+      this.layout(input, f);
+      this.visual(input, f, input === document.activeElement);
+    }
+    for (const z of this.overlay.querySelectorAll('.lockzone')) z.remove();
+    for (const z of this.page.LockZones) {
+      const d = px(el('div', 'lockzone', this.overlay), z);
+      d.textContent = '🔒';
+      this.overlay.prepend(d);
+    }
+    this.updateLots();
   }
 
   visual(input, f, focused) {
@@ -273,7 +303,7 @@ export class PageView {
       for (const x of t.ColumnXs) line(x, top, x, bottom);
       for (const y of t.RowYs) line(left, y, right, y);
     }
-    this.root.appendChild(svg);
+    this.root.prepend(svg);
   }
 
   // ---------- Verrouillage : tracer une zone au doigt, toucher une zone pour la retirer ----------
