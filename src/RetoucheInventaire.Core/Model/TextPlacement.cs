@@ -12,6 +12,29 @@ public static class TextPlacement
 {
     public const double LineHeightRatio = PageLayout.LineHeightRatio;
 
+    /// <summary>Lignes imprimées en gras : totaux et en-têtes (« TOTAL STOCK », « II - STOCK »).</summary>
+    public static bool IsBold(PrintedLine? line) => line?.Kind is LineKind.Total or LineKind.EnTete;
+
+    /// <summary>
+    /// Morceaux d'écriture d'origine à mettre en couleur (texte non retapé) : rectangles en pixels de page,
+    /// position des lettres estimée d'après la largeur de l'encre.
+    /// </summary>
+    public static List<(int X0, int Y0, int X1, int Y1, string Color)> ColorRects(PrintedLine line, Field f, double baseSize, Func<string, double, double> measure)
+    {
+        var output = new List<(int, int, int, int, string)>();
+        if (f.Colors.Count == 0 || f.Locked || f.IsModified || f.Ink.IsEmpty || f.Text.Contains('\n')) return output;
+        double total = measure(f.Text, baseSize);
+        double k = total > 0 ? f.Ink.Width / total : 1;
+        foreach (var (start, end, color) in Strikes.ColorRuns(f))
+        {
+            if (color is null) continue;
+            int x0 = (int)Math.Floor(f.Ink.X + measure(f.Text[..start], baseSize) * k) - 1;
+            int x1 = (int)Math.Ceiling(f.Ink.X + measure(f.Text[..end], baseSize) * k) + 1;
+            output.Add((x0, (int)Math.Floor(f.Ink.Top) - 2, x1, (int)Math.Ceiling(f.Ink.Bottom) + 2, color));
+        }
+        return output;
+    }
+
     public static (double Size, List<string> Lines, double Top) Layout(PrintedLine line, Field f, string text, double baseSize, Func<string, double, double> measure)
     {
         var b = PageLayout.BaseBox(line, f);

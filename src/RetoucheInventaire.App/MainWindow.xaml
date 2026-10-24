@@ -5,49 +5,56 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Title="Retouche d'inventaire">
 
-    <!-- Même écran que sur iPhone/iPad : projet et pages en haut, la page au milieu, les outils en bas. -->
+    <!-- Même écran que sur iPhone/iPad : tout est en haut (projet, pages, zoom, outils, « Modifier »), rien en bas. -->
     <Grid x:Name="Root" Background="#FFEEF0F3">
         <Grid.KeyboardAccelerators>
             <KeyboardAccelerator Modifiers="Control" Key="Z" Invoked="UndoAccelerator_Invoked" />
         </Grid.KeyboardAccelerators>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- Barre du haut : projet, navigation entre les pages (« 3 / 10 »), état de l'enregistrement. -->
-        <Grid Grid.Row="0" Padding="10,6" ColumnSpacing="8" Background="#FFFAFBFC" BorderBrush="#FFDFE2E6" BorderThickness="0,0,0,1">
+        <!-- Barre du haut : projet, retour en arrière, pages (« 3 / 10 »), zoom, enregistrement. -->
+        <Grid Grid.Row="0" Padding="10,6" ColumnSpacing="8" Background="#FFFAFBFC">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <Button x:Name="ProjectButton" HorizontalAlignment="Left" MinHeight="44" MaxWidth="360" CornerRadius="22" Padding="12,4"
-                    ToolTipService.ToolTip="Projet : nouveau, ouvrir, enregistrer, renommer">
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <FontIcon Glyph="&#xE700;" FontSize="18" />
-                    <TextBlock x:Name="ProjectName" Text="Inventaire" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                </StackPanel>
-                <Button.Flyout>
-                    <MenuFlyout Placement="BottomEdgeAlignedLeft">
-                        <MenuFlyoutItem x:Name="NewItem" Text="Nouveau projet" Click="New_Click">
-                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE710;" /></MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
-                        <MenuFlyoutItem x:Name="OpenItem" Text="Ouvrir un projet…" Click="Open_Click">
-                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8E5;" /></MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
-                        <MenuFlyoutItem x:Name="SaveItem" Text="Enregistrer sous…" Click="Save_Click">
-                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE74E;" /></MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
-                        <MenuFlyoutItem x:Name="RenameItem" Text="Renommer" Click="Rename_Click">
-                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8AC;" /></MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
-                    </MenuFlyout>
-                </Button.Flyout>
-            </Button>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button x:Name="ProjectButton" MinHeight="44" MaxWidth="360" CornerRadius="22" Padding="12,4"
+                        ToolTipService.ToolTip="Projet : nouveau, ouvrir, enregistrer, renommer">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE700;" FontSize="18" />
+                        <TextBlock x:Name="ProjectName" Text="Inventaire" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <Button.Flyout>
+                        <MenuFlyout Placement="BottomEdgeAlignedLeft">
+                            <MenuFlyoutItem x:Name="NewItem" Text="Nouveau projet" Click="New_Click">
+                                <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE710;" /></MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
+                            <MenuFlyoutItem x:Name="OpenItem" Text="Ouvrir un projet…" Click="Open_Click">
+                                <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8E5;" /></MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
+                            <MenuFlyoutItem x:Name="SaveItem" Text="Enregistrer sous…" Click="Save_Click">
+                                <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE74E;" /></MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
+                            <MenuFlyoutItem x:Name="RenameItem" Text="Renommer" Click="Rename_Click">
+                                <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8AC;" /></MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
+                <!-- Retour en arrière : annule la dernière action (Ctrl+Z hors d'une case). -->
+                <Button x:Name="UndoButton" Style="{StaticResource RoundButton}" Click="Undo_Click" IsEnabled="False"
+                        ToolTipService.ToolTip="Annuler la dernière action (Ctrl+Z)">
+                    <FontIcon Glyph="&#xE7A7;" FontSize="16" />
+                </Button>
+            </StackPanel>
             <StackPanel x:Name="Pager" Grid.Column="1" Orientation="Horizontal" Spacing="6" Visibility="Collapsed">
                 <Button x:Name="PagePrev" Style="{StaticResource RoundButton}" Click="PagePrev_Click" ToolTipService.ToolTip="Page précédente (Page préc.)">
                     <FontIcon Glyph="&#xE76B;" FontSize="16" />
@@ -58,95 +65,24 @@
                     <FontIcon Glyph="&#xE76C;" FontSize="16" />
                 </Button>
             </StackPanel>
-            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="10" HorizontalAlignment="Right">
-                <!-- Retour en arrière : annule la dernière action (Ctrl+Z hors d'une case). -->
-                <Button x:Name="UndoButton" Style="{StaticResource RoundButton}" Click="Undo_Click" IsEnabled="False"
-                        ToolTipService.ToolTip="Annuler la dernière action (Ctrl+Z)">
-                    <FontIcon Glyph="&#xE7A7;" FontSize="16" />
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
+                <Button Style="{StaticResource RoundButton}" Click="ZoomOut_Click" ToolTipService.ToolTip="Dézoomer">
+                    <FontIcon Glyph="&#xE71F;" FontSize="15" />
                 </Button>
-                <TextBlock x:Name="SaveState" FontSize="13" Opacity="0.7" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                <Button Style="{StaticResource RoundButton}" Click="ZoomFit_Click" ToolTipService.ToolTip="Ajuster à la largeur">
+                    <FontIcon Glyph="&#xE9A6;" FontSize="15" />
+                </Button>
+                <Button Style="{StaticResource RoundButton}" Click="ZoomIn_Click" ToolTipService.ToolTip="Zoomer">
+                    <FontIcon Glyph="&#xE8A3;" FontSize="15" />
+                </Button>
+                <TextBlock x:Name="SaveState" FontSize="13" Opacity="0.7" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="220" Margin="6,0,0,0" />
             </StackPanel>
         </Grid>
 
-        <!-- Une seule page à la fois. Pincer pour zoomer. -->
-        <ScrollViewer x:Name="PageScroller" Grid.Row="1"
-                      ZoomMode="Enabled" MinZoomFactor="0.15" MaxZoomFactor="4"
-                      HorizontalScrollMode="Enabled" HorizontalScrollBarVisibility="Auto"
-                      VerticalScrollMode="Enabled" VerticalScrollBarVisibility="Auto">
-            <StackPanel x:Name="PagesPanel" Spacing="8" Padding="16" HorizontalAlignment="Center" />
-        </ScrollViewer>
-        <StackPanel x:Name="EmptyHint" Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="560" Spacing="10" Padding="24">
-            <Image x:Name="EmptyIcon" Width="96" Height="96" />
-            <TextBlock Text="Retouche d'inventaire" FontSize="26" FontWeight="SemiBold" HorizontalAlignment="Center" />
-            <TextBlock FontSize="18" TextWrapping="Wrap" TextAlignment="Center"
-                       Text="Touchez « Photo » pour photographier un inventaire, ou « Importer » pour ouvrir une photo, un PDF, un fichier texte ou un tableur." />
-            <TextBlock FontSize="16" Opacity="0.65" TextWrapping="Wrap" TextAlignment="Center" Text="Tout reste sur la tablette, même sans Internet." />
-        </StackPanel>
-
-        <!-- Barre contextuelle : case sélectionnée. -->
-        <Grid x:Name="EditBar" Grid.Row="2" Padding="12,6" ColumnSpacing="8" Background="White" BorderBrush="#FFDFE2E6" BorderThickness="0,1,0,0"
-              Visibility="Collapsed">
+        <!-- Outils : grosses cibles pour le doigt, mêmes outils que sur iPhone/iPad. -->
+        <Grid Grid.Row="1" Padding="8,0,8,6" ColumnSpacing="6" Background="#FFFAFBFC">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <TextBlock x:Name="EditInfo" FontSize="14" Opacity="0.7" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-            <Button x:Name="KindButton" Grid.Column="1" Style="{StaticResource PillButton}" Click="Kind_Click"
-                    ToolTipService.ToolTip="Article, titre, total, en-tête ou non exportée">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                    <FontIcon Glyph="&#xE8EC;" FontSize="16" />
-                    <TextBlock x:Name="KindButtonText" Text="Article" />
-                </StackPanel>
-            </Button>
-            <Button x:Name="RevertButton" Grid.Column="2" Style="{StaticResource PillButton}" Click="Revert_Click"
-                    ToolTipService.ToolTip="Remettre le texte d'origine dans la case">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                    <FontIcon Glyph="&#xE7A7;" FontSize="16" />
-                    <TextBlock Text="Rétablir" />
-                </StackPanel>
-            </Button>
-            <!-- Barrer : la sélection (toute la case sans sélection) ; même bouton pour enlever le trait. -->
-            <Button x:Name="StrikeButton" Grid.Column="3" Style="{StaticResource PillButton}" Click="Strike_Click" AllowFocusOnInteraction="False"
-                    ToolTipService.ToolTip="Barrer le texte sélectionné (toute la case sans sélection)">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                    <FontIcon Glyph="&#xE8DE;" FontSize="16" />
-                    <TextBlock Text="Barrer" />
-                </StackPanel>
-            </Button>
-            <Button x:Name="StrikeColorButton" Grid.Column="4" Style="{StaticResource RoundButton}" Click="StrikeColor_Click" AllowFocusOnInteraction="False"
-                    ToolTipService.ToolTip="Couleur du trait : rouge ou noir">
-                <Ellipse x:Name="StrikeDot" Width="18" Height="18" Fill="#FFD40000" />
-            </Button>
-        </Grid>
-
-        <!-- Ligne d'état, progression, zoom. -->
-        <Grid Grid.Row="3" Padding="12,6" ColumnSpacing="10" Background="#FFFAFBFC" BorderBrush="#FFDFE2E6" BorderThickness="0,1,0,0" MinHeight="50">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <TextBlock x:Name="StatusText" FontSize="14" VerticalAlignment="Center" TextWrapping="Wrap" />
-            <ProgressBar x:Name="Progress" Grid.Column="1" Width="180" Minimum="0" Maximum="1" Visibility="Collapsed" VerticalAlignment="Center" />
-            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4">
-                <Button Style="{StaticResource RoundButton}" Width="38" Height="38" Click="ZoomOut_Click" ToolTipService.ToolTip="Dézoomer">
-                    <FontIcon Glyph="&#xE71F;" FontSize="14" />
-                </Button>
-                <Button Style="{StaticResource RoundButton}" Width="38" Height="38" Click="ZoomFit_Click" ToolTipService.ToolTip="Ajuster à la largeur">
-                    <FontIcon Glyph="&#xE9A6;" FontSize="14" />
-                </Button>
-                <Button Style="{StaticResource RoundButton}" Width="38" Height="38" Click="ZoomIn_Click" ToolTipService.ToolTip="Zoomer">
-                    <FontIcon Glyph="&#xE8A3;" FontSize="14" />
-                </Button>
-            </StackPanel>
-        </Grid>
-
-        <!-- Barre d'outils du bas : grosses cibles pour le doigt, mêmes outils que sur iPhone/iPad. -->
-        <Grid Grid.Row="4" Padding="6" ColumnSpacing="4" Background="#FFFAFBFC" BorderBrush="#FFDFE2E6" BorderThickness="0,1,0,0">
-            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MaxWidth="170" />
                 <ColumnDefinition Width="*" MaxWidth="170" />
                 <ColumnDefinition Width="*" MaxWidth="170" />
                 <ColumnDefinition Width="*" MaxWidth="170" />
@@ -168,7 +104,7 @@
                     <TextBlock Text="Importer" VerticalAlignment="Center" />
                 </StackPanel>
                 <Button.Flyout>
-                    <MenuFlyout Placement="TopEdgeAlignedLeft">
+                    <MenuFlyout Placement="BottomEdgeAlignedLeft">
                         <MenuFlyoutItem Text="Fichiers ou photos…" Click="Import_Click">
                             <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8E5;" /></MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
@@ -179,34 +115,59 @@
                 </Button.Flyout>
             </Button>
             <Button x:Name="LotsButton" Grid.Column="2" Style="{StaticResource TabButton}" Click="Lots_Click"
-                    ToolTipService.ToolTip="Numéros de lot : un par objet, dans une colonne à gauche">
+                    ToolTipService.ToolTip="Numéros de lot : une case par objet, dans une colonne à gauche">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <FontIcon Glyph="&#xE8EF;" FontSize="20" />
                     <TextBlock Text="Lots" VerticalAlignment="Center" />
                 </StackPanel>
             </Button>
-            <Button x:Name="CropButton" Grid.Column="3" Style="{StaticResource TabButton}" Click="Crop_Click"
+            <Button x:Name="EditButton" Grid.Column="3" Style="{StaticResource TabButton}"
+                    ToolTipService.ToolTip="Modifier le document : renommer, pages, lots">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon Glyph="&#xE70F;" FontSize="20" />
+                    <TextBlock Text="Modifier" VerticalAlignment="Center" />
+                </StackPanel>
+                <Button.Flyout>
+                    <MenuFlyout Placement="BottomEdgeAlignedLeft">
+                        <MenuFlyoutItem Text="Renommer le document" Click="Rename_Click">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8AC;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem Text="Liste des pages" Click="PageLabel_Click">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8FD;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem x:Name="SyncItem" Text="Synchroniser les lots" Click="SyncLots_Click">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE895;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem x:Name="RemovePageItem" Text="Retirer cette page" Click="RemovePage_Click">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE74D;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutSeparator />
+                        <MenuFlyoutItem IsEnabled="False" Text="Pour une case : touchez-la, puis Barrer, Couleur, Type, Rétablir en haut" />
+                    </MenuFlyout>
+                </Button.Flyout>
+            </Button>
+            <Button x:Name="CropButton" Grid.Column="4" Style="{StaticResource TabButton}" Click="Crop_Click"
                     ToolTipService.ToolTip="Recadrer la page affichée">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <FontIcon Glyph="&#xE7A8;" FontSize="20" />
                     <TextBlock Text="Recadrer" VerticalAlignment="Center" />
                 </StackPanel>
             </Button>
-            <ToggleButton x:Name="LockToggle" Grid.Column="4" Style="{StaticResource TabToggle}" Checked="LockToggle_Changed" Unchecked="LockToggle_Changed"
+            <ToggleButton x:Name="LockToggle" Grid.Column="5" Style="{StaticResource TabToggle}" Checked="LockToggle_Changed" Unchecked="LockToggle_Changed"
                           ToolTipService.ToolTip="Tracer une zone (signature, tampon) qui ne pourra pas être modifiée">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <FontIcon Glyph="&#xE72E;" FontSize="20" />
                     <TextBlock Text="Verrouiller" VerticalAlignment="Center" />
                 </StackPanel>
             </ToggleButton>
-            <Button x:Name="ExportButton" Grid.Column="5" Style="{StaticResource AccentTabButton}"
+            <Button x:Name="ExportButton" Grid.Column="6" Style="{StaticResource AccentTabButton}"
                     ToolTipService.ToolTip="Images JPEG ou fichier texte">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <FontIcon Glyph="&#xE72D;" FontSize="20" />
                     <TextBlock Text="Exporter" VerticalAlignment="Center" />
                 </StackPanel>
                 <Button.Flyout>
-                    <MenuFlyout Placement="TopEdgeAlignedRight" Opening="ExportMenu_Opening">
+                    <MenuFlyout Placement="BottomEdgeAlignedRight" Opening="ExportMenu_Opening">
                         <MenuFlyoutItem x:Name="ExportAllJpegItem" Text="Toutes les images JPEG" Click="ExportJpeg_Click">
                             <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEB9F;" /></MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
@@ -220,6 +181,103 @@
                 </Button.Flyout>
             </Button>
         </Grid>
+
+        <!-- « Modifier » la case sélectionnée : barrer, couleur, type de ligne, rétablir, recalculer. -->
+        <Grid x:Name="EditBar" Grid.Row="2" Padding="12,6" ColumnSpacing="8" Background="White" BorderBrush="#FFDFE2E6" BorderThickness="0,1,0,0"
+              Visibility="Collapsed">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="EditInfo" FontSize="14" Opacity="0.7" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                <!-- Barrer : la sélection (toute la case sans sélection) ; même bouton pour enlever le trait. -->
+                <Button x:Name="StrikeButton" Style="{StaticResource PillButton}" Click="Strike_Click" AllowFocusOnInteraction="False"
+                        ToolTipService.ToolTip="Barrer le texte sélectionné (toute la case sans sélection)">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE8DE;" FontSize="16" />
+                        <TextBlock Text="Barrer" />
+                    </StackPanel>
+                </Button>
+                <Button x:Name="StrikeColorButton" Style="{StaticResource RoundButton}" Click="StrikeColor_Click" AllowFocusOnInteraction="False"
+                        ToolTipService.ToolTip="Couleur du trait : rouge ou noir">
+                    <Ellipse x:Name="StrikeDot" Width="18" Height="18" Fill="#FFD40000" />
+                </Button>
+                <!-- Couleur du texte : la sélection (toute la case sans sélection) ; noir = enlever la couleur. -->
+                <Button x:Name="ColorButton" Style="{StaticResource PillButton}" AllowFocusOnInteraction="False"
+                        ToolTipService.ToolTip="Mettre le texte sélectionné en couleur (toute la case sans sélection)">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <StackPanel Spacing="1">
+                            <TextBlock Text="A" FontFamily="Times New Roman" FontWeight="Bold" FontSize="17" HorizontalAlignment="Center" />
+                            <Rectangle x:Name="ColorBar" Height="4" Width="16" Fill="#FFD40000" />
+                        </StackPanel>
+                        <TextBlock Text="Couleur" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <Button.Flyout>
+                        <MenuFlyout Placement="BottomEdgeAlignedLeft">
+                            <MenuFlyoutItem Text="Rouge" Tag="red" Click="TextColor_Click">
+                                <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEA3B;" Foreground="#FFD40000" /></MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
+                            <MenuFlyoutItem Text="Bleu" Tag="blue" Click="TextColor_Click">
+                                <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEA3B;" Foreground="#FF0050C8" /></MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
+                            <MenuFlyoutItem Text="Vert" Tag="green" Click="TextColor_Click">
+                                <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEA3B;" Foreground="#FF107C10" /></MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
+                            <MenuFlyoutItem Text="Noir (enlever la couleur)" Tag="black" Click="TextColor_Click">
+                                <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEA3B;" Foreground="Black" /></MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
+                <Button x:Name="KindButton" Style="{StaticResource PillButton}" Click="Kind_Click"
+                        ToolTipService.ToolTip="Article, titre, total, en-tête ou non exportée">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE8EC;" FontSize="16" />
+                        <TextBlock x:Name="KindButtonText" Text="Article" />
+                    </StackPanel>
+                </Button>
+                <Button x:Name="RevertButton" Style="{StaticResource PillButton}" Click="Revert_Click"
+                        ToolTipService.ToolTip="Remettre le texte d'origine dans la case">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE7A7;" FontSize="16" />
+                        <TextBlock Text="Rétablir" />
+                    </StackPanel>
+                </Button>
+                <Button x:Name="RecalcButton" Style="{StaticResource PillButton}" Click="Recalc_Click" Visibility="Collapsed"
+                        ToolTipService.ToolTip="Remettre le total en calcul automatique">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE8EF;" FontSize="16" />
+                        <TextBlock Text="Recalculer" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <!-- Ligne d'état et progression (fine, en haut). -->
+        <Grid Grid.Row="3" Padding="12,3,12,5" ColumnSpacing="10" Background="#FFFAFBFC" BorderBrush="#FFDFE2E6" BorderThickness="0,1,0,1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="StatusText" FontSize="13" Opacity="0.75" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+            <ProgressBar x:Name="Progress" Grid.Column="1" Width="180" Minimum="0" Maximum="1" Visibility="Collapsed" VerticalAlignment="Center" />
+        </Grid>
+
+        <!-- Une seule page à la fois. Pincer pour zoomer. -->
+        <ScrollViewer x:Name="PageScroller" Grid.Row="4"
+                      ZoomMode="Enabled" MinZoomFactor="0.15" MaxZoomFactor="4"
+                      HorizontalScrollMode="Enabled" HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollMode="Enabled" VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="PagesPanel" Spacing="8" Padding="16" HorizontalAlignment="Center" />
+        </ScrollViewer>
+        <StackPanel x:Name="EmptyHint" Grid.Row="4" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="560" Spacing="10" Padding="24">
+            <Image x:Name="EmptyIcon" Width="96" Height="96" />
+            <TextBlock Text="Retouche d'inventaire" FontSize="26" FontWeight="SemiBold" HorizontalAlignment="Center" />
+            <TextBlock FontSize="18" TextWrapping="Wrap" TextAlignment="Center"
+                       Text="Touchez « Photo » pour photographier un inventaire, ou « Importer » pour ouvrir une photo, un PDF, un fichier texte ou un tableur." />
+            <TextBlock FontSize="16" Opacity="0.65" TextWrapping="Wrap" TextAlignment="Center" Text="Tout reste sur la tablette, même sans Internet." />
+        </StackPanel>
 
         <!-- Recadrage à la main : 4 poignées à déplacer au doigt. -->
         <Grid x:Name="CropOverlay" Grid.RowSpan="5" Visibility="Collapsed" Background="#F01E1E1E">

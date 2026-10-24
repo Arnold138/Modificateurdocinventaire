@@ -42,6 +42,83 @@ public static class ImageExporter
     }
 
     /// <summary>
+    /// Écriture d'origine mise en couleur : dans chaque rectangle, chaque canal garde le plus clair de l'image
+    /// et de la couleur (l'encre noire prend la couleur, le papier reste tel quel). Renvoie une image BGRA.
+    /// </summary>
+    public static Raster Tint(Raster image, IEnumerable<(int X0, int Y0, int X1, int Y1, string Color)> rects)
+    {
+        var list = rects.ToList();
+        if (list.Count == 0) return image;
+        var src = image.ToBgra();
+        var output = new Raster(src.Width, src.Height, 4, (byte[])src.Data.Clone());
+        foreach (var (x0, y0, x1, y1, color) in list)
+        {
+            var (r, g, b) = Strikes.TextRgb(color);
+            for (int y = Math.Max(0, y0); y < Math.Min(output.Height, y1); y++)
+                for (int x = Math.Max(0, x0); x < Math.Min(output.Width, x1); x++)
+                {
+                    int o = (y * output.Width + x) * 4;
+                    output.Data[o] = Math.Max(output.Data[o], b);
+                    output.Data[o + 1] = Math.Max(output.Data[o + 1], g);
+                    output.Data[o + 2] = Math.Max(output.Data[o + 2], r);
+                }
+        }
+        return output;
+    }
+
+    /// <summary>
+    /// Fond tramé (gris des totaux et des en-têtes) : un morceau propre de la même rangée, sans texte ni filet,
+    /// à répéter sous le texte retapé (un aplat blanc se verrait). Null si le fond est du papier uni.
+    /// <paramref name="dy"/> : décalage vertical de la page affichée par rapport à la page d'origine.
+    /// </summary>
+    public static RectD? CleanPatch(Raster image, Page page, PrintedLine line, Field f, double dy = 0)
+    {
+        var bx = f.Box with { Y = f.Box.Y + dy };
+        int x0 = Math.Max(0, (int)Math.Floor(bx.Left)), x1 = Math.Min(image.Width - 1, (int)Math.Ceiling(bx.Right) - 1);
+        int y0 = Math.Max(0, (int)Math.Floor(bx.Top)), y1 = Math.Min(image.Height - 1, (int)Math.Ceiling(bx.Bottom) - 1);
+        if (x1 <= x0 || y1 <= y0) return null;
+        int G(int x, int y)
+        {
+            int o = (y * image.Width + x) * image.Channels;
+            return image.Channels == 1 ? image.Data[o] : (image.Data[o] * 29 + image.Data[o + 1] * 150 + image.Data[o + 2] * 77) >> 8;
+        }
+        long sum = 0; int n = 0;
+        for (int x = x0; x <= x1; x += 2) { sum += G(x, y0) + G(x, y1); n += 2; }
+        if ((double)sum / n >= 245) return null; // papier uni
+        var table = page.Tables.FirstOrDefault(t => t.Rows.Any(r => r.Lines.Contains(line)));
+        if (table is null || table.ColumnXs.Count == 0) return null;
+        var row = table.Rows.First(r => r.Lines.Contains(line));
+        var ink = row.Lines.SelectMany(l => l.Cells).Where(c => !c.Ink.IsEmpty).Select(c => c.Ink with { Y = c.Ink.Y + dy }).ToList();
+        int h = y1 - y0 + 1, pw = Math.Min(48, x1 - x0 + 1);
+        RectD? best = null;
+        long bestSum = -1;
+        for (int x = (int)Math.Ceiling(table.ColumnXs[0]) + 4; x + pw < table.ColumnXs[^1] - 4; x += 2)
+        {
+            if (table.ColumnXs.Any(cx => cx > x - 5 && cx < x + pw + 5)) continue;
+            if (ink.Any(i => i.Left < x + pw + 2 && x - 2 < i.Right && i.Top < y0 + h && y0 < i.Bottom)) continue;
+            long s2 = 0;
+            for (int y = y0; y <= y1; y += 2) for (int xx = x; xx < x + pw; xx += 2) s2 += G(xx, y);
+            if (s2 > bestSum) { bestSum = s2; best = new RectD(x, y0, pw, h); }
+        }
+        return best;
+    }
+
+    /// <summary>Image de la taille de <paramref name="box"/> : le morceau <paramref name="patch"/> répété en largeur (BGRA).</summary>
+    public static Raster TilePatch(Raster image, RectD patch, int width, int height)
+    {
+        var src = image.ToBgra();
+        var output = new Raster(Math.Max(1, width), Math.Max(1, height), 4, new byte[Math.Max(1, width) * Math.Max(1, height) * 4]);
+        int px = (int)patch.X, py = (int)patch.Y, pw = Math.Max(1, (int)patch.Width), ph = Math.Max(1, (int)patch.Height);
+        for (int y = 0; y < output.Height; y++)
+            for (int x = 0; x < output.Width; x++)
+            {
+                int sx = Math.Clamp(px + x % pw, 0, src.Width - 1), sy = Math.Clamp(py + Math.Min(y, ph - 1), 0, src.Height - 1);
+                Array.Copy(src.Data, (sy * src.Width + sx) * 4, output.Data, (y * output.Width + x) * 4, 4);
+            }
+        return output;
+    }
+
+    /// <summary>
     /// Recopie les cases modifiées (et les numéros de lot) de la page redressée (déjà retouchée par l'application)
     /// dans la photo d'origine orientée. Tout le reste de la photo est inchangé.
     /// </summary>

@@ -2,6 +2,7 @@ using Microsoft.UI;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
@@ -18,10 +19,10 @@ using ModelPage = RetoucheInventaire.Core.Model.Page;
 namespace RetoucheInventaire.App.Views;
 
 /// <summary>
-/// Une page à l'écran : l'image d'origine et, par-dessus, un champ par case, à sa position exacte.
-/// Tout est placé en absolu (pixels de page) : modifier un texte ne peut rien déplacer d'autre.
-/// Un champ non modifié est invisible (on voit l'original) ; un champ modifié masque l'original
-/// dans sa case et affiche le nouveau texte en noir, réduit si besoin pour ne jamais en sortir.
+/// Une page à l'écran : l'image (recomposée si des rangées ont bougé) et, par-dessus, un champ par case, à sa place.
+/// Les cases sont placées d'après la mise en page (<see cref="Arrangement"/>) : un lot 0 recollé après le dernier lot
+/// s'édite là où il est affiché. Une case non modifiée est invisible (on voit l'original) ; une case modifiée masque
+/// l'original et affiche le nouveau texte (noir ou en couleur), à la taille de l'imprimé.
 /// </summary>
 public sealed class PageView
 {
@@ -31,47 +32,50 @@ public sealed class PageView
     private static readonly SolidColorBrush Accent = new(ColorHelper.FromArgb(255, 0, 103, 192));
     private static readonly SolidColorBrush LockFill = new(ColorHelper.FromArgb(48, 255, 140, 0));
     private static readonly SolidColorBrush LockStroke = new(ColorHelper.FromArgb(255, 220, 110, 0));
+    private static readonly SolidColorBrush TrashFill = new(ColorHelper.FromArgb(255, 253, 236, 236));
+    private static readonly SolidColorBrush TrashInk = new(ColorHelper.FromArgb(255, 180, 40, 40));
+    private static readonly SolidColorBrush AddInk = new(ColorHelper.FromArgb(255, 154, 163, 173));
+    private static readonly SolidColorBrush GripInk = new(ColorHelper.FromArgb(255, 154, 163, 173));
     private static readonly TextBlock Meter = new() { FontFamily = new FontFamily("Times New Roman") };
 
     private const double LineHeightRatio = 1.15; // hauteur de ligne de Times New Roman, en em
+    public const double GutterWidth = 112;
 
     private readonly Canvas _fieldLayer = new();
+    private readonly Canvas _colorLayer = new() { IsHitTestVisible = false };
+    private readonly Canvas _lotLayer = new();
+    private readonly Canvas _strikeLayer = new() { IsHitTestVisible = false };
     private readonly Canvas _overlayLayer = new() { IsHitTestVisible = false };
     private readonly Canvas _inputLayer = new() { IsHitTestVisible = false };
+    private readonly Canvas _gutter = new() { Width = GutterWidth };
     private readonly Rectangle _focusFrame = new() { Stroke = Accent, StrokeThickness = 2, Visibility = Visibility.Collapsed };
     private readonly Rectangle _rubber = new() { Stroke = LockStroke, StrokeThickness = 2, Fill = LockFill, Visibility = Visibility.Collapsed };
-    private readonly Dictionary<Field, TextBox> _boxes = [];
-    private readonly Dictionary<Field, SolidColorBrush> _paper = [];
+    private readonly Rectangle _dropLine = new() { Height = 4, Fill = Accent, RadiusX = 2, RadiusY = 2, Visibility = Visibility.Collapsed };
+    private readonly Rectangle _ghost = new() { Stroke = Accent, StrokeThickness = 2, Fill = new SolidColorBrush(ColorHelper.FromArgb(26, 10, 102, 194)), Visibility = Visibility.Collapsed };
     private readonly Border _loupe = new() { BorderBrush = Accent, BorderThickness = new Thickness(2), Background = Paper, Visibility = Visibility.Collapsed };
-    private Raster? _image;
-    private readonly Dictionary<Field, PrintedLine> _lineOf = [];
+    private readonly Dictionary<Field, TextBox> _boxes = [];
+    private readonly Dictionary<Field, TextBlock> _colorTexts = [];
+    private readonly Dictionary<Field, Brush> _paper = [];
+    private readonly Dictionary<PrintedLine, TextBox> _lotBoxes = [];
     private readonly List<UIElement> _lockMarks = [];
+    private readonly Func<bool> _lotsActive;
+    private readonly Func<int, int?> _mapY, _unmapY;
+    private Dictionary<Field, (Arrangement.ViewCell Cell, Arrangement.ViewLine Entry)> _place = [];
+    private Arrangement.ViewPage _view;
+    private Raster? _image;
     private Canvas? _grid;
     private WriteableBitmap? _bitmap;
     private Image? _background;
     private Point? _dragStart;
-
-    /// <summary>Image redressée d'origine (null pour les pages TXT/CSV/XLSX).</summary>
-    public Raster? Image => _image;
-
-    public ModelPage Page { get; }
-    public Grid Root { get; }
-
-    /// <summary>Ce qui est affiché : la colonne des lots à gauche, puis la page encadrée.</summary>
-    public Grid Host { get; }
-
-    /// <summary>Colonne des numéros de lot, en dehors de la page : la mise en page du document n'est pas touchée.</summary>
-    private readonly Canvas _gutter = new() { Width = GutterWidth };
-    public const double GutterWidth = 84;
-    private readonly Canvas _lotLayer = new();
-    private readonly Canvas _strikeLayer = new() { IsHitTestVisible = false };
     private (Field Field, int Start, int End)? _selection;
-    private readonly Dictionary<PrintedLine, TextBox> _lotBoxes = [];
-    private readonly Func<bool> _lotsActive, _lotFrame;
-    private static readonly SolidColorBrush TrashFill = new(ColorHelper.FromArgb(255, 253, 236, 236));
-    private static readonly SolidColorBrush TrashInk = new(ColorHelper.FromArgb(255, 180, 40, 40));
-    private static readonly SolidColorBrush AddInk = new(ColorHelper.FromArgb(255, 154, 163, 173));
-    private static readonly SolidColorBrush LotBorder = new(ColorHelper.FromArgb(255, 201, 214, 230));
+
+    /// <summary>Image affichée (null pour les pages TXT/CSV/XLSX).</summary>
+    public Raster? Image => _image;
+    /// <summary>La page du projet affichée.</summary>
+    public ModelPage Page => _view.Page;
+    public Grid Root { get; }
+    /// <summary>Ce qui est affiché : la colonne de gauche (poignées, lots), puis la page encadrée.</summary>
+    public Grid Host { get; }
 
     public event Action<PageView, Field>? FieldFocused;
     public event Action<PageView, Field>? Edited;
@@ -79,32 +83,34 @@ public sealed class PageView
     public event Action<PageView, Field>? BeforeEdit;
     /// <summary>Juste avant un changement des zones verrouillées.</summary>
     public event Action<PageView>? BeforeChange;
-    public event Action<PageView>? Touched;
     public event Action<PageView>? LocksChanged;
     /// <summary>Numéro de lot tapé sur la page (ligne, valeur saisie).</summary>
     public event Action<PageView, PrintedLine, string>? LotChanged;
     /// <summary>Poubelle : cette ligne n'est pas un objet.</summary>
     public event Action<PageView, PrintedLine>? LotRemoved;
-    /// <summary>« + » : ajouter un numéro sur cette ligne.</summary>
+    /// <summary>« + » : ajouter une case de lot sur cette ligne.</summary>
     public event Action<PageView, PrintedLine>? LotAdded;
+    /// <summary>Rangée glissée : (tableau, rangée déplacée, rangée devant laquelle la poser ou null pour la fin).</summary>
+    public event Action<PageView, Table, int, int?>? RowMoved;
 
-    /// <param name="display">Image affichée (avec la colonne des lots tracée), sinon <paramref name="image"/>.</param>
-    public PageView(ModelPage page, Raster? image, Raster? display, Func<bool> lotsActive, Func<bool> lotFrame)
+    public PageView(Arrangement.ViewPage view, Raster? display, Func<bool> lotsActive, Func<int, int?> mapY, Func<int, int?> unmapY)
     {
-        Page = page;
-        _image = image;
+        _view = view;
+        _image = display;
         _lotsActive = lotsActive;
-        _lotFrame = lotFrame;
-        Root = new Grid { Width = page.Width, Height = page.Height, Background = Paper, HorizontalAlignment = HorizontalAlignment.Center };
-        if (image != null)
+        _mapY = mapY;
+        _unmapY = unmapY;
+        SetPlacement(view);
+        Root = new Grid { Width = view.Width, Height = view.Height, Background = Paper, HorizontalAlignment = HorizontalAlignment.Center };
+        if (display != null)
         {
-            _bitmap = WinImaging.ToBitmap(display ?? image);
-            _background = new Image { Source = _bitmap, Width = page.Width, Height = page.Height, Stretch = Stretch.Fill };
+            _bitmap = WinImaging.ToBitmap(display);
+            _background = new Image { Source = _bitmap, Width = view.Width, Height = view.Height, Stretch = Stretch.Fill };
             Root.Children.Add(_background);
         }
         else
             Root.Children.Add(_grid = DrawGrid());
-        _gutter.Height = page.Height;
+        _gutter.Height = view.Height;
         Host = new Grid { HorizontalAlignment = HorizontalAlignment.Center };
         Host.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         Host.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -119,11 +125,11 @@ public sealed class PageView
         Host.Children.Add(_gutter);
         Host.Children.Add(frame);
         Root.Children.Add(_fieldLayer);
+        Root.Children.Add(_colorLayer);
         Root.Children.Add(_lotLayer);
         Root.Children.Add(_strikeLayer);
         Root.Children.Add(_overlayLayer);
         Root.Children.Add(_inputLayer);
-        Root.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, _) => Touched?.Invoke(this)), handledEventsToo: true);
 
         _inputLayer.PointerPressed += OnLockPressed;
         _inputLayer.PointerMoved += OnLockMoved;
@@ -133,14 +139,24 @@ public sealed class PageView
         Build();
     }
 
+    private void SetPlacement(Arrangement.ViewPage view)
+    {
+        _view = view;
+        _place = [];
+        foreach (var entry in view.Lines)
+            foreach (var cell in entry.Cells) _place[cell.Field] = (cell, entry);
+    }
+
     /// <summary>Reconstruit les champs et repères (après un verrouillage ou un changement de type de ligne).</summary>
     public void Refresh()
     {
         _fieldLayer.Children.Clear();
+        _colorLayer.Children.Clear();
         _overlayLayer.Children.Clear();
         _lockMarks.Clear();
-        _zeroMarks.Clear();
         _boxes.Clear();
+        _colorTexts.Clear();
+        _paper.Clear();
         Build();
     }
 
@@ -158,6 +174,8 @@ public sealed class PageView
             Strikes.Adjust(field, field.Text, field.OriginalText);
             field.Text = field.OriginalText;
         }
+        RefreshStrikes();
+        RefreshColors();
     }
 
     public void Focus(Field field)
@@ -165,75 +183,136 @@ public sealed class PageView
         if (_boxes.TryGetValue(field, out var tb)) tb.Focus(FocusState.Programmatic);
     }
 
-    private void Build()
-    {
-        foreach (var zone in Page.LockZones) AddLockZone(zone);
-        foreach (var table in Page.Tables)
-            foreach (var line in table.Rows.SelectMany(r => r.Lines))
-            {
-                foreach (var f in line.Cells)
-                {
-                    _lineOf[f] = line;
-                    if (!f.Locked) AddField(f);
-                }
-            }
-        _overlayLayer.Children.Add(_focusFrame);
-        _overlayLayer.Children.Add(_rubber);
-        _overlayLayer.Children.Add(_loupe);
-        RefreshLots();
-        RefreshStrikes();
-    }
+    public bool Shows(Field field) => _boxes.ContainsKey(field);
 
-    /// <summary>Traits des morceaux barrés, posés par-dessus le texte (scan ou texte retapé).</summary>
-    public void RefreshStrikes()
-    {
-        _strikeLayer.Children.Clear();
-        foreach (var (f, line) in _lineOf)
-            foreach (var g in TextPlacement.StrikeSegments(line, f, BaseFontSize(f, PageLayout.BaseBox(line, f).Height), Measure))
-            {
-                var (r, gr, b) = TextPlacement.Rgb(g.Color);
-                var bar = new Rectangle { Width = g.X1 - g.X0, Height = g.Thickness, Fill = new SolidColorBrush(ColorHelper.FromArgb(255, r, gr, b)) };
-                Canvas.SetLeft(bar, g.X0);
-                Canvas.SetTop(bar, g.Y - g.Thickness / 2);
-                _strikeLayer.Children.Add(bar);
-            }
-    }
+    public PrintedLine? LineOf(Field f) => _place.TryGetValue(f, out var p) ? p.Entry.Line : null;
+
+    /// <summary>Ligne affichée d'une case (avec sa page d'origine : un lot 0 vient peut-être d'une autre page).</summary>
+    public Arrangement.ViewLine? EntryOf(Field f) => _place.TryGetValue(f, out var p) ? p.Entry : null;
 
     /// <summary>Morceau sélectionné dans la case (vide : toute la case).</summary>
     public (int Start, int End) SelectionFor(Field f) =>
         _selection is { } s && s.Field == f ? (s.Start, s.End) : (0, 0);
 
-    /// <summary>Remplace l'image affichée (colonne des lots tracée ou non).</summary>
+    /// <summary>Remplace l'image affichée.</summary>
     public void SetDisplay(Raster display)
     {
+        _image = display;
+        _paper.Clear();
         if (_background is null) return;
         _bitmap = WinImaging.ToBitmap(display);
         _background.Source = _bitmap;
+        _background.Height = display.Height;
+    }
+
+    private void Build()
+    {
+        DrawLockZones();
+        foreach (var (f, p) in _place)
+            if (!f.Locked) AddField(f, p.Cell);
+        _overlayLayer.Children.Add(_focusFrame);
+        _overlayLayer.Children.Add(_rubber);
+        _overlayLayer.Children.Add(_ghost);
+        _overlayLayer.Children.Add(_dropLine);
+        _overlayLayer.Children.Add(_loupe);
+        RefreshLots();
+        RefreshStrikes();
+        RefreshColors();
     }
 
     /// <summary>
-    /// Numéros de lot écrits sur la page, dans la colonne (modifiables au doigt), et colonne de gauche :
-    /// type de ligne (T, Σ…), poubelle sur les lignes numérotées, « + » sur les autres.
+    /// Nouvelle mise en page (rangée agrandie, total recalculé…) : tout est replacé sans quitter la case en cours.
+    /// Si d'autres cases apparaissent ou disparaissent, la page est reconstruite.
     /// </summary>
+    public void Relayout(Arrangement.ViewPage view, Raster? display)
+    {
+        var before = _place.Keys.ToHashSet();
+        SetPlacement(view);
+        bool same = before.SetEquals(_place.Keys);
+        Root.Width = view.Width;
+        Root.Height = view.Height;
+        _gutter.Height = view.Height;
+        if (display != null) SetDisplay(display);
+        if (_grid != null)
+        {
+            int i = Root.Children.IndexOf(_grid);
+            _grid = DrawGrid();
+            if (i >= 0) Root.Children[i] = _grid;
+        }
+        _paper.Clear();
+        if (!same) { Refresh(); return; }
+        foreach (var (f, tb) in _boxes)
+        {
+            Layout(tb, f);
+            ApplyVisual(tb, f, tb.FocusState != FocusState.Unfocused);
+        }
+        DrawLockZones();
+        UpdateLots();
+        RefreshStrikes();
+        RefreshColors();
+    }
+
+    /// <summary>Textes changés ailleurs (totaux recalculés) : les cases affichées suivent.</summary>
+    public void SyncFields(IEnumerable<Field> fields)
+    {
+        foreach (var f in fields)
+        {
+            if (!_boxes.TryGetValue(f, out var tb) || tb.FocusState != FocusState.Unfocused) continue;
+            if (FromBox(tb.Text) != f.Text) tb.Text = ToBox(f.Text);
+            Layout(tb, f);
+            ApplyVisual(tb, f, false);
+        }
+        RefreshStrikes();
+        RefreshColors();
+    }
+
+    // ---------- Zones verrouillées ----------
+
+    private void DrawLockZones()
+    {
+        foreach (var mark in _lockMarks) _overlayLayer.Children.Remove(mark);
+        _lockMarks.Clear();
+        foreach (var zone in Page.LockZones)
+        {
+            int? y = _mapY((int)Math.Round(zone.Y));
+            if (y is null) continue;
+            AddLockZone(zone with { Y = y.Value });
+        }
+    }
+
+    private void AddLockZone(RectD z)
+    {
+        var rect = new Rectangle
+        {
+            Width = z.Width, Height = z.Height, Fill = LockFill, Stroke = LockStroke, StrokeThickness = 2,
+            StrokeDashArray = new DoubleCollection { 4, 3 },
+        };
+        Canvas.SetLeft(rect, z.X);
+        Canvas.SetTop(rect, z.Y);
+        _overlayLayer.Children.Insert(0, rect);
+        _lockMarks.Add(rect);
+        var icon = new FontIcon { Glyph = "", FontSize = 18, Foreground = LockStroke };
+        Canvas.SetLeft(icon, z.X + 4);
+        Canvas.SetTop(icon, z.Y + 4);
+        _overlayLayer.Children.Insert(0, icon);
+        _lockMarks.Add(icon);
+    }
+
+    // ---------- Numéros de lot ----------
+
+    /// <summary>Numéros écrits sur la page, dans la colonne (modifiables au doigt), puis la colonne de gauche.</summary>
     public void RefreshLots()
     {
         var focused = _lotBoxes.FirstOrDefault(p => p.Value.FocusState != FocusState.Unfocused).Key;
         _lotLayer.Children.Clear();
         _lotBoxes.Clear();
-        var framed = _lotFrame() ? LotColumn.FramedTables(Page) : new List<Table>();
-        var labels = Lots.Labels(Page);
-        foreach (var t in Page.Tables)
-            foreach (var line in t.Rows.SelectMany(r => r.Lines))
-            {
-                if (!Lots.HasCell(line)) continue;
-                var box = labels.First(l => l.Line == line).Box;
-                AddLotBox(line, box, framed.Contains(t) || _image is null);
-            }
+        foreach (var entry in _view.Lines)
+            if (entry.LotBox is RectD box) AddLotBox(entry.Line, box);
         if (focused != null && _lotBoxes.TryGetValue(focused, out var again)) again.Focus(FocusState.Programmatic);
         RefreshGutter();
     }
 
-    private void AddLotBox(PrintedLine line, RectD box, bool transparent)
+    private void AddLotBox(PrintedLine line, RectD box)
     {
         var tb = new TextBox
         {
@@ -243,7 +322,7 @@ public sealed class PageView
             Height = Math.Max(1, box.Height),
             TextAlignment = TextAlignment.Center,
             Foreground = Ink,
-            Background = transparent ? Clear : PaperOfBox(box),
+            Background = Clear,
         };
         var scope = new InputScope();
         scope.Names.Add(new InputScopeName(InputScopeNameValue.Number));
@@ -252,7 +331,7 @@ public sealed class PageView
         Canvas.SetTop(tb, box.Y);
         LayoutLot(tb, line, box);
 
-        // La suite se recale quand on quitte la case (Entrée ou toucher ailleurs), pas pendant la frappe.
+        // Le numéro est enregistré quand on quitte la case (Entrée ou toucher ailleurs) ; rien d'autre ne change.
         void Commit()
         {
             if (tb.Text.Trim() != line.Lot) LotChanged?.Invoke(this, line, tb.Text);
@@ -272,117 +351,188 @@ public sealed class PageView
     private void LayoutLot(TextBox tb, PrintedLine line, RectD box)
     {
         var c0 = line.Cells[0];
-        double size = Math.Max(5, Math.Min(BaseFontSize(c0, c0.Box.Height - line.Extra), box.Height / LineHeightRatio));
+        double size = Math.Max(5, Math.Min(BaseFontSize(c0, c0.Box.Height - line.Extra, false), box.Height / LineHeightRatio));
         string text = line.Lot.Length == 0 ? " " : line.Lot;
-        while (size > 5 && Measure(text, size) > box.Width - 2) size -= 0.5;
+        while (size > 5 && Measure(text, size, false) > box.Width - 2) size -= 0.5;
         tb.FontSize = size;
         double top = Math.Clamp(box.CenterY - box.Y - 0.58 * size, 0, Math.Max(0, box.Height - LineHeightRatio * size));
         tb.Padding = new Thickness(0, top, 0, 0);
     }
 
-    /// <summary>Après un recalcul : met les nouveaux numéros en place sans quitter la case en cours de frappe.</summary>
+    /// <summary>Après un changement : met les numéros en place sans quitter la case en cours de frappe.</summary>
     public void UpdateLots()
     {
-        var labels = Lots.Labels(Page);
-        bool same = labels.Count == _lotBoxes.Count && labels.All(l =>
-            _lotBoxes.TryGetValue(l.Line, out var tb) && Math.Abs(Canvas.GetLeft(tb) - l.Box.X) < 0.5 && Math.Abs(tb.Width - Math.Max(1, l.Box.Width)) < 0.5);
+        var boxes = _view.Lines.Where(e => e.LotBox != null).ToList();
+        bool same = boxes.Count == _lotBoxes.Count && boxes.All(e => _lotBoxes.ContainsKey(e.Line));
         if (!same) { RefreshLots(); return; }
-        foreach (var (line, box) in labels)
+        foreach (var e in boxes)
         {
-            var tb = _lotBoxes[line];
-            if (tb.FocusState == FocusState.Unfocused && tb.Text != line.Lot) tb.Text = line.Lot;
+            var tb = _lotBoxes[e.Line];
+            var box = e.LotBox!.Value;
+            if (tb.FocusState == FocusState.Unfocused && tb.Text != e.Line.Lot) tb.Text = e.Line.Lot;
+            Canvas.SetLeft(tb, box.X);
             Canvas.SetTop(tb, box.Y);
+            tb.Width = Math.Max(1, box.Width);
             tb.Height = Math.Max(1, box.Height);
-            LayoutLot(tb, line, box);
+            LayoutLot(tb, e.Line, box);
         }
         RefreshGutter();
     }
 
-    private readonly List<UIElement> _zeroMarks = [];
-
-    /// <summary>Rangées au lot 0 : voilées, avec la mention « déplacée en fin d'inventaire » (fait à l'export).</summary>
-    private void RefreshZeroRows()
+    /// <summary>Repère de hauteur d'une ligne à l'écran : sa 1re ligne de texte.</summary>
+    private static RectD? LineBand(Arrangement.ViewLine entry)
     {
-        foreach (var m in _zeroMarks) _overlayLayer.Children.Remove(m);
-        _zeroMarks.Clear();
-        foreach (var (t, r) in ZeroRows.Rows(Page))
+        if (entry.Cells.Count == 0) return null;
+        var c = entry.Cells[0];
+        var b = PageLayout.BaseBox(entry.Line, c.Field);
+        return b with { X = b.X + c.Dx, Y = b.Y + c.Dy };
+    }
+
+    /// <summary>Colonne de gauche : poignées, type de ligne (T, Σ…), poubelle sur les lignes numérotées, « + » sur les autres.</summary>
+    public void RefreshGutter()
+    {
+        _gutter.Children.Clear();
+        bool active = _lotsActive();
+        foreach (var entry in _view.Lines)
         {
-            double left = t.ColumnXs.Count > 0 ? t.ColumnXs[0] : t.Bounds.Left, right = t.ColumnXs.Count > 0 ? t.ColumnXs[^1] : t.Bounds.Right;
-            var veil = new Rectangle
+            var line = entry.Line;
+            if (line.OutsideTable || entry.CarriedOnly || line.Cells.Count == 0) continue;
+            if (LineBand(entry) is not RectD b) continue;
+            AddBadge(line, b.CenterY);
+            if (!active) continue;
+            bool has = Lots.HasCell(line);
+            if (!has && !Lots.CanAdd(line, entry.Table.Rows.FirstOrDefault(r => r.Lines.Contains(line)))) continue;
+            double h = Math.Max(26, Math.Min(40, b.Height + 6));
+            var button = new Button
             {
-                Width = right - left, Height = t.RowYs[r + 1] - t.RowYs[r],
-                Fill = new SolidColorBrush(ColorHelper.FromArgb(140, 238, 240, 243)),
-                Stroke = new SolidColorBrush(ColorHelper.FromArgb(255, 154, 163, 173)), StrokeThickness = 2,
-                StrokeDashArray = new DoubleCollection { 4, 3 },
+                Width = 42, Height = h, Padding = new Thickness(0), MinWidth = 0, MinHeight = 0,
+                CornerRadius = new CornerRadius(10),
+                Background = has ? TrashFill : Clear,
+                BorderBrush = has ? Clear : AddInk, BorderThickness = new Thickness(has ? 0 : 1),
+                Content = new FontIcon { Glyph = has ? "" : "", FontSize = 16, Foreground = has ? TrashInk : AddInk },
             };
-            Canvas.SetLeft(veil, left);
-            Canvas.SetTop(veil, t.RowYs[r]);
-            var label = new Border
+            ToolTipService.SetToolTip(button, has ? "Pas un objet : retirer cette case" : "Ajouter une case de lot sur cette ligne");
+            Canvas.SetLeft(button, GutterWidth - 6 - 42);
+            Canvas.SetTop(button, b.CenterY - h / 2);
+            var target = line;
+            button.Click += (_, _) => { if (has) LotRemoved?.Invoke(this, target); else LotAdded?.Invoke(this, target); };
+            _gutter.Children.Add(button);
+        }
+        DrawGrips();
+    }
+
+    private void AddBadge(PrintedLine line, double centerY)
+    {
+        if (line.Kind == LineKind.Article) return;
+        var (letter, color) = line.Kind switch
+        {
+            LineKind.Titre => ("T", ColorHelper.FromArgb(255, 0, 103, 192)),
+            LineKind.Total => ("Σ", ColorHelper.FromArgb(255, 16, 124, 16)),
+            LineKind.EnTete => ("E", ColorHelper.FromArgb(255, 96, 96, 96)),
+            _ => ("×", ColorHelper.FromArgb(255, 180, 40, 40)),
+        };
+        var badge = new Border
+        {
+            Width = 24, Height = 24, CornerRadius = new CornerRadius(12),
+            Background = new SolidColorBrush(color),
+            Child = new TextBlock
             {
-                Background = new SolidColorBrush(ColorHelper.FromArgb(255, 101, 103, 107)), CornerRadius = new CornerRadius(10), Padding = new Thickness(8, 1, 8, 1),
-                Child = new TextBlock { Text = "Lot 0 → fin d'inventaire", FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Paper },
-            };
-            label.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-            Canvas.SetLeft(label, right - 6 - label.DesiredSize.Width);
-            Canvas.SetTop(label, t.RowYs[r] + 2);
-            _overlayLayer.Children.Add(veil);
-            _overlayLayer.Children.Add(label);
-            _zeroMarks.Add(veil);
-            _zeroMarks.Add(label);
+                Text = letter, FontSize = 14, FontWeight = FontWeights.Bold, Foreground = Paper,
+                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+        Canvas.SetLeft(badge, 34);
+        Canvas.SetTop(badge, centerY - 12);
+        _gutter.Children.Add(badge);
+    }
+
+    // ---------- Déplacer une rangée (poignée ⋮⋮ à gauche) ----------
+
+    private void DrawGrips()
+    {
+        if (RowMoved is null) return;
+        foreach (var vt in _view.Tables)
+        {
+            if (vt.Strips.Count < 2) continue;
+            foreach (var strip in vt.Strips)
+            {
+                var row = vt.Table.Rows[strip.R];
+                if (row.Lines.Count == 0 || row.Lines.All(l => l.Kind == LineKind.EnTete)) continue;
+                if (row.Lines.All(l => l.Cells.All(c => string.IsNullOrWhiteSpace(c.Text)))) continue;
+                double h = Math.Max(24, Math.Min(40, strip.Bottom - strip.Top - 4));
+                var grip = new Border
+                {
+                    Width = 28, Height = h, CornerRadius = new CornerRadius(8), Background = Clear,
+                    Child = new FontIcon { Glyph = "", FontSize = 18, Foreground = GripInk },
+                };
+                ToolTipService.SetToolTip(grip, "Glisser pour déplacer la rangée");
+                Canvas.SetLeft(grip, 2);
+                Canvas.SetTop(grip, (strip.Top + strip.Bottom) / 2 - h / 2);
+                InitDrag(grip, vt, strip);
+                _gutter.Children.Add(grip);
+            }
         }
     }
 
-    public void RefreshGutter()
+    private void InitDrag(Border grip, Arrangement.ViewTable vt, Arrangement.Strip strip)
     {
-        RefreshZeroRows();
-        _gutter.Children.Clear();
-        bool active = _lotsActive();
-        foreach (var table in Page.Tables)
-            foreach (var line in table.Rows.SelectMany(r => r.Lines))
-            {
-                if (line.OutsideTable || line.Cells.Count == 0) continue;
-                AddBadge(line);
-                if (!active) continue;
-                bool has = Lots.HasCell(line);
-                if (!has && !Lots.CanAdd(line)) continue;
-                double baseHeight = line.Bounds.Height - line.Extra, centerY = line.Bounds.Top + baseHeight / 2;
-                double h = Math.Max(26, Math.Min(40, baseHeight + 6));
-                var button = new Button
-                {
-                    Width = 42, Height = h, Padding = new Thickness(0), MinWidth = 0, MinHeight = 0,
-                    CornerRadius = new CornerRadius(10),
-                    Background = has ? TrashFill : Clear,
-                    BorderBrush = has ? Clear : AddInk, BorderThickness = new Thickness(has ? 0 : 1),
-                    Content = new FontIcon { Glyph = has ? "\uE74D" : "\uE710", FontSize = 16, Foreground = has ? TrashInk : AddInk },
-                };
-                ToolTipService.SetToolTip(button, has ? "Pas un objet : retirer ce numéro (les suivants se décalent)" : "Ajouter un numéro de lot sur cette ligne");
-                Canvas.SetLeft(button, GutterWidth - 6 - 42);
-                Canvas.SetTop(button, centerY - h / 2);
-                var target = line;
-                button.Click += (_, _) => { if (has) LotRemoved?.Invoke(this, target); else LotAdded?.Invoke(this, target); };
-                _gutter.Children.Add(button);
-            }
-    }
-
-    private SolidColorBrush PaperOfBox(RectD box)
-    {
-        if (_image is null) return Paper;
-        var (r, g, b) = ImageExporter.PaperColor(_image, box);
-        return new SolidColorBrush(ColorHelper.FromArgb(255, r, g, b));
+        int? before = null;
+        bool dragging = false, moved = false;
+        grip.PointerPressed += (_, e) =>
+        {
+            dragging = true;
+            moved = false;
+            grip.CapturePointer(e.Pointer);
+            _ghost.Width = _view.Width;
+            _ghost.Height = Math.Max(4, strip.Bottom - strip.Top);
+            Canvas.SetLeft(_ghost, 0);
+            Canvas.SetTop(_ghost, strip.Top);
+            _ghost.Visibility = Visibility.Visible;
+            _dropLine.Width = _view.Width;
+            e.Handled = true;
+        };
+        grip.PointerMoved += (_, e) =>
+        {
+            if (!dragging) return;
+            double y = e.GetCurrentPoint(Root).Position.Y;
+            moved = true;
+            Canvas.SetTop(_ghost, y - (strip.Bottom - strip.Top) / 2);
+            // Point d'insertion : avant la première rangée dont le milieu est sous le doigt.
+            int i = vt.Strips.FindIndex(s => y < (s.Top + s.Bottom) / 2);
+            before = i < 0 ? null : vt.Strips[i].R;
+            double at = i < 0 ? vt.Strips[^1].Bottom : vt.Strips[i].Top;
+            Canvas.SetTop(_dropLine, at - 2);
+            _dropLine.Visibility = Visibility.Visible;
+            e.Handled = true;
+        };
+        void End(bool ok)
+        {
+            if (!dragging) return;
+            dragging = false;
+            _ghost.Visibility = _dropLine.Visibility = Visibility.Collapsed;
+            if (!ok || !moved || before == strip.R) return;
+            int k = vt.Strips.FindIndex(s => s.R == strip.R);
+            if (k + 1 < vt.Strips.Count && before == vt.Strips[k + 1].R) return; // même place
+            if (k == vt.Strips.Count - 1 && before is null) return;
+            RowMoved?.Invoke(this, vt.Table, strip.R, before);
+        }
+        grip.PointerReleased += (_, e) => { End(true); grip.ReleasePointerCapture(e.Pointer); e.Handled = true; };
+        grip.PointerCanceled += (_, _) => End(false);
+        grip.PointerCaptureLost += (_, _) => End(false);
     }
 
     // ---------- Champs ----------
 
-    private void AddField(Field f)
+    private void AddField(Field f, Arrangement.ViewCell cell)
     {
+        var line = _place[f].Entry.Line;
         bool multi = TextWrap.IsMultiline(f);
         var tb = new TextBox
         {
             Style = (Style)Application.Current.Resources["FieldBox"],
             Text = ToBox(f.Text),
-            Width = Math.Max(1, f.Box.Width),
-            Height = Math.Max(1, f.Box.Height),
             TextAlignment = f.Align switch { TextAlign.Right => TextAlignment.Right, TextAlign.Center => TextAlignment.Center, _ => TextAlignment.Left },
+            FontWeight = TextPlacement.IsBold(line) ? FontWeights.Bold : FontWeights.Normal,
         };
         if (multi)
         {
@@ -400,9 +550,7 @@ public sealed class PageView
             scope.Names.Add(new InputScopeName(InputScopeNameValue.Number));
             tb.InputScope = scope;
         }
-        Canvas.SetLeft(tb, f.Box.X);
-        Canvas.SetTop(tb, f.Box.Y);
-
+        _boxes[f] = tb;
         Layout(tb, f);
         ApplyVisual(tb, f, focused: false);
 
@@ -433,41 +581,40 @@ public sealed class PageView
                 e.Handled = true;
                 FocusNextInColumn(f);
             };
-
-        _boxes[f] = tb;
         _fieldLayer.Children.Add(tb);
     }
+
+    /// <summary>Retours à la ligne : « \n » dans le projet (comme sur iPhone/iPad), « \r » dans les champs Windows.</summary>
+    private static string ToBox(string s) => s.Replace("\r\n", "\n").Replace('\n', '\r');
+    private static string FromBox(string s) => s.Replace("\r\n", "\n").Replace('\r', '\n');
 
     /// <summary>
     /// Taille de police de référence : celle qui redonne la largeur du texte imprimé
     /// (plus fiable que la hauteur des boîtes OCR), bornée autour de l'estimation du cœur.
     /// </summary>
-    /// <summary>Retours à la ligne : « \n » dans le projet (comme sur iPhone/iPad), « \r » dans les champs Windows.</summary>
-    private static string ToBox(string s) => s.Replace("\r\n", "\n").Replace('\n', '\r');
-    private static string FromBox(string s) => s.Replace("\r\n", "\n").Replace('\r', '\n');
-
-    private static double BaseFontSize(Field f) => BaseFontSize(f, f.Box.Height);
-
-    private static double BaseFontSize(Field f, double boxHeight)
+    private static double BaseFontSize(Field f, double boxHeight, bool bold)
     {
         double size = f.FontSize;
         if (!f.Ink.IsEmpty && f.OriginalText.Length > 0)
         {
-            double w100 = Measure(f.OriginalText, 100);
+            double w100 = Measure(f.OriginalText, 100, bold);
             if (w100 > 0) size = Math.Clamp(100 * f.Ink.Width / w100, 0.7 * f.FontSize, 1.3 * f.FontSize);
         }
         return Math.Max(5, Math.Min(size, boxHeight / LineHeightRatio));
     }
 
     /// <summary>
-    /// Mise en page du texte d'une case : désignation à la taille de l'imprimé sur plusieurs lignes,
-    /// valeurs sur une ligne réduites si besoin ; 1re ligne à la hauteur du texte d'origine.
+    /// Mise en page du texte d'une case (en pixels de la page d'origine) : désignation à la taille de l'imprimé sur
+    /// plusieurs lignes, valeurs sur une ligne réduites si besoin ; 1re ligne à la hauteur du texte d'origine.
     /// </summary>
-    public (double Size, List<string> Lines, double Top) TextLayout(PrintedLine line, Field f, string text) =>
-        TextPlacement.Layout(line, f, text, BaseFontSize(f, PageLayout.BaseBox(line, f).Height), Measure);
+    public static (double Size, List<string> Lines, double Top) TextLayout(PrintedLine line, Field f, string text)
+    {
+        bool bold = TextPlacement.IsBold(line);
+        return TextPlacement.Layout(line, f, text, BaseFontSize(f, PageLayout.BaseBox(line, f).Height, bold), (s, z) => Measure(s, z, bold));
+    }
 
     /// <summary>Hauteur à ajouter sous la ligne pour que le texte de toutes ses cases tienne.</summary>
-    public int LineExtra(PrintedLine line)
+    public static int LineExtra(PrintedLine line)
     {
         int extra = 0;
         foreach (var f in line.Cells.Where(c => TextWrap.IsMultiline(c) && !c.Locked))
@@ -478,100 +625,140 @@ public sealed class PageView
         return extra;
     }
 
-    public PrintedLine? LineOf(Field f) => _lineOf.TryGetValue(f, out var l) ? l : null;
-
     private void Layout(TextBox tb, Field f)
     {
-        var line = _lineOf[f];
-        var (size, _, top) = TextLayout(line, f, FromBox(tb.Text));
+        var (cell, entry) = _place[f];
+        var (size, _, top) = TextLayout(entry.Line, f, FromBox(tb.Text));
+        var box = cell.Box;
         tb.FontSize = size;
-        Canvas.SetLeft(tb, f.Box.X);
-        Canvas.SetTop(tb, f.Box.Y);
-        tb.Width = Math.Max(1, f.Box.Width);
-        tb.Height = Math.Max(1, f.Box.Height);
-        double pad = Math.Max(0, top - f.Box.Y);
+        Canvas.SetLeft(tb, box.X);
+        Canvas.SetTop(tb, box.Y);
+        tb.Width = Math.Max(1, box.Width);
+        tb.Height = Math.Max(1, box.Height);
+        double pad = Math.Max(0, top + cell.Dy - box.Y);
+        double left = Math.Max(0, f.Box.X + cell.Dx + f.Indent - box.X);
+        double right = Math.Max(0, box.Right - (f.Box.Right + cell.Dx - f.Indent));
         tb.Padding = f.Align switch
         {
-            TextAlign.Right => new Thickness(0, pad, f.Indent, 0),
+            TextAlign.Right => new Thickness(0, pad, right, 0),
             TextAlign.Center => new Thickness(0, pad, 0, 0),
-            _ => new Thickness(f.Indent, pad, TextWrap.IsMultiline(f) ? 3 : 0, 0),
+            _ => new Thickness(left, pad, TextWrap.IsMultiline(f) ? 3 : 0, 0),
         };
     }
 
-    /// <summary>La page a changé de hauteur (texte sur plusieurs lignes) : tout est replacé, la case en cours reste active.</summary>
-    public void Relayout(Raster? image, Raster? display)
-    {
-        _image = image;
-        Root.Height = Page.Height;
-        _gutter.Height = Page.Height;
-        if (_background != null && (display ?? image) is { } shown)
-        {
-            _background.Height = Page.Height;
-            SetDisplay(shown);
-        }
-        if (_grid != null)
-        {
-            int i = Root.Children.IndexOf(_grid);
-            _grid = DrawGrid();
-            if (i >= 0) Root.Children[i] = _grid;
-        }
-        _paper.Clear();
-        foreach (var (f, tb) in _boxes)
-        {
-            Layout(tb, f);
-            ApplyVisual(tb, f, tb.FocusState != FocusState.Unfocused);
-        }
-        foreach (var mark in _lockMarks) _overlayLayer.Children.Remove(mark);
-        _lockMarks.Clear();
-        foreach (var zone in Page.LockZones) AddLockZone(zone);
-        UpdateLots();
-        RefreshStrikes();
-    }
-
-    private static double Measure(string s, double size)
+    private static double Measure(string s, double size, bool bold)
     {
         Meter.FontSize = size;
+        Meter.FontWeight = bold ? FontWeights.Bold : FontWeights.Normal;
         Meter.Text = s;
         Meter.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         return Meter.DesiredSize.Width;
     }
 
     /// <summary>
-    /// Case non modifiée : totalement invisible (opacité 0, mais toujours touchable),
-    /// on ne voit que la photo d'origine, rien ne s'y superpose.
-    /// Case modifiée ou en cours d'édition : fond couleur papier qui masque l'original, texte noir.
+    /// Case non modifiée : totalement invisible (opacité 0, mais toujours touchable), on ne voit que l'original.
+    /// Case modifiée ou en cours d'édition : fond du papier (ou trame grise de la rangée) qui masque l'original.
     /// </summary>
     private void ApplyVisual(TextBox tb, Field f, bool focused)
     {
         bool onImage = _image != null;
         bool show = focused || f.IsModified || !onImage;
         tb.Opacity = show ? 1 : 0;
-        tb.Foreground = Ink;
         tb.Background = onImage ? PaperOf(f) : Clear;
+        DrawColors(f, tb, focused);
     }
 
-    private SolidColorBrush PaperOf(Field f)
+    private Brush PaperOf(Field f)
     {
         if (_image is null) return Paper;
-        if (!_paper.TryGetValue(f, out var brush))
+        if (_paper.TryGetValue(f, out var brush)) return brush;
+        var (cell, entry) = _place[f];
+        if (cell.Dx == 0 && ImageExporter.CleanPatch(_image, entry.Page, entry.Line, f, cell.Dy) is RectD patch)
         {
-            var (r, g, b) = ImageExporter.PaperColor(_image, f.Box);
-            _paper[f] = brush = new SolidColorBrush(ColorHelper.FromArgb(255, r, g, b));
+            // Fond tramé (total, en-tête) : le motif de la rangée répété, un aplat blanc se verrait.
+            var tile = ImageExporter.TilePatch(_image, patch, (int)Math.Ceiling(cell.Box.Width), (int)Math.Ceiling(cell.Box.Height));
+            brush = new ImageBrush { ImageSource = WinImaging.ToBitmap(tile), Stretch = Stretch.Fill };
         }
+        else
+        {
+            var (r, g, b) = ImageExporter.PaperColor(_image, cell.Box);
+            brush = new SolidColorBrush(ColorHelper.FromArgb(255, r, g, b));
+        }
+        _paper[f] = brush;
         return brush;
     }
 
-    /// <summary>
-    /// Pendant l'édition, l'original de la case est montré en loupe juste au-dessus :
-    /// on compare avec ce que l'OCR a lu, sans texte superposé.
-    /// </summary>
+    // ---------- Couleur et traits ----------
+
+    /// <summary>Texte retapé avec des couleurs : écrit par-dessus la case (une zone de saisie ne sait écrire qu'en une couleur).</summary>
+    public void RefreshColors()
+    {
+        foreach (var (f, tb) in _boxes) DrawColors(f, tb, tb.FocusState != FocusState.Unfocused);
+    }
+
+    private void DrawColors(Field f, TextBox tb, bool focused)
+    {
+        bool show = !focused && f.IsModified && f.Colors.Count > 0 && f.Text.Length > 0;
+        tb.Foreground = show ? Clear : Ink;
+        if (!show)
+        {
+            if (_colorTexts.Remove(f, out var old)) _colorLayer.Children.Remove(old);
+            return;
+        }
+        if (!_colorTexts.TryGetValue(f, out var block))
+        {
+            block = new TextBlock { FontFamily = new FontFamily("Times New Roman"), IsHitTestVisible = false };
+            _colorTexts[f] = block;
+            _colorLayer.Children.Add(block);
+        }
+        block.Inlines.Clear();
+        foreach (var (start, end, color) in Strikes.ColorRuns(f))
+        {
+            var (r, g, b) = Strikes.TextRgb(color);
+            block.Inlines.Add(new Run { Text = f.Text[start..end].Replace('\n', '\r'), Foreground = new SolidColorBrush(ColorHelper.FromArgb(255, r, g, b)) });
+        }
+        block.FontSize = tb.FontSize;
+        block.FontWeight = tb.FontWeight;
+        block.TextAlignment = tb.TextAlignment;
+        block.TextWrapping = TextWrap.IsMultiline(f) ? TextWrapping.Wrap : TextWrapping.NoWrap;
+        block.LineHeight = LineHeightRatio * tb.FontSize;
+        block.LineStackingStrategy = LineStackingStrategy.BlockLineHeight;
+        block.Padding = tb.Padding;
+        block.Width = tb.Width;
+        block.Height = tb.Height;
+        Canvas.SetLeft(block, Canvas.GetLeft(tb));
+        Canvas.SetTop(block, Canvas.GetTop(tb));
+    }
+
+    /// <summary>Traits des morceaux barrés, posés par-dessus le texte (scan ou texte retapé).</summary>
+    public void RefreshStrikes()
+    {
+        _strikeLayer.Children.Clear();
+        foreach (var (f, (cell, entry)) in _place)
+        {
+            bool bold = TextPlacement.IsBold(entry.Line);
+            double size = BaseFontSize(f, PageLayout.BaseBox(entry.Line, f).Height, bold);
+            foreach (var g in TextPlacement.StrikeSegments(entry.Line, f, size, (s, z) => Measure(s, z, bold)))
+            {
+                var (r, gr, b) = TextPlacement.Rgb(g.Color);
+                var bar = new Rectangle { Width = g.X1 - g.X0, Height = g.Thickness, Fill = new SolidColorBrush(ColorHelper.FromArgb(255, r, gr, b)) };
+                Canvas.SetLeft(bar, g.X0 + cell.Dx);
+                Canvas.SetTop(bar, g.Y + cell.Dy - g.Thickness / 2);
+                _strikeLayer.Children.Add(bar);
+            }
+        }
+    }
+
+    // ---------- Loupe, cadre, case suivante ----------
+
+    /// <summary>Pendant l'édition, l'original de la case est montré en loupe juste au-dessus.</summary>
     private void ShowLoupe(Field f)
     {
         if (_bitmap is null) return;
-        var b = RectD.FromEdges(Math.Max(0, f.Box.Left - 4), Math.Max(0, f.Box.Top - 2),
-                                Math.Min(Page.Width, f.Box.Right + 4), Math.Min(Page.Height, f.Box.Bottom + 2));
+        var box = _place[f].Cell.Box;
+        var b = RectD.FromEdges(Math.Max(0, box.Left - 4), Math.Max(0, box.Top - 2), Math.Min(_view.Width, box.Right + 4), Math.Min(_view.Height, box.Bottom + 2));
         var holder = new Canvas { Width = b.Width, Height = b.Height, Clip = new RectangleGeometry { Rect = new Rect(0, 0, b.Width, b.Height) } };
-        var img = new Image { Source = _bitmap, Width = Page.Width, Height = Page.Height, Stretch = Stretch.Fill };
+        var img = new Image { Source = _bitmap, Width = _view.Width, Height = _view.Height, Stretch = Stretch.Fill };
         Canvas.SetLeft(img, -b.X);
         Canvas.SetTop(img, -b.Y);
         holder.Children.Add(img);
@@ -585,79 +772,36 @@ public sealed class PageView
         double height = (b.Height + 20) * scale;
         double top = b.Top - height - 6;
         if (top < 0) top = b.Bottom + 6;
-        Canvas.SetLeft(_loupe, Math.Max(0, Math.Min(b.Left, Page.Width - (b.Width + 4) * scale)));
+        Canvas.SetLeft(_loupe, Math.Max(0, Math.Min(b.Left, _view.Width - (b.Width + 4) * scale)));
         Canvas.SetTop(_loupe, top);
         _loupe.Visibility = Visibility.Visible;
     }
 
     private void ShowFrame(Field f)
     {
-        _focusFrame.Width = f.Box.Width + 4;
-        _focusFrame.Height = f.Box.Height + 4;
-        Canvas.SetLeft(_focusFrame, f.Box.X - 2);
-        Canvas.SetTop(_focusFrame, f.Box.Y - 2);
+        var box = _place[f].Cell.Box;
+        _focusFrame.Width = box.Width + 4;
+        _focusFrame.Height = box.Height + 4;
+        Canvas.SetLeft(_focusFrame, box.X - 2);
+        Canvas.SetTop(_focusFrame, box.Y - 2);
         _focusFrame.Visibility = Visibility.Visible;
     }
 
     /// <summary>Entrée : passe à la case suivante de la même colonne (saisie d'une colonne de valeurs).</summary>
     private void FocusNextInColumn(Field f)
     {
-        var column = Page.Tables.SelectMany(t => t.Rows).SelectMany(r => r.Lines).SelectMany(l => l.Cells)
-            .Where(c => c.Column == f.Column && _boxes.ContainsKey(c)).ToList();
+        var column = _place.Where(p => p.Key.Column == f.Column && _boxes.ContainsKey(p.Key)).OrderBy(p => p.Value.Cell.Box.Y).Select(p => p.Key).ToList();
         int i = column.IndexOf(f);
         if (i >= 0 && i + 1 < column.Count) _boxes[column[i + 1]].Focus(FocusState.Programmatic);
     }
 
-    // ---------- Repères : type de ligne, zones verrouillées ----------
-
-    private void AddBadge(PrintedLine line)
-    {
-        if (line.Kind == LineKind.Article) return;
-        var (letter, color) = line.Kind switch
-        {
-            LineKind.Titre => ("T", ColorHelper.FromArgb(255, 0, 103, 192)),
-            LineKind.Total => ("Σ", ColorHelper.FromArgb(255, 16, 124, 16)),
-            LineKind.EnTete => ("E", ColorHelper.FromArgb(255, 96, 96, 96)),
-            _ => ("×", ColorHelper.FromArgb(255, 180, 40, 40)),
-        };
-        var badge = new Border
-        {
-            Width = 24, Height = 24, CornerRadius = new CornerRadius(12),
-            Background = new SolidColorBrush(color),
-            Child = new TextBlock
-            {
-                Text = letter, FontSize = 14, FontWeight = FontWeights.Bold, Foreground = Paper,
-                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
-            },
-        };
-        Canvas.SetLeft(badge, 6);
-        Canvas.SetTop(badge, line.Bounds.CenterY - 12);
-        _gutter.Children.Add(badge);
-    }
-
-    private void AddLockZone(RectD z)
-    {
-        var rect = new Rectangle
-        {
-            Width = z.Width, Height = z.Height, Fill = LockFill, Stroke = LockStroke, StrokeThickness = 2,
-            StrokeDashArray = new DoubleCollection { 4, 3 },
-        };
-        Canvas.SetLeft(rect, z.X);
-        Canvas.SetTop(rect, z.Y);
-        _overlayLayer.Children.Add(rect);
-        _lockMarks.Add(rect);
-        var icon = new FontIcon { Glyph = "", FontSize = 18, Foreground = LockStroke };
-        Canvas.SetLeft(icon, z.X + 4);
-        Canvas.SetTop(icon, z.Y + 4);
-        _overlayLayer.Children.Add(icon);
-        _lockMarks.Add(icon);
-    }
-
+    /// <summary>Pages TXT/CSV/XLSX : le quadrillage du tableau, tel qu'affiché.</summary>
     private Canvas DrawGrid()
     {
         var c = new Canvas();
-        foreach (var t in Page.Tables)
+        foreach (var t in _view.Tables)
         {
+            if (t.RowYs.Count == 0 || t.ColumnXs.Count == 0) continue;
             double top = t.RowYs[0], bottom = t.RowYs[^1], left = t.ColumnXs[0], right = t.ColumnXs[^1];
             foreach (var x in t.ColumnXs) c.Children.Add(new Line { X1 = x, X2 = x, Y1 = top, Y2 = bottom, Stroke = Ink, StrokeThickness = 1.5 });
             foreach (var y in t.RowYs) c.Children.Add(new Line { X1 = left, X2 = right, Y1 = y, Y2 = y, Stroke = Ink, StrokeThickness = 1.5 });
@@ -693,11 +837,14 @@ public sealed class PageView
         _rubber.Visibility = Visibility.Collapsed;
 
         var b = e.GetCurrentPoint(_inputLayer).Position;
-        var zone = RectD.FromEdges(Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Max(a.X, b.X), Math.Max(a.Y, b.Y));
+        // Écran → page d'origine (des rangées ont pu bouger).
+        int? y0 = _unmapY((int)Math.Round(Math.Min(a.Y, b.Y))), y1 = _unmapY((int)Math.Round(Math.Max(a.Y, b.Y)));
+        if (y0 is null || y1 is null) return;
+        var zone = RectD.FromEdges(Math.Min(a.X, b.X), y0.Value, Math.Max(a.X, b.X), y1.Value);
         bool changed;
         BeforeChange?.Invoke(this);
         if (zone.Width < 8 && zone.Height < 8)
-            changed = PageEdits.RemoveLockZoneAt(Page, b.X, b.Y);
+            changed = PageEdits.RemoveLockZoneAt(Page, b.X, _unmapY((int)Math.Round(b.Y)) ?? -1);
         else
         {
             int before = Page.LockZones.Count;

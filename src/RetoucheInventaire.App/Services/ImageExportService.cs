@@ -21,13 +21,30 @@ public static class ImageExportService
 {
     private const double LineHeightRatio = 1.15;
 
+    /// <summary>Image d'une page avant les corrections : colonne des lots tracée, écriture d'origine mise en couleur.</summary>
+    public static Raster PageRaster(ModelPage page, Raster stretched, bool lotFrame = true)
+    {
+        var device = CanvasDevice.GetSharedDevice();
+        var image = lotFrame && LotColumn.FramedTables(page).Count > 0 ? LotColumn.Draw(stretched, page) : stretched;
+        var rects = new List<(int, int, int, int, string)>();
+        foreach (var line in page.AllLines())
+        {
+            bool bold = TextPlacement.IsBold(line);
+            foreach (var f in line.Cells.Where(c => c.Colors.Count > 0))
+                rects.AddRange(TextPlacement.ColorRects(line, f, BaseSize(device, f, PageLayout.BaseBox(line, f).Height, bold), (t, z) => Width(device, t, z, bold)));
+        }
+        return ImageExporter.Tint(image, rects);
+    }
+
     /// <summary>Dessine les cases modifiées sur la page redressée (Win2D, même mise en page qu'à l'écran).</summary>
     public static Raster RenderEdits(ModelPage page, Raster flat, bool lotFrame = true)
     {
         var device = CanvasDevice.GetSharedDevice();
         var framed = lotFrame ? LotColumn.FramedTables(page) : new List<Table>();
-        var bgra = (framed.Count > 0 ? LotColumn.Draw(flat, page) : flat).ToBgra();
+        var bgra = PageRaster(page, flat, lotFrame).ToBgra();
+        var original = flat.ToBgra();
         using var bitmap = CanvasBitmap.CreateFromBytes(device, bgra.Data, bgra.Width, bgra.Height, DirectXPixelFormat.B8G8R8A8UIntNormalized, 96);
+        using var source = CanvasBitmap.CreateFromBytes(device, original.Data, original.Width, original.Height, DirectXPixelFormat.B8G8R8A8UIntNormalized, 96);
         using var target = new CanvasRenderTarget(device, bgra.Width, bgra.Height, 96);
         using (var ds = target.CreateDrawingSession())
         {
@@ -37,48 +54,60 @@ public static class ImageExportService
             foreach (var line in page.AllLines())
                 foreach (var f in line.Cells.Where(edited.Contains))
                 {
-                    var (r, g, b) = ImageExporter.PaperColor(flat, f.Box);
-                    ds.FillRectangle(new Rect(f.Box.X, f.Box.Y, f.Box.Width, f.Box.Height), ColorHelper.FromArgb(255, r, g, b));
+                    // Fond : papier, ou trame grise de la rangée (totaux, en-têtes) répétée.
+                    if (ImageExporter.CleanPatch(flat, page, line, f) is RectD patch)
+                    {
+                        for (double x = f.Box.X; x < f.Box.Right; x += patch.Width)
+                        {
+                            double w = Math.Min(patch.Width, f.Box.Right - x);
+                            ds.DrawImage(source, new Rect(x, f.Box.Y, w, Math.Min(patch.Height, f.Box.Height)), new Rect(patch.X, patch.Y, w, Math.Min(patch.Height, f.Box.Height)));
+                        }
+                    }
+                    else
+                    {
+                        var (r, g, b) = ImageExporter.PaperColor(flat, f.Box);
+                        ds.FillRectangle(new Rect(f.Box.X, f.Box.Y, f.Box.Width, f.Box.Height), ColorHelper.FromArgb(255, r, g, b));
+                    }
                     if (f.Text.Trim().Length == 0) continue;
 
                     // Même mise en page qu'à l'écran : désignation sur plusieurs lignes à la taille de l'imprimé,
-                    // valeurs sur une ligne (réduites si besoin).
+                    // valeurs sur une ligne (réduites si besoin) ; gras sur les totaux et en-têtes.
+                    bool bold = TextPlacement.IsBold(line);
                     var bb = PageLayout.BaseBox(line, f);
-                    double size = BaseSize(device, f, bb.Height);
-                    double avail = Math.Max(4, f.Box.Width - f.Indent - 3);
-                    List<string> lines;
-                    if (TextWrap.IsMultiline(f))
-                        lines = TextWrap.Wrap(f.Text, avail, t => Width(device, t, size));
-                    else
-                    {
-                        while (size > 5 && Width(device, f.Text, size) > avail) size -= 0.5;
-                        lines = [f.Text];
-                    }
-                    double center = f.Ink.IsEmpty ? bb.CenterY : f.Ink.CenterY;
-                    double top = Math.Clamp(center - 0.58 * size, bb.Top, Math.Max(bb.Top, bb.Bottom - LineHeightRatio * size));
+                    var (size, lines, top) = TextPlacement.Layout(line, f, f.Text, BaseSize(device, f, bb.Height, bold), (t, z) => Width(device, t, z, bold));
                     using var clip = ds.CreateLayer(1f, new Rect(f.Box.X, f.Box.Y, f.Box.Width, f.Box.Height));
+                    int cursor = 0;
                     for (int i = 0; i < lines.Count; i++)
                     {
-                        using var layout = Layout(device, lines[i], size);
-                        double w = layout.LayoutBounds.Width;
-                        double x = f.Align switch
+                        string text = lines[i];
+                        int at = f.Text.IndexOf(text, cursor, StringComparison.Ordinal);
+                        int start = at < 0 ? cursor : at;
+                        cursor = start + text.Length;
+                        double x = TextPlacement.LineX(f, Width(device, text, size, bold));
+                        double y = top + i * LineHeightRatio * size;
+                        // Morceaux en couleur (rouge, bleu, vert), le reste en noir.
+                        foreach (var (a, e, color) in Strikes.ColorRuns(f, start, start + text.Length))
                         {
-                            TextAlign.Right => f.Box.Right - f.Indent - w,
-                            TextAlign.Center => f.Box.X + (f.Box.Width - w) / 2,
-                            _ => f.Box.X + f.Indent,
-                        };
-                        ds.DrawTextLayout(layout, (float)x, (float)(top + i * LineHeightRatio * size), Colors.Black);
+                            string part = text[(a - start)..(e - start)];
+                            var (cr, cg, cb) = Strikes.TextRgb(color);
+                            using var layout = Layout(device, part, size, bold);
+                            ds.DrawTextLayout(layout, (float)x, (float)y, ColorHelper.FromArgb(255, cr, cg, cb));
+                            x += Width(device, part, size, bold);
+                        }
                     }
                 }
 
             // Texte barré : un trait fin au milieu des lettres, rouge ou noir.
             foreach (var line in page.AllLines())
+            {
+                bool bold = TextPlacement.IsBold(line);
                 foreach (var f in line.Cells)
-                    foreach (var g in TextPlacement.StrikeSegments(line, f, BaseSize(device, f, PageLayout.BaseBox(line, f).Height), (t, size) => Width(device, t, size)))
+                    foreach (var g in TextPlacement.StrikeSegments(line, f, BaseSize(device, f, PageLayout.BaseBox(line, f).Height, bold), (t, z) => Width(device, t, z, bold)))
                     {
                         var (sr, sg, sb) = TextPlacement.Rgb(g.Color);
                         ds.FillRectangle(new Rect(g.X0, g.Y - g.Thickness / 2, g.X1 - g.X0, g.Thickness), ColorHelper.FromArgb(255, sr, sg, sb));
                     }
+            }
 
             // Numéros de lot : centrés dans la colonne, à la hauteur de l'objet, même taille que son texte, en noir.
             var labels = Lots.Labels(page);
@@ -92,13 +121,13 @@ public static class ImageExportService
                         ds.FillRectangle(new Rect(box.X, box.Y, box.Width, box.Height), ColorHelper.FromArgb(255, pr, pg, pb));
                     }
                     var c0 = line.Cells[0];
-                    double size = Math.Max(5, Math.Min(BaseSize(device, c0, c0.Box.Height - line.Extra), box.Height / LineHeightRatio));
-                    CanvasTextLayout layout = Layout(device, line.Lot, size);
+                    double size = Math.Max(5, Math.Min(BaseSize(device, c0, c0.Box.Height - line.Extra, false), box.Height / LineHeightRatio));
+                    CanvasTextLayout layout = Layout(device, line.Lot, size, false);
                     while (size > 5 && layout.LayoutBounds.Width > box.Width - 2)
                     {
                         layout.Dispose();
                         size -= 0.5;
-                        layout = Layout(device, line.Lot, size);
+                        layout = Layout(device, line.Lot, size, false);
                     }
                     using (layout)
                     {
@@ -111,24 +140,26 @@ public static class ImageExportService
         return new Raster(bgra.Width, bgra.Height, 4, target.GetPixelBytes());
     }
 
-    private static CanvasTextLayout Layout(CanvasDevice device, string text, double size) =>
-        new(device, text, new CanvasTextFormat { FontFamily = "Times New Roman", FontSize = (float)size, WordWrapping = CanvasWordWrapping.NoWrap }, float.MaxValue, float.MaxValue);
+    private static CanvasTextLayout Layout(CanvasDevice device, string text, double size, bool bold) =>
+        new(device, text, new CanvasTextFormat
+        {
+            FontFamily = "Times New Roman", FontSize = (float)size, WordWrapping = CanvasWordWrapping.NoWrap,
+            FontWeight = bold ? Microsoft.UI.Text.FontWeights.Bold : Microsoft.UI.Text.FontWeights.Normal,
+        }, float.MaxValue, float.MaxValue);
 
     /// <summary>Même règle qu'à l'écran : taille qui redonne la largeur du texte imprimé.</summary>
-    private static double Width(CanvasDevice device, string text, double size)
+    private static double Width(CanvasDevice device, string text, double size, bool bold)
     {
-        using var layout = Layout(device, text.Length == 0 ? " " : text, size);
+        using var layout = Layout(device, text.Length == 0 ? " " : text, size, bold);
         return layout.LayoutBounds.Width;
     }
 
-    private static double BaseSize(CanvasDevice device, Field f) => BaseSize(device, f, f.Box.Height);
-
-    private static double BaseSize(CanvasDevice device, Field f, double boxHeight)
+    private static double BaseSize(CanvasDevice device, Field f, double boxHeight, bool bold)
     {
         double size = f.FontSize;
         if (!f.Ink.IsEmpty && f.OriginalText.Length > 0)
         {
-            using var reference = Layout(device, f.OriginalText, 100);
+            using var reference = Layout(device, f.OriginalText, 100, bold);
             double w100 = reference.LayoutBounds.Width;
             if (w100 > 0) size = Math.Clamp(100 * f.Ink.Width / w100, 0.7 * f.FontSize, 1.3 * f.FontSize);
         }
