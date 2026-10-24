@@ -81,6 +81,8 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock x:Name="EditInfo" FontSize="14" Opacity="0.7" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
             <Button x:Name="KindButton" Grid.Column="1" Style="{StaticResource PillButton}" Click="Kind_Click"
@@ -96,6 +98,18 @@
                     <FontIcon Glyph="&#xE7A7;" FontSize="16" />
                     <TextBlock Text="Rétablir" />
                 </StackPanel>
+            </Button>
+            <!-- Barrer : la sélection (toute la case sans sélection) ; même bouton pour enlever le trait. -->
+            <Button x:Name="StrikeButton" Grid.Column="3" Style="{StaticResource PillButton}" Click="Strike_Click" AllowFocusOnInteraction="False"
+                    ToolTipService.ToolTip="Barrer le texte sélectionné (toute la case sans sélection)">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE8DE;" FontSize="16" />
+                    <TextBlock Text="Barrer" />
+                </StackPanel>
+            </Button>
+            <Button x:Name="StrikeColorButton" Grid.Column="4" Style="{StaticResource RoundButton}" Click="StrikeColor_Click" AllowFocusOnInteraction="False"
+                    ToolTipService.ToolTip="Couleur du trait : rouge ou noir">
+                <Ellipse x:Name="StrikeDot" Width="18" Height="18" Fill="#FFD40000" />
             </Button>
         </Grid>
 

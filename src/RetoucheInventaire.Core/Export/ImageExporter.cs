@@ -14,6 +14,10 @@ public static class ImageExporter
     public static List<Field> EditedFields(Page page) =>
         page.AllFields().Where(f => f.IsModified && !f.Locked).ToList();
 
+    /// <summary>Champs qui portent un trait (texte barré).</summary>
+    public static List<Field> StruckFields(Page page) =>
+        page.AllFields().Where(f => f.Strikes.Count > 0 && !f.Locked).ToList();
+
     /// <summary>
     /// Couleur du papier autour d'une case : moyenne des pixels clairs de son pourtour,
     /// pour que le fond posé sous le nouveau texte se fonde dans la photo (pas de blanc pur).
@@ -46,7 +50,7 @@ public static class ImageExporter
         var src = orientedSource.ToBgra();
         var edited = editedPage.ToBgra();
         var output = new Raster(src.Width, src.Height, 4, (byte[])src.Data.Clone());
-        var boxes = EditedFields(page).Select(f => f.Box).Concat(LotColumn.Regions(page, lotFrame)).ToList();
+        var boxes = EditedFields(page).Concat(StruckFields(page)).Select(f => f.Box).Concat(LotColumn.Regions(page, lotFrame)).ToList();
         if (boxes.Count == 0) return output;
 
         var crop = page.Crop ?? Quad.FullImage(src.Width, src.Height);

@@ -17,6 +17,7 @@ const ASSETS = [
   'core/ocrprep.js',
   'core/rules.js',
   'core/store.js',
+  'core/strikes.js',
   'icons/apple-touch-icon.png',
   'icons/icon-192.png',
   'icons/icon-512.png',

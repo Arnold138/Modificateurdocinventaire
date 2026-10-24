@@ -6,7 +6,8 @@ import { isModified, addLockZone, removeLockZoneAt } from '../core/model.js';
 import { paperColor } from '../core/exports.js';
 import { lotLabels, canAddLot } from '../core/lots.js';
 import { framedTables } from '../core/lotcolumn.js';
-import { rasterToCanvas, freeCanvas, font, lotSize, textLayout, isMultiline, LINE_HEIGHT } from '../services/canvas.js';
+import { rasterToCanvas, freeCanvas, font, lotSize, textLayout, isMultiline, LINE_HEIGHT, strikeSegments } from '../services/canvas.js';
+import { adjustStrikes } from '../core/strikes.js';
 import { baseBox } from '../core/layout.js';
 
 const BADGES = { Titre: ['T', '#0067c0'], Total: ['Σ', '#107c10'], EnTete: ['E', '#606060'], Ignoree: ['×', '#b42828'] };
@@ -42,6 +43,8 @@ export class PageView {
     } else this.drawGrid();
     this.fields = el('div', 'layer', this.root);
     this.lots = el('div', 'layer lots', this.root);
+    this.strikes = el('div', 'layer strikes', this.root);
+    this.selection = null; // dernière sélection dans une case (pour « Barrer »)
     this.overlay = el('div', 'layer overlay', this.root);
     this.lockpad = el('div', 'layer lockpad', this.root);
     this.root.addEventListener('pointerdown', () => onTouch?.(this), true);
@@ -159,6 +162,7 @@ export class PageView {
   setLockMode(on) { this.lockpad.classList.toggle('active', on); }
 
   revert(f) {
+    adjustStrikes(f, f.Text, f.OriginalText);
     f.Text = f.OriginalText;
     const input = this.inputs.get(f);
     if (input) { input.value = f.Text; this.layout(input, f); this.visual(input, f, document.activeElement === input); }
@@ -181,6 +185,22 @@ export class PageView {
         }
     this.loupe = el('div', 'loupe', this.overlay);
     this.refreshLots();
+    this.refreshStrikes();
+  }
+
+  /** Traits des morceaux barrés, posés par-dessus le texte (scan ou texte retapé). */
+  refreshStrikes() {
+    this.strikes.replaceChildren();
+    for (const [f, line] of this.lineOf)
+      for (const g of strikeSegments(line, f)) {
+        const d = el('div', 'strike', this.strikes);
+        Object.assign(d.style, { left: g.x0 + 'px', width: g.x1 - g.x0 + 'px', top: g.y - g.thick / 2 + 'px', height: g.thick + 'px', background: g.color });
+      }
+  }
+
+  /** Morceau sélectionné dans la case (vide : toute la case). */
+  selectionFor(f) {
+    return this.selection?.f === f ? this.selection : { f, start: 0, end: 0 };
   }
 
   addField(f) {
@@ -200,11 +220,16 @@ export class PageView {
 
     input.addEventListener('focus', () => { this.visual(input, f, true); this.showLoupe(f); this.cb.onFocus?.(this, f); });
     input.addEventListener('blur', () => { this.visual(input, f, false); this.loupe.style.display = 'none'; });
+    const remember = () => { this.selection = { f, start: input.selectionStart ?? 0, end: input.selectionEnd ?? 0 }; };
+    for (const ev of ['select', 'keyup', 'pointerup', 'focus']) input.addEventListener(ev, remember);
     input.addEventListener('input', () => {
+      adjustStrikes(f, f.Text, input.value);
       f.Text = input.value;
+      remember();
       this.layout(input, f);
       this.visual(input, f, true);
       this.cb.onEdited?.(this, f);
+      this.refreshStrikes();
     });
     if (!multi)
       input.addEventListener('keydown', (e) => {
@@ -247,6 +272,7 @@ export class PageView {
       this.overlay.prepend(d);
     }
     this.updateLots();
+    this.refreshStrikes();
   }
 
   visual(input, f, focused) {

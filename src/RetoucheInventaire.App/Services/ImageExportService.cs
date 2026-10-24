@@ -71,6 +71,15 @@ public static class ImageExportService
                     }
                 }
 
+            // Texte barré : un trait fin au milieu des lettres, rouge ou noir.
+            foreach (var line in page.AllLines())
+                foreach (var f in line.Cells)
+                    foreach (var g in TextPlacement.StrikeSegments(line, f, BaseSize(device, f, PageLayout.BaseBox(line, f).Height), (t, size) => Width(device, t, size)))
+                    {
+                        var (sr, sg, sb) = TextPlacement.Rgb(g.Color);
+                        ds.FillRectangle(new Rect(g.X0, g.Y - g.Thickness / 2, g.X1 - g.X0, g.Thickness), ColorHelper.FromArgb(255, sr, sg, sb));
+                    }
+
             // Numéros de lot : centrés dans la colonne, à la hauteur de l'objet, même taille que son texte, en noir.
             var labels = Lots.Labels(page);
             foreach (var table in page.Tables)

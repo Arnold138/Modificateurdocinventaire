@@ -15,17 +15,18 @@ L'écran est le même sur la Surface et sur iPhone/iPad : le projet et les pages
 2. **Changer de page** : flèches ◀ ▶ en haut, ou toucher « 3 / 10 » pour la liste des pages. Une seule page est affichée à la fois.
 3. Si une photo est mal cadrée : **Recadrer** (4 poignées) — agit sur la page affichée.
 4. **Toucher une case** : elle s'ouvre avec ce qui a été lu, et l'original s'affiche en loupe juste au-dessus. Taper la correction. Dans la désignation, le texte garde **la taille de l'imprimé** et passe à la ligne ; **Entrée** crée une nouvelle ligne dans la case ; la rangée s'agrandit et tout ce qui est en dessous descend proprement. Dans les colonnes de valeurs, **Entrée** passe à la case suivante de la colonne. La barre qui apparaît en bas montre le texte d'origine, le **type de ligne** (Article, Titre, Total, En-tête, Non exportée) et **Rétablir**.
-5. Badges à gauche des lignes : **T** titre, **Σ** total, **E** en-tête, **×** non exportée.
-6. **Lots** : **Numéroter** donne un numéro à chaque objet (1, 2, 3… à partir du nombre choisi), à la suite d'une page à l'autre ; les titres, totaux et en-têtes n'en ont pas.
+5. **Barrer** : sélectionner un morceau de texte dans la case (ou rien pour toute la case), puis **Barrer** dans la barre du bas ; le rond à côté choisit la couleur du trait (**rouge** ou **noir**). Trait fin au milieu des lettres, comme dans Word, posé directement sur l'écriture du scan (ou sur le texte retapé). Toucher **Barrer** à nouveau sur le même morceau enlève le trait. Le .txt garde le texte tel quel.
+6. Badges à gauche des lignes : **T** titre, **Σ** total, **E** en-tête, **×** non exportée.
+7. **Lots** : **Numéroter** donne un numéro à chaque objet (1, 2, 3… à partir du nombre choisi), à la suite d'une page à l'autre ; les titres, totaux et en-têtes n'en ont pas.
    - Les numéros sont écrits **sur la page**, dans une **colonne ajoutée à gauche du tableau** et tracée comme lui : trait à gauche, filets prolongés, même fond que chaque rangée (gris hachuré des en-têtes et totaux). Rien d'autre ne bouge. Option « Tracer la colonne dans le tableau » dans le menu Lots (sinon, numéros seuls).
    - Toucher un numéro pour le changer (80 → 81) : les suivants se recalent quand on quitte la case (82, 83…).
    - **0** = objet absent ou barré : il ne prend pas de numéro (12, 0, 13…) et, dans le .txt, il est retiré de sa place et regroupé à la fin de l'inventaire.
    - **Poubelle** à gauche d'une ligne : ce n'est pas un objet, son numéro disparaît et les suivants se décalent. **+** : ajouter un numéro sur une ligne oubliée.
    - **Synchroniser les lots** (au-dessus de la page, ou menu Lots) : recalcule tout ; les numéros tapés à la main sont gardés. **Enlever les numéros** les retire tous.
    - Ils sortent dans le .txt (1re colonne « Lot ») et sur le JPEG (la colonne tracée, identique à l'écran).
-7. **Verrouiller** : tracer un rectangle au doigt sur une signature ou un tampon (le texte hors tableau est déjà verrouillé). Toucher une zone orange la retire.
-8. **Exporter** → **images JPEG** (toutes, ou seulement la page affichée) : pour chaque photo ou page de PDF, « nom - modifié.jpg » identique à l'original, sauf les cases modifiées et les numéros de lot. Une page dont une rangée a été agrandie est exportée redressée (page scannée droite, un peu plus longue). → **Fichier texte (.txt)** : le texte en tableau (lignes, tabulations), construit à partir de ce que la reconnaissance a lu : vérifier les lignes non corrigées.
-9. Tout est enregistré en continu. Sur la Surface, menu du projet (en haut à gauche) → **Enregistrer sous…** une fois pour choisir le fichier projet.
+8. **Verrouiller** : tracer un rectangle au doigt sur une signature ou un tampon (le texte hors tableau est déjà verrouillé). Toucher une zone orange la retire.
+9. **Exporter** → **images JPEG** (toutes, ou seulement la page affichée) : pour chaque photo ou page de PDF, « nom - modifié.jpg » identique à l'original, sauf les cases modifiées et les numéros de lot. Une page dont une rangée a été agrandie est exportée redressée (page scannée droite, un peu plus longue). → **Fichier texte (.txt)** : le texte en tableau (lignes, tabulations), construit à partir de ce que la reconnaissance a lu : vérifier les lignes non corrigées.
+10. Tout est enregistré en continu. Sur la Surface, menu du projet (en haut à gauche) → **Enregistrer sous…** une fois pour choisir le fichier projet.
 
 ## Version iPad (application web, hors ligne)
 
@@ -87,7 +88,7 @@ Add-WindowsCapability -Online -Name "Language.OCR~~~fr-FR~0.0.1.0"
 dotnet run --project tests/RetoucheInventaire.Core.Tests -c Release
 ```
 
-34 tests sur tes 3 pages, dont les cas demandés :
+35 tests sur tes 3 pages, dont les cas demandés :
 - le .txt est en UTF-8 avec BOM, fins de ligne Windows, tabulations, sans caractère parasite, et se relit comme un tableau ;
 - modifier une ligne de titre (« SALLE LAVAGE : » → « SALLE DE BAIN : »), un chiffre (10 → 30) et un texte ne change la position ni la taille d'aucun champ ;
 - titres seuls, valeurs rattachées à l'article, une ligne par ligne imprimée, totaux, nombres sans espace, numéro de page non exporté ;

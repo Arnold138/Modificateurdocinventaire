@@ -2,6 +2,7 @@
 import { raster, toRgba } from '../core/imaging.js';
 import { Rect } from '../core/geometry.js';
 import { editedFields, paperColor } from '../core/exports.js';
+import { strikeColor } from '../core/strikes.js';
 import { allLines } from '../core/model.js';
 import { baseBox, extraFor } from '../core/layout.js';
 import { lotLabels } from '../core/lots.js';
@@ -95,6 +96,53 @@ export function textLayout(line, f, text = f.Text) {
   return { size, lines, top, baseHeight: b.Height };
 }
 
+/** Lignes de texte affichées et position de leur 1er caractère dans le texte de la case. */
+function linesWithOffsets(text, lines) {
+  let cursor = 0;
+  return lines.map((l) => {
+    const at = text.indexOf(l, cursor);
+    const start = at < 0 ? cursor : at;
+    cursor = start + l.length;
+    return { text: l, start };
+  });
+}
+
+/**
+ * Traits des morceaux barrés : { x0, x1, y, thick, color }.
+ * Texte d'origine non retouché : le trait est posé sur l'écriture du scan (position des lettres estimée
+ * d'après la largeur de l'encre) ; texte retapé : sur le texte écrit par l'app.
+ */
+export function strikeSegments(line, f) {
+  if (!f.Strikes?.length || f.Locked) return [];
+  const out = [];
+  const add = (x0, x1, baseline, size, color) => {
+    if (x1 - x0 < 0.5) return;
+    out.push({ x0, x1, y: baseline - 0.28 * size, thick: Math.max(1.5, 0.06 * size), color: strikeColor(color) });
+  };
+  const b = baseBox(line, f);
+  if (f.Text === f.OriginalText && !Rect.isEmpty(f.Ink) && !f.Text.includes('\n')) {
+    const size = baseSize(f, b.Height);
+    const total = measure(f.Text, size) || 1;
+    const k = f.Ink.Width / total;
+    const baseline = Rect.bottom(f.Ink) - (/[gjpqyç,;()]/.test(f.Text) ? 0.21 * size : 0);
+    for (const s of f.Strikes)
+      add(f.Ink.X + measure(f.Text.slice(0, s.Start), size) * k, f.Ink.X + measure(f.Text.slice(0, s.Start + s.Length), size) * k, baseline, size, s.Color);
+    return out;
+  }
+  const t = textLayout(line, f);
+  linesWithOffsets(f.Text, t.lines).forEach((l, i) => {
+    const w = measure(l.text, t.size);
+    const x = f.Align === 'Right' ? Rect.right(f.Box) - f.Indent - w : f.Align === 'Center' ? f.Box.X + (f.Box.Width - w) / 2 : f.Box.X + f.Indent;
+    const baseline = t.top + i * LINE_HEIGHT * t.size + 0.91 * t.size;
+    for (const s of f.Strikes) {
+      const a = Math.max(s.Start, l.start), e = Math.min(s.Start + s.Length, l.start + l.text.length);
+      if (e <= a) continue;
+      add(x + measure(l.text.slice(0, a - l.start), t.size), x + measure(l.text.slice(0, e - l.start), t.size), baseline, t.size, s.Color);
+    }
+  });
+  return out;
+}
+
 /** Hauteur à ajouter sous une ligne pour que le texte de toutes ses cases tienne. */
 export function lineExtra(line) {
   let extra = 0;
@@ -146,6 +194,13 @@ export function renderEdits(page, flat, lotFrame = true) {
       });
       ctx.restore();
     }
+  // Texte barré : un trait fin au milieu des lettres, rouge ou noir.
+  for (const line of allLines(page))
+    for (const f of line.Cells)
+      for (const g of strikeSegments(line, f)) {
+        ctx.fillStyle = g.color;
+        ctx.fillRect(g.x0, g.y - g.thick / 2, g.x1 - g.x0, g.thick);
+      }
   // Numéros de lot : centrés dans la colonne, à la hauteur de l'objet, même taille que son texte, en noir.
   for (const { line, table, box } of lotLabels(page)) {
     if (!framed.includes(table)) {

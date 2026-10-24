@@ -81,6 +81,12 @@ Application web installable (« Sur l'écran d'accueil »), sans étape de compi
 - `Stretch` produit l'image agrandie depuis l'image redressée d'origine (hauteur `BaseHeight`) : dans le tableau, pixels sombres de l'interligne (filets verticaux) prolongés, papier ailleurs. Identique à l'octet entre Windows et iPhone/iPad (vérifié avec la colonne des lots).
 - Export JPEG d'une page agrandie : la page redressée (plus de recomposition dans la photo d'origine).
 
+## Texte barré (`Model/Strikes.cs`, `Model/TextPlacement.cs`, `web/core/strikes.js`)
+
+- `Field.Strikes` : morceaux [Start, Start+Length[ du texte avec la couleur du trait (rouge, noir). `Toggle` barre ou débarre la sélection ; `Adjust` fait suivre les traits quand le texte change (préfixe/suffixe communs).
+- Position : texte non retouché → sur l'encre du scan (abscisses au prorata des largeurs mesurées) ; texte retapé → sur les lignes placées par `TextPlacement.Layout`. Trait à 0,28 taille au-dessus de la ligne de base, épaisseur 6 % de la taille.
+- Écran : calque de traits au-dessus des champs. Export : traits dessinés, case recopiée dans la photo d'origine. Le .txt n'est pas touché.
+
 ## Numéros de lot (`Model/Lots.cs`, `web/core/lots.js`)
 
 - Objet = première ligne d'article de chaque rangée (celle qui porte des valeurs si plusieurs). Titres, totaux, en-têtes, lignes ignorées : pas de numéro.

@@ -488,6 +488,27 @@ public static class Tests
         Equal("un chariot|gris et|blanc|de 180 cm", string.Join("|", lines), "lignes");
     }
 
+    public static void T_Texte_barre_suit_la_saisie()
+    {
+        var f = new Field { Text = "2 distributeurs de savon + 1 distributeur papier", OriginalText = "2 distributeurs de savon + 1 distributeur papier" };
+        int a = f.Text.IndexOf("+ 1");
+        Strikes.Toggle(f, a, f.Text.Length, Strikes.Red);
+        Check(Strikes.IsStruck(f, a, f.Text.Length) && !Strikes.IsStruck(f, 0, a), "morceau barré");
+        // Texte tapé au début : le trait suit.
+        string old = f.Text; f.Text = "Lot : " + old; Strikes.Adjust(f, old, f.Text);
+        Equal("+ 1 distributeur papier", f.Text.Substring(f.Strikes[0].Start, f.Strikes[0].Length), "trait décalé");
+        // Mot effacé au milieu du morceau barré : le trait raccourcit.
+        old = f.Text; f.Text = old.Replace("distributeur papier", "papier"); Strikes.Adjust(f, old, f.Text);
+        Equal("+ 1 papier", f.Text.Substring(f.Strikes[0].Start, f.Strikes[0].Length), "trait raccourci");
+        // Barrer à nouveau le même morceau : trait retiré.
+        Strikes.Toggle(f, f.Strikes[0].Start, f.Strikes[0].Start + f.Strikes[0].Length, Strikes.Red);
+        Equal(0, f.Strikes.Count, "trait retiré");
+        // Le .txt garde le texte barré tel quel.
+        Strikes.Toggle(f, 0, 0, Strikes.Black);
+        Equal(1, f.Strikes.Count, "toute la case barrée sans sélection");
+        Equal(Strikes.Black, f.Strikes[0].Color, "trait noir");
+    }
+
     public static void T_Nom_decompose_iphone_repare()
     {
         var nfd = "BEENDHI prisÃ©.pdf".Normalize(System.Text.NormalizationForm.FormD);

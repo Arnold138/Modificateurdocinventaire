@@ -64,6 +64,8 @@ public sealed class PageView
     private readonly Canvas _gutter = new() { Width = GutterWidth };
     public const double GutterWidth = 84;
     private readonly Canvas _lotLayer = new();
+    private readonly Canvas _strikeLayer = new() { IsHitTestVisible = false };
+    private (Field Field, int Start, int End)? _selection;
     private readonly Dictionary<PrintedLine, TextBox> _lotBoxes = [];
     private readonly Func<bool> _lotsActive, _lotFrame;
     private static readonly SolidColorBrush TrashFill = new(ColorHelper.FromArgb(255, 253, 236, 236));
@@ -114,6 +116,7 @@ public sealed class PageView
         Host.Children.Add(frame);
         Root.Children.Add(_fieldLayer);
         Root.Children.Add(_lotLayer);
+        Root.Children.Add(_strikeLayer);
         Root.Children.Add(_overlayLayer);
         Root.Children.Add(_inputLayer);
         Root.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, _) => Touched?.Invoke(this)), handledEventsToo: true);
@@ -145,7 +148,11 @@ public sealed class PageView
     public void Revert(Field field)
     {
         if (_boxes.TryGetValue(field, out var tb)) tb.Text = ToBox(field.OriginalText);
-        else field.Text = field.OriginalText;
+        else
+        {
+            Strikes.Adjust(field, field.Text, field.OriginalText);
+            field.Text = field.OriginalText;
+        }
     }
 
     public void Focus(Field field)
@@ -169,7 +176,27 @@ public sealed class PageView
         _overlayLayer.Children.Add(_rubber);
         _overlayLayer.Children.Add(_loupe);
         RefreshLots();
+        RefreshStrikes();
     }
+
+    /// <summary>Traits des morceaux barrés, posés par-dessus le texte (scan ou texte retapé).</summary>
+    public void RefreshStrikes()
+    {
+        _strikeLayer.Children.Clear();
+        foreach (var (f, line) in _lineOf)
+            foreach (var g in TextPlacement.StrikeSegments(line, f, BaseFontSize(f, PageLayout.BaseBox(line, f).Height), Measure))
+            {
+                var (r, gr, b) = TextPlacement.Rgb(g.Color);
+                var bar = new Rectangle { Width = g.X1 - g.X0, Height = g.Thickness, Fill = new SolidColorBrush(ColorHelper.FromArgb(255, r, gr, b)) };
+                Canvas.SetLeft(bar, g.X0);
+                Canvas.SetTop(bar, g.Y - g.Thickness / 2);
+                _strikeLayer.Children.Add(bar);
+            }
+    }
+
+    /// <summary>Morceau sélectionné dans la case (vide : toute la case).</summary>
+    public (int Start, int End) SelectionFor(Field f) =>
+        _selection is { } s && s.Field == f ? (s.Start, s.End) : (0, 0);
 
     /// <summary>Remplace l'image affichée (colonne des lots tracée ou non).</summary>
     public void SetDisplay(Raster display)
@@ -343,14 +370,17 @@ public sealed class PageView
             _focusFrame.Visibility = Visibility.Collapsed;
             _loupe.Visibility = Visibility.Collapsed;
         };
+        tb.SelectionChanged += (_, _) => _selection = (f, tb.SelectionStart, tb.SelectionStart + tb.SelectionLength);
         tb.TextChanged += (_, _) =>
         {
             string text = FromBox(tb.Text);
             if (f.Text == text) return;
+            Strikes.Adjust(f, f.Text, text);
             f.Text = text;
             Layout(tb, f);
             ApplyVisual(tb, f, tb.FocusState != FocusState.Unfocused);
             Edited?.Invoke(this, f);
+            RefreshStrikes();
         };
         if (!multi)
             tb.KeyDown += (_, e) =>
@@ -389,23 +419,8 @@ public sealed class PageView
     /// Mise en page du texte d'une case : désignation à la taille de l'imprimé sur plusieurs lignes,
     /// valeurs sur une ligne réduites si besoin ; 1re ligne à la hauteur du texte d'origine.
     /// </summary>
-    public (double Size, List<string> Lines, double Top) TextLayout(PrintedLine line, Field f, string text)
-    {
-        var b = PageLayout.BaseBox(line, f);
-        double size = BaseFontSize(f, b.Height);
-        var lines = new List<string> { text };
-        if (TextWrap.IsMultiline(f))
-            lines = TextWrap.Wrap(text, Math.Max(4, f.Box.Width - f.Indent - 3), s => Measure(s, size));
-        else
-        {
-            double avail = Math.Max(4, f.Box.Width - f.Indent - 3);
-            string t = text.Length == 0 ? " " : text;
-            while (size > 5 && Measure(t, size) > avail) size -= 0.5;
-        }
-        double center = f.Ink.IsEmpty ? b.CenterY : f.Ink.CenterY;
-        double top = Math.Clamp(center - 0.58 * size, b.Top, Math.Max(b.Top, b.Bottom - LineHeightRatio * size));
-        return (size, lines, top);
-    }
+    public (double Size, List<string> Lines, double Top) TextLayout(PrintedLine line, Field f, string text) =>
+        TextPlacement.Layout(line, f, text, BaseFontSize(f, PageLayout.BaseBox(line, f).Height), Measure);
 
     /// <summary>Hauteur à ajouter sous la ligne pour que le texte de toutes ses cases tienne.</summary>
     public int LineExtra(PrintedLine line)
@@ -466,6 +481,7 @@ public sealed class PageView
         _lockMarks.Clear();
         foreach (var zone in Page.LockZones) AddLockZone(zone);
         UpdateLots();
+        RefreshStrikes();
     }
 
     private static double Measure(string s, double size)

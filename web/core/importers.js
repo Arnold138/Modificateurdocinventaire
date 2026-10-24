@@ -128,7 +128,7 @@ export function buildDataPage(sourceName, rows) {
       line.Cells.push({
         Id: '', Column: c, OriginalText: text, Text: text, Ink: Rect.empty(),
         Box: Rect.fromEdges(xs[c] + 4, ys[r] + 4, xs[c + 1] - 4, ys[r + 1] - 4),
-        Align: c > 0 && numeric ? 'Right' : 'Left', Indent: 4, FontSize: FONT_SIZE, Locked: false,
+        Align: c > 0 && numeric ? 'Right' : 'Left', Indent: 4, FontSize: FONT_SIZE, Locked: false, Strikes: [],
       });
     }
     table.Rows.push({ Bounds: Rect.fromEdges(xs[0], ys[r], xs[xs.length - 1], ys[r + 1]), Lines: [line] });

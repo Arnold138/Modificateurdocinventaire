@@ -12,6 +12,7 @@ import { packProject, unpackProject, EXTENSION } from './core/store.js';
 import { objectLines, lotsActive, numberLots, clearLots, setLot, resyncLots, removeLot, addLot, lotLabels, repairName, naturalCompare } from './core/lots.js';
 import { unzipSync } from './vendor/fflate.js';
 import { stretch, setExtra, baseHeight, totalExtra } from './core/layout.js';
+import { toggleStrike, isStruck, RED, BLACK } from './core/strikes.js';
 import { drawLotColumns, framedTables, frameSignature, lotFrameEnabled } from './core/lotcolumn.js';
 import { decodeImage, pdfPages, isImageName, mimeOf } from './services/decode.js';
 import { recognize, warmUp } from './services/ocr.js';
@@ -748,6 +749,31 @@ function initButtons() {
     state.field = f;
     updateEditBar();
     status(`Type de ligne : ${kindLabel(hit.line.Kind)}.`);
+    scheduleSave();
+  };
+
+  // Barrer : sur la sélection (toute la case sans sélection) ; même bouton pour enlever le trait.
+  for (const id of ['btnStrike', 'btnStrikeColor', 'btnRevert', 'btnKind'])
+    $(id).addEventListener('pointerdown', (e) => e.preventDefault()); // garde la case active et sa sélection
+  const showColor = () => $('btnStrikeColor').classList.toggle('black', state.strikeColor === BLACK);
+  try { state.strikeColor = localStorage.getItem('strikeColor') === BLACK ? BLACK : RED; } catch { state.strikeColor = RED; }
+  showColor();
+  $('btnStrikeColor').onclick = () => {
+    state.strikeColor = state.strikeColor === RED ? BLACK : RED;
+    try { localStorage.setItem('strikeColor', state.strikeColor); } catch { /* sans importance */ }
+    showColor();
+    status(`Couleur du trait : ${state.strikeColor === RED ? 'rouge' : 'noir'}.`);
+  };
+  $('btnStrike').onclick = () => {
+    const f = state.field, view = state.view;
+    if (!f || !view) return;
+    const sel = view.selectionFor(f);
+    const [a, b] = sel.end > sel.start ? [sel.start, sel.end] : [0, f.Text.length];
+    const was = isStruck(f, a, b);
+    toggleStrike(f, a, b, state.strikeColor);
+    view.refreshStrikes();
+    const part = f.Text.slice(a, b).trim();
+    status(`${was ? 'Trait retiré' : 'Barré'} : « ${part.length > 40 ? part.slice(0, 40) + '…' : part} ».`);
     scheduleSave();
   };
 

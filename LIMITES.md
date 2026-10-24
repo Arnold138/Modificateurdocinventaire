@@ -50,6 +50,11 @@
 - L'écran (champ de saisie) et l'export coupent les lignes avec la même règle ; un mot peut exceptionnellement passer à la ligne à un endroit légèrement différent.
 - Recadrer une page relit le texte : les agrandissements de cette page sont perdus.
 
+## Texte barré
+
+- Sur un texte non retouché, le trait est posé sur l'écriture du scan : la position des lettres est estimée d'après la largeur de l'encre (police Times). Sur une police très différente, le trait peut commencer ou finir à une demi-lettre près.
+- Le .txt ne peut pas montrer un texte barré : il garde le texte tel quel (choix demandé). Pour sortir un objet de l'inventaire, mettre son lot à 0.
+
 ## Export texte
 
 - Le .txt reprend ce que la reconnaissance a lu : les lignes non touchées peuvent contenir ses erreurs (« march » pour « marches »).

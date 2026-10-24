@@ -18,7 +18,7 @@ export const newProject = (name = 'Inventaire') => ({ FormatVersion: 1, Name: na
 
 const newField = (props) => ({
   Id: '', Column: 0, OriginalText: '', Text: '', Ink: Rect.empty(), Box: Rect.empty(),
-  Align: 'Left', Indent: 0, FontSize: 12, Locked: false, ...props,
+  Align: 'Left', Indent: 0, FontSize: 12, Locked: false, Strikes: [], ...props,
 });
 
 export const isModified = (f) => f.Text !== f.OriginalText;

@@ -501,6 +501,8 @@ public sealed partial class MainWindow : Window
         KindButtonText.Text = PageEdits.Label(hit.Line.Kind);
         RevertButton.IsEnabled = !_busy && _currentField!.IsModified;
         KindButton.IsEnabled = !_busy;
+        StrikeButton.IsEnabled = !_busy;
+        _ = StrikeColor;
         string text = hit.Line.FirstText.Length > 48 ? hit.Line.FirstText[..48] + "…" : hit.Line.FirstText;
         EditInfo.Text = _currentField!.IsModified
             ? $"Original : « {(_currentField.OriginalText.Length > 0 ? _currentField.OriginalText : "(vide)")} »"
@@ -529,6 +531,48 @@ public sealed partial class MainWindow : Window
         _view.Revert(_currentField);
         AfterEdit(_view, _currentField);
         UpdateEditBar();
+        ScheduleAutosave();
+    }
+
+    private static readonly string StrikeColorFile = System.IO.Path.Combine(DataDir, "couleur-trait.txt");
+    private string? _strikeColor;
+
+    private string StrikeColor
+    {
+        get
+        {
+            if (_strikeColor is null)
+            {
+                try { _strikeColor = File.Exists(StrikeColorFile) && File.ReadAllText(StrikeColorFile).Trim() == Strikes.Black ? Strikes.Black : Strikes.Red; }
+                catch { _strikeColor = Strikes.Red; }
+                ShowStrikeColor();
+            }
+            return _strikeColor;
+        }
+    }
+
+    private void ShowStrikeColor() =>
+        StrikeDot.Fill = new SolidColorBrush(_strikeColor == Strikes.Black ? Colors.Black : ColorHelper.FromArgb(255, 212, 0, 0));
+
+    private void StrikeColor_Click(object sender, RoutedEventArgs e)
+    {
+        _strikeColor = StrikeColor == Strikes.Red ? Strikes.Black : Strikes.Red;
+        ShowStrikeColor();
+        try { Directory.CreateDirectory(DataDir); File.WriteAllText(StrikeColorFile, _strikeColor); } catch { /* sans importance */ }
+        SetStatus($"Couleur du trait : {(_strikeColor == Strikes.Red ? "rouge" : "noir")}.");
+    }
+
+    /// <summary>Barrer : la sélection (toute la case sans sélection) ; même bouton pour enlever le trait.</summary>
+    private void Strike_Click(object sender, RoutedEventArgs e)
+    {
+        if (_currentField is not { } f || _view is null) return;
+        var (start, end) = _view.SelectionFor(f);
+        if (end <= start) (start, end) = (0, f.Text.Length);
+        bool was = Strikes.IsStruck(f, start, end);
+        Strikes.Toggle(f, start, end, StrikeColor);
+        _view.RefreshStrikes();
+        string part = f.Text[start..end].Trim();
+        SetStatus($"{(was ? "Trait retiré" : "Barré")} : « {(part.Length > 40 ? part[..40] + "…" : part)} ».");
         ScheduleAutosave();
     }
 

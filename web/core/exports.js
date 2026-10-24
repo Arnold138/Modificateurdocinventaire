@@ -90,6 +90,9 @@ export const txtBlob = (text) => new Blob(['﻿' + text], { type: 'text/plain;ch
 
 export const editedFields = (page) => [...allFields(page)].filter((f) => isModified(f) && !f.Locked);
 
+/** Champs qui portent un trait (texte barré). */
+export const struckFields = (page) => [...allFields(page)].filter((f) => (f.Strikes?.length ?? 0) > 0 && !f.Locked);
+
 /** Couleur du papier autour d'une case (moyenne des pixels clairs du pourtour). */
 export function paperColor(image, box) {
   const samples = [];
@@ -117,7 +120,7 @@ export function paperColor(image, box) {
 export function composeIntoSource(orientedSource, page, editedPage, lotFrame = true) {
   const src = toRgba(orientedSource), edited = toRgba(editedPage);
   const out = raster(src.w, src.h, 4, new Uint8ClampedArray(src.data));
-  const boxes = [...editedFields(page).map((f) => f.Box), ...lotRegions(page, lotFrame)];
+  const boxes = [...editedFields(page), ...struckFields(page)].map((f) => f.Box).concat(lotRegions(page, lotFrame));
   if (boxes.length === 0) return out;
   const crop = page.Crop ?? Quad.full(src.w, src.h);
   const W = page.Width, H = page.Height;

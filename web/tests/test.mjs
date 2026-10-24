@@ -14,6 +14,7 @@ import { packProject, unpackProject } from '../core/store.js';
 import { numberLots, setLot, resyncLots, clearLots, lotsActive, objectLines, repairName, removeLot, addLot, canAddLot } from '../core/lots.js';
 import { drawLotColumns, frames } from '../core/lotcolumn.js';
 import { setExtra, stretch, extraFor } from '../core/layout.js';
+import { toggleStrike, isStruck, adjustStrikes } from '../core/strikes.js';
 import { isZeroLot } from '../core/lots.js';
 
 const FIX = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tests', 'fixtures');
@@ -244,6 +245,22 @@ test('Rangée qui grandit puis revient', () => {
 
 test('Nom de fichier iPhone (décomposé) réparé', () => {
   eq('BEENDHI prisé.pdf', repairName('BEENDHI prisÃ©.pdf'.normalize('NFD')), 'réparation');
+});
+
+test('Texte barré : suit la saisie, se retire, .txt inchangé', () => {
+  const p = threePages();
+  const l0 = lines(p);
+  const f = p.Pages[0].Tables[0].Rows.flatMap((r) => r.Lines).find((x) => x.Cells[0].Text.includes('distributeur papier')).Cells[0];
+  const a = f.Text.indexOf('+ 1');
+  toggleStrike(f, a, f.Text.length, 'red');
+  check(isStruck(f, a, f.Text.length) && !isStruck(f, 0, a), 'morceau barré');
+  eq(l0.join('|'), lines(p).join('|'), '.txt inchangé');
+  let old = f.Text; f.Text = 'Lot : ' + old; adjustStrikes(f, old, f.Text);
+  eq('+ 1 distributeur papier', f.Text.substr(f.Strikes[0].Start, f.Strikes[0].Length), 'trait décalé');
+  old = f.Text; f.Text = old.replace('distributeur papier', 'papier'); adjustStrikes(f, old, f.Text);
+  eq('+ 1 papier', f.Text.substr(f.Strikes[0].Start, f.Strikes[0].Length), 'raccourci');
+  toggleStrike(f, f.Strikes[0].Start, f.Strikes[0].Start + f.Strikes[0].Length, 'red');
+  eq(0, f.Strikes.length, 'retiré');
 });
 
 test('Nom de fichier abîmé réparé', () => {

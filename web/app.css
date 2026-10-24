@@ -80,9 +80,9 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 .loupe-label { font: 600 11px system-ui, sans-serif; color: var(--accent); padding: 2px 6px; background: var(--accent-soft); }
 
 /* Barre contextuelle de la case sélectionnée */
-.editbar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--surface); border-top: 1px solid var(--line); flex: none; }
+.editbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 12px; background: var(--surface); border-top: 1px solid var(--line); flex: none; }
 .editbar[hidden] { display: none; }
-.editinfo { flex: 1; font-size: 14px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.editinfo { flex: 1 1 140px; font-size: 14px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .pill { display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 14px; border-radius: 22px; background: var(--accent-soft); color: var(--accent); font-weight: 600; white-space: nowrap; }
 .pill svg { width: 20px; height: 20px; }
 
@@ -155,3 +155,10 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 
 /* Désignation sur plusieurs lignes : même taille d'écriture, la case s'agrandit vers le bas. */
 .field.multi { resize: none; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; padding-bottom: 0; }
+
+/* Texte barré : trait fin au milieu des lettres, rouge ou noir. */
+.layer.strikes { pointer-events: none; z-index: 3; }
+.strike { position: absolute; border-radius: 0.5px; }
+.strike-icon { font: 600 16px "Times New Roman", serif; text-decoration: line-through; text-decoration-color: #d40000; text-decoration-thickness: 2px; }
+.swatch #strikeDot { width: 18px; height: 18px; border-radius: 9px; display: block; background: #d40000; }
+.swatch.black #strikeDot { background: #000; }

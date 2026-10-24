@@ -51,6 +51,9 @@ public sealed class Field
 
     public bool Locked { get; set; }
 
+    /// <summary>Morceaux de texte barrés (trait rouge ou noir), voir <see cref="Strikes"/>.</summary>
+    public List<Strike> Strikes { get; set; } = [];
+
     [JsonIgnore] public bool IsModified => !string.Equals(Text, OriginalText, StringComparison.Ordinal);
 }
 
