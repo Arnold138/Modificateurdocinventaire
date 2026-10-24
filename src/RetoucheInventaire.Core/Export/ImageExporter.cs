@@ -41,12 +41,12 @@ public static class ImageExporter
     /// Recopie les cases modifiées (et les numéros de lot) de la page redressée (déjà retouchée par l'application)
     /// dans la photo d'origine orientée. Tout le reste de la photo est inchangé.
     /// </summary>
-    public static Raster ComposeIntoSource(Raster orientedSource, Page page, Raster editedPage)
+    public static Raster ComposeIntoSource(Raster orientedSource, Page page, Raster editedPage, bool lotFrame = true)
     {
         var src = orientedSource.ToBgra();
         var edited = editedPage.ToBgra();
         var output = new Raster(src.Width, src.Height, 4, (byte[])src.Data.Clone());
-        var boxes = EditedFields(page).Select(f => f.Box).Concat(Lots.Labels(page).Select(l => l.Box)).ToList();
+        var boxes = EditedFields(page).Select(f => f.Box).Concat(LotColumn.Regions(page, lotFrame)).ToList();
         if (boxes.Count == 0) return output;
 
         var crop = page.Crop ?? Quad.FullImage(src.Width, src.Height);

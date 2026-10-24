@@ -14,7 +14,7 @@ export const newPage = (props = {}) => ({
   ...props,
 });
 
-export const newProject = (name = 'Inventaire') => ({ FormatVersion: 1, Name: name, Pages: [] });
+export const newProject = (name = 'Inventaire') => ({ FormatVersion: 1, Name: name, LotFrame: true, Pages: [] });
 
 const newField = (props) => ({
   Id: '', Column: 0, OriginalText: '', Text: '', Ink: Rect.empty(), Box: Rect.empty(),

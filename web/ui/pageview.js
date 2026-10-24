@@ -4,19 +4,25 @@
 import { Rect } from '../core/geometry.js';
 import { isModified, addLockZone, removeLockZoneAt } from '../core/model.js';
 import { paperColor } from '../core/exports.js';
-import { lotLabels } from '../core/lots.js';
-import { rasterToCanvas, baseSize, fitSize, font } from '../services/canvas.js';
+import { lotLabels, canAddLot } from '../core/lots.js';
+import { framedTables } from '../core/lotcolumn.js';
+import { rasterToCanvas, freeCanvas, baseSize, fitSize, font, lotSize } from '../services/canvas.js';
 
 const BADGES = { Titre: ['T', '#0067c0'], Total: ['Σ', '#107c10'], EnTete: ['E', '#606060'], Ignoree: ['×', '#b42828'] };
 const el = (tag, cls, parent) => { const e = document.createElement(tag); if (cls) e.className = cls; parent?.appendChild(e); return e; };
 const px = (e, r) => Object.assign(e.style, { left: r.X + 'px', top: r.Y + 'px', width: r.Width + 'px', height: r.Height + 'px' });
 
 export class PageView {
-  /** @param page modèle ; @param image raster redressé (null pour TXT/CSV/XLSX) ; @param zoom fonction qui renvoie le zoom courant */
-  constructor(page, image, { onFocus, onEdited, onTouch, onLocks, onLot, zoom }) {
+  /**
+   * @param page modèle ; @param image raster redressé d'origine (null pour TXT/CSV/XLSX) ;
+   * display : image affichée (avec la colonne des lots tracée) ; zoom : fonction qui renvoie le zoom courant ;
+   * lotFrame : vrai si la colonne des lots est tracée.
+   */
+  constructor(page, image, { display, onFocus, onEdited, onTouch, onLocks, onLot, onLotRemove, onLotAdd, lotsActive, lotFrame, zoom }) {
     this.page = page;
     this.image = image;
-    this.cb = { onFocus, onEdited, onTouch, onLocks, onLot, zoom };
+    this.cb = { onFocus, onEdited, onTouch, onLocks, onLot, onLotRemove, onLotAdd, lotsActive, lotFrame, zoom };
+    this.lotInputs = new Map();
     this.inputs = new Map();
     this.base = new Map();
     this.paper = new Map();
@@ -28,11 +34,12 @@ export class PageView {
     this.root = el('div', 'page', this.row);
     Object.assign(this.root.style, { width: page.Width + 'px', height: page.Height + 'px' });
     if (image) {
-      this.canvas = rasterToCanvas(image);
+      this.canvas = rasterToCanvas(display ?? image);
       this.canvas.className = 'bg';
       this.root.appendChild(this.canvas);
     } else this.drawGrid();
     this.fields = el('div', 'layer', this.root);
+    this.lots = el('div', 'layer lots', this.root);
     this.overlay = el('div', 'layer overlay', this.root);
     this.lockpad = el('div', 'layer lockpad', this.root);
     this.root.addEventListener('pointerdown', () => onTouch?.(this), true);
@@ -42,25 +49,104 @@ export class PageView {
 
   /** Libère la mémoire de l'image (important sur iPhone/iPad). */
   dispose() {
-    if (this.canvas) { this.canvas.width = 0; this.canvas.height = 0; }
+    freeCanvas(this.canvas);
     this.row.remove();
   }
 
-  /** Champs « Lot » de la colonne de gauche, à la hauteur de chaque objet. */
+  /** Remplace l'image affichée (colonne des lots tracée ou non). */
+  setDisplay(display) {
+    if (!this.canvas || !display) return;
+    const c = rasterToCanvas(display);
+    c.className = 'bg';
+    this.canvas.replaceWith(c);
+    freeCanvas(this.canvas);
+    this.canvas = c;
+  }
+
+  /**
+   * Numéros de lot écrits sur la page, dans la colonne (modifiables au doigt), et colonne de gauche :
+   * type de ligne (T, Σ…), poubelle sur les lignes numérotées, « + » sur les autres.
+   */
   refreshLots() {
-    this.gutter.replaceChildren();
-    for (const { line, box } of lotLabels(this.page)) {
-      const input = el('input', 'lot', this.gutter);
+    const focused = [...this.lotInputs].find(([, i]) => i === document.activeElement)?.[0];
+    this.lots.replaceChildren();
+    this.lotInputs.clear();
+    const framed = this.cb.lotFrame?.() ? framedTables(this.page) : [];
+    for (const { line, table, box } of lotLabels(this.page)) {
+      const input = el('input', 'lotfield', this.lots);
       input.type = 'text';
       input.inputMode = 'numeric';
+      input.autocomplete = 'off';
       input.value = line.Lot;
       input.setAttribute('aria-label', 'Numéro de lot');
-      const h = Math.max(28, Math.min(40, box.Height + 8));
-      Object.assign(input.style, { top: Rect.cy(box) - h / 2 + 'px', height: h + 'px' });
-      const commit = () => { if (input.value.trim() !== line.Lot) this.cb.onLot?.(this, line, input.value); };
+      px(input, box);
+      input.style.font = font(lotSize(line, box));
+      input.style.lineHeight = box.Height + 'px';
+      input.style.background = framed.includes(table) || !this.image ? 'transparent' : this.paperOfBox(box);
+      let timer = null;
+      const commit = () => {
+        clearTimeout(timer);
+        if (input.value.trim() !== line.Lot) this.cb.onLot?.(this, line, input.value);
+      };
+      // Pendant la frappe, la suite se recale toute seule (petite pause après le dernier chiffre).
+      input.addEventListener('input', () => {
+        clearTimeout(timer);
+        if (input.value.trim().length > 0) timer = setTimeout(commit, 700);
+      });
       input.addEventListener('change', commit);
+      input.addEventListener('blur', commit);
       input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } });
+      this.lotInputs.set(line, input);
     }
+    if (focused && this.lotInputs.has(focused)) this.lotInputs.get(focused).focus({ preventScroll: true });
+    this.refreshGutter();
+  }
+
+  /** Après un recalcul : met les nouveaux numéros en place sans fermer le clavier si on est en train de taper. */
+  updateLots() {
+    const labels = lotLabels(this.page);
+    const same = labels.length === this.lotInputs.size && labels.every(({ line, box }) => {
+      const i = this.lotInputs.get(line);
+      return i && Math.abs(parseFloat(i.style.left) - box.X) < 0.5 && Math.abs(parseFloat(i.style.width) - box.Width) < 0.5;
+    });
+    if (!same) return this.refreshLots();
+    for (const { line, box } of labels) {
+      const i = this.lotInputs.get(line);
+      if (i !== document.activeElement) i.value = line.Lot;
+      i.style.font = font(lotSize(line, box));
+    }
+  }
+
+  refreshGutter() {
+    this.gutter.replaceChildren();
+    const active = this.cb.lotsActive?.() ?? false;
+    for (const t of this.page.Tables)
+      for (const line of t.Rows.flatMap((r) => r.Lines)) {
+        if (line.OutsideTable || line.Cells.length === 0) continue;
+        const b = line.Cells.reduce((r, f) => Rect.union(r, f.Box), Rect.empty());
+        const badge = BADGES[line.Kind];
+        if (badge) {
+          const d = el('div', 'badge', this.gutter);
+          d.textContent = badge[0];
+          d.style.background = badge[1];
+          d.style.top = Rect.cy(b) - 12 + 'px';
+        }
+        if (!active) continue;
+        const has = (line.Lot ?? '').length > 0;
+        if (!has && !canAddLot(line)) continue;
+        const btn = el('button', has ? 'gbtn trash' : 'gbtn add', this.gutter);
+        btn.innerHTML = `<svg><use href="#${has ? 'i-trash' : 'i-plus'}"/></svg>`;
+        btn.setAttribute('aria-label', has ? `Retirer le lot ${line.Lot}` : 'Ajouter un numéro de lot');
+        btn.title = has ? 'Pas un objet : retirer ce numéro (les suivants se décalent)' : 'Ajouter un numéro de lot sur cette ligne';
+        const h = Math.max(26, Math.min(40, b.Height + 6));
+        Object.assign(btn.style, { top: Rect.cy(b) - h / 2 + 'px', height: h + 'px' });
+        btn.onclick = () => (has ? this.cb.onLotRemove : this.cb.onLotAdd)?.(this, line);
+      }
+  }
+
+  paperOfBox(box) {
+    const [r, g, b] = paperColor(this.image, box);
+    return `rgb(${r},${g},${b})`;
   }
 
   refresh() {
@@ -88,7 +174,6 @@ export class PageView {
     for (const t of this.page.Tables)
       for (const row of t.Rows)
         for (const line of row.Lines) {
-          this.badge(t, line);
           for (const f of line.Cells) if (!f.Locked) this.addField(f);
         }
     this.loupe = el('div', 'loupe', this.overlay);
@@ -170,17 +255,6 @@ export class PageView {
     const col = this.page.Tables.flatMap((t) => t.Rows).flatMap((r) => r.Lines).flatMap((l) => l.Cells).filter((c) => c.Column === f.Column && this.inputs.has(c));
     const i = col.indexOf(f);
     if (i >= 0 && i + 1 < col.length) this.inputs.get(col[i + 1]).focus();
-  }
-
-  badge(table, line) {
-    const b = BADGES[line.Kind];
-    if (!b) return;
-    const d = el('div', 'badge', this.overlay);
-    d.textContent = b[0];
-    d.style.background = b[1];
-    const bounds = line.Cells.reduce((r, f) => Rect.union(r, f.Box), Rect.empty());
-    d.style.left = Math.max(2, table.Bounds.X - 30) + 'px';
-    d.style.top = Rect.cy(bounds) - 12 + 'px';
   }
 
   drawGrid() {

@@ -2,7 +2,8 @@
 import { Rect, Quad, pt } from './geometry.js';
 import { homography, homographyPts, toRgba, raster } from './imaging.js';
 import { allFields, firstText, isModified } from './model.js';
-import { lotsActive, lotLabels } from './lots.js';
+import { lotsActive } from './lots.js';
+import { lotRegions } from './lotcolumn.js';
 
 // ---------- Texte ----------
 
@@ -105,10 +106,10 @@ export function paperColor(image, box) {
  * Recopie les cases modifiées de la page redressée (déjà retouchée) dans la photo d'origine.
  * Tout le reste de la photo est inchangé, pixel pour pixel.
  */
-export function composeIntoSource(orientedSource, page, editedPage) {
+export function composeIntoSource(orientedSource, page, editedPage, lotFrame = true) {
   const src = toRgba(orientedSource), edited = toRgba(editedPage);
   const out = raster(src.w, src.h, 4, new Uint8ClampedArray(src.data));
-  const boxes = [...editedFields(page).map((f) => f.Box), ...lotLabels(page).map((l) => l.box)];
+  const boxes = [...editedFields(page).map((f) => f.Box), ...lotRegions(page, lotFrame)];
   if (boxes.length === 0) return out;
   const crop = page.Crop ?? Quad.full(src.w, src.h);
   const W = page.Width, H = page.Height;

@@ -1,21 +1,32 @@
-// Numéros de lot : un par objet (ligne d'article), continus d'une page à l'autre. Portage de Lots.cs.
+// Numéros de lot : un par objet, continus d'une page à l'autre ; poubelle et « + » par ligne. Portage de Lots.cs.
 import { Rect } from './geometry.js';
-import { allLines, lineBounds } from './model.js';
+import { allLines, lineBounds, firstText } from './model.js';
 
 const blank = (s) => s.trim().length === 0;
 
-/** Lignes d'objet dans l'ordre du document : la première ligne d'article de chaque rangée. */
+/** L'objet de la rangée selon la règle : la ligne d'article qui porte les valeurs, sinon la première. */
+function defaultPick(row) {
+  const articles = row.Lines.filter((l) => l.Kind === 'Article' && !l.OutsideTable);
+  if (articles.length === 0) return null;
+  const line = articles.find((l) => l.Cells.slice(1).some((c) => !blank(c.Text))) ?? articles[0];
+  return line.Cells.every((c) => blank(c.Text)) ? null : line;
+}
+
+const isObject = (line, pick) => !line.NoLot && !line.OutsideTable && (line === pick || (!!line.ForceLot && firstText(line).length > 0));
+
+/** Lignes d'objet dans l'ordre du document. */
 export function* objectLines(project) {
   for (const page of project.Pages)
     for (const table of page.Tables)
       for (const row of table.Rows) {
-        const articles = row.Lines.filter((l) => l.Kind === 'Article' && !l.OutsideTable);
-        if (articles.length === 0) continue;
-        const line = articles.find((l) => l.Cells.slice(1).some((c) => !blank(c.Text))) ?? articles[0];
-        if (line.Cells.every((c) => blank(c.Text))) continue;
-        yield { page, table, line };
+        const pick = defaultPick(row);
+        for (const line of row.Lines) if (isObject(line, pick)) yield { page, table, line };
       }
 }
+
+/** Ligne sans numéro à laquelle on peut en ajouter un (« + »). */
+export const canAddLot = (line) =>
+  (line.Lot ?? '') === '' && !line.OutsideTable && line.Kind !== 'EnTete' && line.Kind !== 'Ignoree' && firstText(line).length > 0;
 
 const everyLine = (project) => project.Pages.flatMap((p) => [...allLines(p)]);
 
@@ -41,6 +52,25 @@ export function setLot(project, line, value) {
   resyncLots(project);
 }
 
+/** Poubelle : cette ligne n'est pas un objet ; les numéros suivants se décalent. */
+export function removeLot(project, line) {
+  line.NoLot = true;
+  line.ForceLot = false;
+  line.Lot = '';
+  line.LotManual = false;
+  resyncLots(project);
+}
+
+/** « + » : cette ligne est un objet ; elle prend le numéro qui suit le précédent. */
+export function addLot(project, line) {
+  line.NoLot = false;
+  line.ForceLot = true;
+  line.Lot = '';
+  line.LotManual = false;
+  if (!lotsActive(project)) line.Lot = '1';
+  resyncLots(project);
+}
+
 export function resyncLots(project) {
   if (!lotsActive(project)) return;
   const objects = new Set([...objectLines(project)].map((o) => o.line));
@@ -54,17 +84,35 @@ export function resyncLots(project) {
   }
 }
 
-/** Emplacement du numéro dans la marge gauche de la page, à la hauteur de la ligne. */
-export function lotBox(table, line) {
-  const b = lineBounds(line);
-  const w = Math.min(70, Math.max(14, table.Bounds.X - 6));
-  const x = Math.max(1, table.Bounds.X - 4 - w);
-  const h = Math.max(8, b.Height);
-  return Rect.make(x, Rect.cy(b) - h / 2, w, h);
+// ---------- Emplacement : une colonne ajoutée à gauche de chaque tableau, dans la marge ----------
+
+/** Bord gauche du tableau (son filet vertical gauche s'il a une grille). */
+export const tableLeft = (table) => (table.HasGrid !== false && table.ColumnXs?.length > 0 ? table.ColumnXs[0] : table.Bounds.X);
+
+/** Largeur de la colonne des lots : 3 chiffres (plus si besoin) dans la taille du texte imprimé, sans dépasser la marge. */
+export function columnWidth(page) {
+  const sizes = page.Tables.flatMap((t) => t.Rows).flatMap((r) => r.Lines)
+    .map((l) => l.Cells[0]?.FontSize ?? 0).filter((s) => s > 0).sort((a, b) => a - b);
+  const fs = sizes.length > 0 ? sizes[Math.trunc(sizes.length / 2)] : 16;
+  const digits = Math.max(3, ...[...allLines(page)].map((l) => (l.Lot ?? '').length));
+  const desired = Math.floor(fs * (0.55 * digits + 0.9) + 0.5);
+  const lefts = page.Tables.filter((t) => t.Rows.some((r) => r.Lines.some((l) => (l.Lot ?? '').length > 0))).map(tableLeft);
+  const avail = lefts.length > 0 ? Math.min(...lefts) - 6 : desired;
+  return Math.max(8, Math.min(desired, avail));
 }
 
-export const lotLabels = (page) =>
-  page.Tables.flatMap((t) => t.Rows.flatMap((r) => r.Lines).filter((l) => (l.Lot ?? '').length > 0).map((line) => ({ line, table: t, box: lotBox(t, line) })));
+/** Case du numéro de lot : dans la colonne, à la hauteur de la ligne d'objet. */
+export function numberBox(table, line, width) {
+  const b = lineBounds(line);
+  const right = tableLeft(table), left = Math.max(0, right - width);
+  const h = Math.max(8, b.Height);
+  return Rect.make(left + 2, Rect.cy(b) - h / 2, Math.max(4, right - left - 4), h);
+}
+
+export function lotLabels(page) {
+  const w = columnWidth(page);
+  return page.Tables.flatMap((t) => t.Rows.flatMap((r) => r.Lines).filter((l) => (l.Lot ?? '').length > 0).map((line) => ({ line, table: t, box: numberBox(t, line, w) })));
+}
 
 /** « prisÃ© » → « prisé » : octets UTF-8 relus comme du Latin-1. */
 export function repairName(name) {

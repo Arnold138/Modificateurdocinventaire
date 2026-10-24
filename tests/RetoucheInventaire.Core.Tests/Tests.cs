@@ -373,6 +373,54 @@ public static class Tests
         Check(!Lots.IsActive(p), "numérotation enlevée");
     }
 
+    public static void T_Lots_poubelle_et_ajout()
+    {
+        var p = ThreePages();
+        Lots.Number(p, 1);
+        var objects = Lots.ObjectLines(p).Select(o => o.Line).ToList();
+        int n = objects.Count;
+        Lots.Remove(p, objects[30]);
+        Equal("", objects[30].Lot, "ligne retirée à la poubelle");
+        Equal("31", objects[31].Lot, "le suivant prend sa place");
+        Equal((n - 1).ToString(), objects[^1].Lot, "le dernier est décalé");
+        Lots.Resync(p);
+        Equal("", objects[30].Lot, "reste retirée après « Synchroniser »");
+        Check(Lots.CanAdd(objects[30]), "« + » proposé");
+        Lots.Add(p, objects[30]);
+        Equal("31", objects[30].Lot, "remise avec « + »");
+        Equal(n.ToString(), objects[^1].Lot, "le dernier est recalé");
+        // « + » sur une ligne de suite : un objet de plus.
+        var cd3 = p.Pages[0].AllLines().First(l => l.Cells[0].Text.StartsWith("CD3+"));
+        Lots.Add(p, cd3);
+        Check(cd3.Lot.Length > 0, "lot ajouté sur une ligne de suite");
+        Equal((n + 1).ToString(), objects[^1].Lot, "la suite est décalée d'un");
+    }
+
+    public static void T_Lots_colonne_tracee_dans_la_marge()
+    {
+        var p = new InventoryProject();
+        var page = Fixtures.Analyze("page5");
+        p.Pages.Add(page);
+        Lots.Number(p, 1);
+        var image = Fixtures.Load("page5").Image;
+        var frames = LotColumn.Frames(image, page);
+        Equal(3, frames.Count, "une colonne par tableau");
+        var drawn = LotColumn.Draw(image, page);
+        int changed = 0, outside = 0;
+        for (int y = 0; y < image.Height; y++)
+            for (int x = 0; x < image.Width; x++)
+            {
+                if (drawn.Data[y * image.Width + x] == image.Data[y * image.Width + x]) continue;
+                changed++;
+                if (!frames.Any(f => x >= f.Left - 8 && x < f.Right && y >= f.Top - 8 && y <= f.Bottom + 8)) outside++;
+            }
+        Check(changed > 1000, $"traits tracés : {changed} pixels");
+        Equal(0, outside, "pixels modifiés hors de la colonne");
+        // Les numéros tiennent dans la colonne, à gauche du tableau.
+        foreach (var (line, box) in Lots.Labels(page))
+            Check(box.Left >= 0 && box.Right <= page.Tables[0].ColumnXs[0] + 1, $"lot {line.Lot} hors de la colonne");
+    }
+
     public static void T_Lots_dans_le_txt()
     {
         var p = ThreePages();

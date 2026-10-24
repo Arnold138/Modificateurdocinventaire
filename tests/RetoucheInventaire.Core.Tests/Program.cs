@@ -79,6 +79,19 @@ if (args.Length > 0 && args[0] == "export-file")
     Console.WriteLine($"{r.LineCount} lignes, {r.Warnings.Count} avertissement(s)");
     return 0;
 }
+if (args.Length > 0 && args[0] == "export-frame")
+{
+    // Page redressée avec la colonne des lots tracée (sans le texte des numéros), pour comparaison avec l'iPad.
+    var project = new InventoryProject();
+    foreach (var name in args.Skip(2)) project.Pages.Add(Fixtures.Analyze(name));
+    Lots.Number(project, 1);
+    var page = project.Pages[^1];
+    var framed = RetoucheInventaire.Core.Export.LotColumn.Draw(Fixtures.Load(page.Id).Image, page);
+    Pgm.Write(args[1], framed);
+    foreach (var f in RetoucheInventaire.Core.Export.LotColumn.Frames(Fixtures.Load(page.Id).Image, page))
+        Console.WriteLine($"x {f.Left}-{f.Right} y {f.Top}-{f.Bottom} traits {f.VThick}/{f.HThick} gris {f.Color[3]}");
+    return 0;
+}
 if (args.Length > 0 && args[0] == "export")
 {
     var project = new InventoryProject();

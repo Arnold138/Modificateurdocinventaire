@@ -241,19 +241,48 @@ public sealed partial class MainWindow : Window
                                     Text = $"Page {_index + 1} sur {_project.Pages.Count} · {page.SourceName}" };
         var remove = new Button { Content = "Retirer la page", MinHeight = 40, Padding = new Thickness(14, 4, 14, 4), CornerRadius = new CornerRadius(20) };
         remove.Click += async (_, _) => await RemovePageAsync(page);
+        var sync = new Button
+        {
+            MinHeight = 40, Padding = new Thickness(14, 4, 14, 4), CornerRadius = new CornerRadius(20),
+            Style = (Style)Application.Current.Resources["PillButton"],
+            Visibility = Lots.IsActive(_project) ? Visibility.Visible : Visibility.Collapsed,
+        };
+        var syncContent = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        syncContent.Children.Add(new FontIcon { Glyph = "\uE895", FontSize = 15 });
+        syncContent.Children.Add(new TextBlock { Text = "Synchroniser les lots" });
+        sync.Content = syncContent;
+        sync.Click += (_, _) => SyncLots();
+        _syncButton = sync;
         var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Margin = new Thickness(PageView.GutterWidth, 0, 0, 0) };
         header.Children.Add(title);
+        header.Children.Add(sync);
         header.Children.Add(remove);
 
-        var view = new PageView(page, image);
+        var view = new PageView(page, image, DisplayFor(page, image), () => Lots.IsActive(_project), () => _project.LotFrame);
+        _frameSignature = LotColumn.Signature(page, _project.LotFrame);
         view.FieldFocused += (_, f) => { _currentField = f; UpdateEditBar(); };
         view.Edited += v => { AfterEdit(v); UpdateEditBar(); ScheduleAutosave(); };
         view.LocksChanged += _ => { ScheduleAutosave(); SetStatus("Zones verrouillées mises à jour."); };
         view.LotChanged += (v, line, value) =>
         {
             Lots.Set(_project, line, value);
-            v.RefreshLots();
+            LotsChanged(v, typing: true);
             SetStatus($"Lot {(line.Lot.Length > 0 ? line.Lot : "(automatique)")} : les numéros suivants ont été recalés.");
+            ScheduleAutosave();
+        };
+        view.LotRemoved += (v, line) =>
+        {
+            string old = line.Lot;
+            Lots.Remove(_project, line);
+            LotsChanged(v);
+            SetStatus($"Lot {old} retiré : les numéros suivants ont été décalés.");
+            ScheduleAutosave();
+        };
+        view.LotAdded += (v, line) =>
+        {
+            Lots.Add(_project, line);
+            LotsChanged(v);
+            SetStatus($"Lot {line.Lot} ajouté : les numéros suivants ont été décalés.");
             ScheduleAutosave();
         };
         view.SetLockMode(LockToggle.IsChecked == true);
@@ -277,7 +306,42 @@ public sealed partial class MainWindow : Window
         if (!Lots.IsActive(_project)) return;
         string before = LotSignature(view.Page);
         Lots.Resync(_project);
-        if (LotSignature(view.Page) != before) view.RefreshLots();
+        if (LotSignature(view.Page) != before) LotsChanged(view, typing: true);
+    }
+
+    private Button? _syncButton;
+    private string _frameSignature = "";
+
+    /// <summary>Image affichée : la page redressée, avec la colonne des lots tracée si elle est demandée.</summary>
+    private Raster? DisplayFor(ModelPage page, Raster? flat) =>
+        flat is null || !_project.LotFrame || LotColumn.FramedTables(page).Count == 0 ? flat : LotColumn.Draw(flat, page);
+
+    /// <summary>Les numéros ont changé : mise à jour de l'écran (et de la colonne tracée si elle change de forme).</summary>
+    private void LotsChanged(PageView? view, bool typing = false)
+    {
+        if (view != null)
+        {
+            string sig = LotColumn.Signature(view.Page, _project.LotFrame);
+            if (sig != _frameSignature && view.Image != null)
+            {
+                _frameSignature = sig;
+                view.SetDisplay(DisplayFor(view.Page, view.Image) ?? view.Image);
+            }
+            if (typing) view.UpdateLots(); else view.RefreshLots();
+        }
+        UpdateCommands();
+    }
+
+    /// <summary>Bouton « Synchroniser » : recalcule tous les numéros (ceux tapés à la main sont gardés).</summary>
+    private void SyncLots()
+    {
+        Lots.Resync(_project);
+        LotsChanged(_view);
+        var objects = Lots.ObjectLines(_project).ToList();
+        SetStatus(objects.Count > 0
+            ? $"Lots synchronisés : {objects.Count} objets, de {objects[0].Line.Lot} à {objects[^1].Line.Lot}."
+            : "Aucun objet à numéroter.");
+        ScheduleAutosave();
     }
 
     private async void GoTo(int n)
@@ -381,6 +445,7 @@ public sealed partial class MainWindow : Window
         Lots.Resync(_project);
         var field = _currentField;
         _view.Refresh();
+        LotsChanged(_view);
         _view.Focus(field);
         _currentField = field;
         UpdateEditBar();
@@ -423,8 +488,8 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(new TextBlock
         {
             TextWrapping = TextWrapping.Wrap,
-            Text = "Un numéro de lot par objet, dans une colonne à gauche de la page. Il apparaît dans le .txt (1re colonne) "
-                 + "et sur le JPEG (marge gauche). Les titres, totaux et en-têtes n'en ont pas.",
+            Text = "Un numéro de lot par objet, dans une colonne à gauche du tableau. Il apparaît dans le .txt (1re colonne) "
+                 + "et sur le JPEG. Les titres, totaux et en-têtes n'en ont pas.",
         });
         panel.Children.Add(new TextBlock
         {
@@ -437,8 +502,21 @@ public sealed partial class MainWindow : Window
             panel.Children.Add(new TextBlock
             {
                 TextWrapping = TextWrapping.Wrap, Opacity = 0.7,
-                Text = "Pour changer un numéro, touchez-le dans la colonne de gauche : les suivants se recalent tout seuls.",
+                Text = "Touchez un numéro sur la page pour le changer : les suivants se recalent. "
+                     + "Poubelle à gauche d'une ligne : ce n'est pas un objet. « + » : ajouter un numéro.",
             });
+        var frame = new ToggleSwitch
+        {
+            Header = "Tracer la colonne dans le tableau (traits et fond comme le tableau imprimé)",
+            IsOn = _project.LotFrame, OnContent = "Oui", OffContent = "Non",
+        };
+        frame.Toggled += (_, _) =>
+        {
+            _project.LotFrame = frame.IsOn;
+            LotsChanged(_view);
+            ScheduleAutosave();
+        };
+        panel.Children.Add(frame);
         var start = new NumberBox
         {
             Header = "Commencer à", Minimum = 0, SmallChange = 1, Width = 180, HorizontalAlignment = HorizontalAlignment.Left,
@@ -447,28 +525,42 @@ public sealed partial class MainWindow : Window
         };
         panel.Children.Add(start);
 
-        var dialog = new ContentDialog
+        ContentDialog? dialog = null;
+        bool clear = false;
+        if (active)
         {
-            XamlRoot = Content.XamlRoot, Title = "Numéros de lot", Content = panel,
+            var clearButton = new Button { Content = "Enlever les numéros", MinHeight = 44, Foreground = new SolidColorBrush(ColorHelper.FromArgb(255, 180, 40, 40)) };
+            clearButton.Click += (_, _) => { clear = true; dialog?.Hide(); };
+            panel.Children.Add(clearButton);
+        }
+
+        dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot, Title = "Numéros de lot", Content = new ScrollViewer { Content = panel },
             PrimaryButtonText = active ? "Renuméroter" : "Numéroter",
-            SecondaryButtonText = active ? "Enlever les numéros" : "",
+            SecondaryButtonText = active ? "Synchroniser" : "",
             CloseButtonText = "Fermer", DefaultButton = ContentDialogButton.Primary,
         };
         var result = await dialog.ShowAsync();
-        if (result == ContentDialogResult.Primary)
-        {
-            Lots.Number(_project, double.IsNaN(start.Value) ? 1 : (int)Math.Round(start.Value));
-            SetStatus($"Lots numérotés de {objects.FirstOrDefault()?.Lot} à {objects.LastOrDefault()?.Lot}.");
-        }
-        else if (result == ContentDialogResult.Secondary)
+        if (clear)
         {
             if (!await ConfirmAsync("Enlever les numéros de lot ?", "Tous les numéros seront retirés (texte et images).", "Enlever")) return;
             Lots.Clear(_project);
             SetStatus("Numéros de lot enlevés.");
         }
+        else if (result == ContentDialogResult.Primary)
+        {
+            Lots.Number(_project, double.IsNaN(start.Value) ? 1 : (int)Math.Round(start.Value));
+            var numbered = Lots.ObjectLines(_project).ToList();
+            SetStatus($"Lots numérotés de {numbered.FirstOrDefault().Line?.Lot} à {numbered.LastOrDefault().Line?.Lot}.");
+        }
+        else if (result == ContentDialogResult.Secondary)
+        {
+            SyncLots();
+            return;
+        }
         else return;
-        _view?.RefreshLots();
-        UpdateCommands();
+        LotsChanged(_view);
         ScheduleAutosave();
     }
 
@@ -529,8 +621,9 @@ public sealed partial class MainWindow : Window
                 var flat = _flats.TryGetValue(page, out var cached) ? cached : await RestoreFlatAsync(page);
                 var source = await GetOrientedSourceAsync(page);
                 if (flat is null || source is null) continue;
-                var edited = ImageExportService.RenderEdits(page, flat);
-                var final = await Task.Run(() => ImageExporter.ComposeIntoSource(source, page, edited));
+                bool frame = _project.LotFrame;
+                var edited = ImageExportService.RenderEdits(page, flat, frame);
+                var final = await Task.Run(() => ImageExporter.ComposeIntoSource(source, page, edited, frame));
                 await ImageExportService.SaveJpegAsync(final, System.IO.Path.Combine(folder.Path, ImageExportService.OutputName(page)));
                 done++;
             }
@@ -862,6 +955,7 @@ public sealed partial class MainWindow : Window
         PageLabel.IsEnabled = !_busy;
         EmptyHint.Visibility = n == 0 ? Visibility.Visible : Visibility.Collapsed;
         ProjectName.Text = _project.Name;
+        if (_syncButton != null) _syncButton.Visibility = Lots.IsActive(_project) ? Visibility.Visible : Visibility.Collapsed;
         LotsButton.Background = Lots.IsActive(_project)
             ? new SolidColorBrush(ColorHelper.FromArgb(255, 232, 241, 251))
             : new SolidColorBrush(Colors.Transparent);

@@ -67,6 +67,10 @@ public sealed class PrintedLine
     public string Lot { get; set; } = "";
     /// <summary>Numéro saisi à la main : la numérotation automatique repart de lui.</summary>
     public bool LotManual { get; set; }
+    /// <summary>Numéro retiré par l'utilisateur (poubelle) : cette ligne n'est pas un objet.</summary>
+    public bool NoLot { get; set; }
+    /// <summary>Numéro ajouté par l'utilisateur (« + ») sur une ligne que la règle n'avait pas retenue.</summary>
+    public bool ForceLot { get; set; }
 
     [JsonIgnore] public RectD Bounds => Cells.Aggregate(RectD.Empty, (r, f) => r.Union(f.Box));
     [JsonIgnore] public string FirstText => Cells.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c.Text))?.Text.Trim() ?? "";
@@ -121,6 +125,8 @@ public sealed class InventoryProject
 {
     public int FormatVersion { get; set; } = 1;
     public string Name { get; set; } = "Inventaire";
+    /// <summary>Numéros de lot dans une colonne tracée comme le tableau (traits prolongés), sinon numéros seuls.</summary>
+    public bool LotFrame { get; set; } = true;
     public List<Page> Pages { get; set; } = [];
 
     public IEnumerable<Field> AllFields() => Pages.SelectMany(p => p.AllFields());

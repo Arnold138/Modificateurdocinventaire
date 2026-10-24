@@ -33,6 +33,8 @@ public readonly record struct RectD(double X, double Y, double Width, double Hei
 
     public bool Contains(double x, double y) => x >= Left && x <= Right && y >= Top && y <= Bottom;
 
+    public bool IntersectsWith(RectD o) => Left < o.Right && o.Left < Right && Top < o.Bottom && o.Top < Bottom;
+
     public RectD Inflate(double dx, double dy) => FromEdges(Left - dx, Top - dy, Right + dx, Bottom + dy);
 
     public double VerticalOverlap(RectD o) => Math.Max(0, Math.Min(Bottom, o.Bottom) - Math.Max(Top, o.Top));

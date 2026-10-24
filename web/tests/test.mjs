@@ -11,12 +11,14 @@ import { newPage, newProject, analyze, reclassify, allFields, cycleKind, addLock
 import { buildTxt, composeIntoSource, paperColor } from '../core/exports.js';
 import { parseDelimited, buildDataPage } from '../core/importers.js';
 import { packProject, unpackProject } from '../core/store.js';
-import { numberLots, setLot, resyncLots, clearLots, lotsActive, objectLines, repairName } from '../core/lots.js';
+import { numberLots, setLot, resyncLots, clearLots, lotsActive, objectLines, repairName, removeLot, addLot, canAddLot } from '../core/lots.js';
+import { drawLotColumns, frames } from '../core/lotcolumn.js';
 
 const FIX = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tests', 'fixtures');
 
 function readPgm(path) {
-  const b = gunzipSync(readFileSync(path));
+  const raw = readFileSync(path);
+  const b = raw[0] === 0x1f && raw[1] === 0x8b ? gunzipSync(raw) : raw;
   let pos = 0;
   const token = () => {
     while (/\s/.test(String.fromCharCode(b[pos]))) pos++;
@@ -161,6 +163,45 @@ test('Lots : un par objet, continus, resynchro après saisie', () => {
   check(!lotsActive(p), 'enlevés');
 });
 
+test('Lots : poubelle et « + », les suivants se décalent', () => {
+  const p = threePages();
+  numberLots(p, 1);
+  const objs = [...objectLines(p)].map((o) => o.line);
+  const n = objs.length;
+  removeLot(p, objs[30]);
+  eq('', objs[30].Lot, 'ligne retirée');
+  eq('31', objs[31].Lot, 'le suivant prend sa place');
+  eq(String(n - 1), objs[n - 1].Lot, 'dernier décalé');
+  resyncLots(p);
+  eq('', objs[30].Lot, 'reste retirée après synchronisation');
+  check(canAddLot(objs[30]), '« + » possible');
+  addLot(p, objs[30]);
+  eq('31', objs[30].Lot, 'remise');
+  eq(String(n), objs[n - 1].Lot, 'dernier recalé');
+  numberLots(p, 1);
+  eq('31', objs[30].Lot, 'renumérotation');
+});
+
+test('Colonne des lots tracée dans la marge, rien d\'autre ne change', () => {
+  const page = analyzePage('page5');
+  const p = newProject(); p.Pages.push(page);
+  numberLots(p, 1);
+  const { n } = load('page5');
+  const out = drawLotColumns(n.image, page);
+  const fr = frames(n.image, page);
+  eq(3, fr.length, 'trois tableaux encadrés');
+  let changed = 0, outside = 0;
+  for (let y = 0; y < out.h; y++)
+    for (let x = 0; x < out.w; x++) {
+      const i = y * out.w + x;
+      if (out.data[i] === n.image.data[i]) continue;
+      changed++;
+      if (!fr.some((f) => x >= f.left - 8 && x < f.right && y >= f.top - 8 && y <= f.bottom + 8)) outside++;
+    }
+  check(changed > 1000, `pixels tracés : ${changed}`);
+  eq(0, outside, 'pixels modifiés hors de la colonne');
+});
+
 test('Nom de fichier abîmé réparé', () => {
   eq('BEENDHI prisé.pdf', repairName('BEENDHI prisÃ©.pdf'), 'réparation');
 });
@@ -175,6 +216,20 @@ if (windowsTxt) {
       const k = a.findIndex((l, i) => l !== b[i]);
       throw new Error(`différence ligne ${k + 1} : Windows « ${a[k]} » / iPad « ${b[k]} »`);
     }
+  });
+}
+
+const windowsFrame = process.argv[4];
+if (windowsFrame) {
+  test('Colonne des lots identique à Windows (pixel pour pixel)', () => {
+    const p = threePages();
+    numberLots(p, 1);
+    const page = p.Pages[2];
+    const js = drawLotColumns(load(page.Id).n.image, page);
+    const win = readPgm(windowsFrame);
+    eq(`${win.w}x${win.h}`, `${js.w}x${js.h}`, 'taille');
+    const k = win.data.findIndex((v, i) => v !== js.data[i]);
+    eq(-1, k, `premier pixel différent (${k % win.w}, ${Math.trunc(k / win.w)})`);
   });
 }
 

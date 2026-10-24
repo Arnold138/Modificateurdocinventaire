@@ -3,6 +3,7 @@ import { raster, toRgba } from '../core/imaging.js';
 import { Rect } from '../core/geometry.js';
 import { editedFields, paperColor } from '../core/exports.js';
 import { lotLabels } from '../core/lots.js';
+import { framedTables, drawLotColumns } from '../core/lotcolumn.js';
 
 export function makeCanvas(w, h) {
   const c = document.createElement('canvas');
@@ -58,9 +59,13 @@ export function fitSize(f, text, base = baseSize(f)) {
   return size;
 }
 
-/** Page redressée + cases modifiées dessinées (fond couleur papier, texte noir), pour l'export JPEG. */
-export function renderEdits(page, flat) {
-  const c = rasterToCanvas(flat);
+/**
+ * Page redressée + colonne des lots tracée + cases modifiées et numéros de lot écrits
+ * (fond couleur papier, texte noir), pour l'export JPEG.
+ */
+export function renderEdits(page, flat, lotFrame = true) {
+  const framed = lotFrame ? framedTables(page) : [];
+  const c = rasterToCanvas(framed.length > 0 ? drawLotColumns(flat, page) : flat);
   const ctx = c.getContext('2d');
   for (const f of editedFields(page)) {
     const [r, g, b] = paperColor(flat, f.Box);
@@ -82,29 +87,28 @@ export function renderEdits(page, flat) {
     ctx.fillText(f.Text, x, baseline);
     ctx.restore();
   }
-  // Numéros de lot : dans la marge gauche, à la hauteur de l'objet, même taille que son texte, en noir.
-  for (const { line, box } of lotLabels(page)) {
-    const [r, g, b] = paperColor(flat, box);
-    ctx.fillStyle = `rgb(${r},${g},${b})`;
-    ctx.fillRect(box.X, box.Y, box.Width, box.Height);
+  // Numéros de lot : centrés dans la colonne, à la hauteur de l'objet, même taille que son texte, en noir.
+  for (const { line, table, box } of lotLabels(page)) {
+    if (!framed.includes(table)) {
+      const [r, g, b] = paperColor(flat, box);
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      ctx.fillRect(box.X, box.Y, box.Width, box.Height);
+    }
     const size = lotSize(line, box);
     ctx.font = font(size);
     const w = ctx.measureText(line.Lot).width;
     ctx.fillStyle = '#000';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText(line.Lot, Rect.right(box) - lotGap(size) - w, Math.min(Rect.bottom(box) - 0.2 * size, Rect.cy(box) + 0.33 * size));
+    ctx.fillText(line.Lot, box.X + (box.Width - w) / 2, Math.min(Rect.bottom(box) - 0.2 * size, Rect.cy(box) + 0.33 * size));
   }
   const out = canvasToRaster(c);
   freeCanvas(c);
   return out;
 }
 
-/** Espace entre le numéro et le bord du tableau. */
-export const lotGap = (size) => Math.max(2, 0.35 * size);
-
-/** Taille du numéro de lot : celle du texte de l'objet, réduite si la marge est étroite. */
+/** Taille du numéro de lot : celle du texte de l'objet, réduite si la colonne est étroite. */
 export function lotSize(line, box) {
   let size = Math.max(5, Math.min(baseSize(line.Cells[0]), box.Height / LINE_HEIGHT));
-  while (size > 5 && measure(line.Lot, size) > box.Width - 1 - lotGap(size)) size -= 0.5;
+  while (size > 5 && measure(line.Lot || ' ', size) > box.Width - 2) size -= 0.5;
   return size;
 }

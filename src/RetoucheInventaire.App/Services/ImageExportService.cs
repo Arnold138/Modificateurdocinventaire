@@ -15,17 +15,18 @@ namespace RetoucheInventaire.App.Services;
 /// <summary>
 /// Export JPEG : la photo d'origine, inchangée sauf dans les cases modifiées,
 /// où le nouveau texte est écrit en noir sur la couleur du papier, comme à l'écran,
-/// et numéros de lot dans la marge gauche.
+/// et colonne des numéros de lot tracée dans la marge gauche.
 /// </summary>
 public static class ImageExportService
 {
     private const double LineHeightRatio = 1.15;
 
     /// <summary>Dessine les cases modifiées sur la page redressée (Win2D, même mise en page qu'à l'écran).</summary>
-    public static Raster RenderEdits(ModelPage page, Raster flat)
+    public static Raster RenderEdits(ModelPage page, Raster flat, bool lotFrame = true)
     {
         var device = CanvasDevice.GetSharedDevice();
-        var bgra = flat.ToBgra();
+        var framed = lotFrame ? LotColumn.FramedTables(page) : new List<Table>();
+        var bgra = (framed.Count > 0 ? LotColumn.Draw(flat, page) : flat).ToBgra();
         using var bitmap = CanvasBitmap.CreateFromBytes(device, bgra.Data, bgra.Width, bgra.Height, DirectXPixelFormat.B8G8R8A8UIntNormalized, 96);
         using var target = new CanvasRenderTarget(device, bgra.Width, bgra.Height, 96);
         using (var ds = target.CreateDrawingSession())
@@ -63,32 +64,35 @@ public static class ImageExportService
                 }
             }
 
-            // Numéros de lot : dans la marge gauche, à la hauteur de l'objet, même taille que son texte, en noir.
-            foreach (var (line, box) in Lots.Labels(page))
-            {
-                var (r, g, b) = ImageExporter.PaperColor(flat, box);
-                ds.FillRectangle(new Rect(box.X, box.Y, box.Width, box.Height), ColorHelper.FromArgb(255, r, g, b));
-                double size = Math.Max(5, Math.Min(BaseSize(device, line.Cells[0]), box.Height / LineHeightRatio));
-                CanvasTextLayout layout = Layout(device, line.Lot, size);
-                while (size > 5 && layout.LayoutBounds.Width > box.Width - 1 - LotGap(size))
+            // Numéros de lot : centrés dans la colonne, à la hauteur de l'objet, même taille que son texte, en noir.
+            var labels = Lots.Labels(page);
+            foreach (var table in page.Tables)
+                foreach (var line in table.Rows.SelectMany(r => r.Lines).Where(l => l.Lot.Length > 0))
                 {
-                    layout.Dispose();
-                    size -= 0.5;
-                    layout = Layout(device, line.Lot, size);
+                    var box = labels.First(l => l.Line == line).Box;
+                    if (!framed.Contains(table))
+                    {
+                        var (pr, pg, pb) = ImageExporter.PaperColor(flat, box);
+                        ds.FillRectangle(new Rect(box.X, box.Y, box.Width, box.Height), ColorHelper.FromArgb(255, pr, pg, pb));
+                    }
+                    double size = Math.Max(5, Math.Min(BaseSize(device, line.Cells[0]), box.Height / LineHeightRatio));
+                    CanvasTextLayout layout = Layout(device, line.Lot, size);
+                    while (size > 5 && layout.LayoutBounds.Width > box.Width - 2)
+                    {
+                        layout.Dispose();
+                        size -= 0.5;
+                        layout = Layout(device, line.Lot, size);
+                    }
+                    using (layout)
+                    {
+                        double x = box.X + (box.Width - layout.LayoutBounds.Width) / 2;
+                        double y = Math.Clamp(box.CenterY - 0.58 * size, box.Top, Math.Max(box.Top, box.Bottom - LineHeightRatio * size));
+                        ds.DrawTextLayout(layout, (float)x, (float)y, Colors.Black);
+                    }
                 }
-                using (layout)
-                {
-                    double x = box.Right - LotGap(size) - layout.LayoutBounds.Width;
-                    double y = Math.Clamp(box.CenterY - 0.58 * size, box.Top, Math.Max(box.Top, box.Bottom - LineHeightRatio * size));
-                    ds.DrawTextLayout(layout, (float)x, (float)y, Colors.Black);
-                }
-            }
         }
         return new Raster(bgra.Width, bgra.Height, 4, target.GetPixelBytes());
     }
-
-    /// <summary>Espace entre le numéro de lot et le bord du tableau.</summary>
-    private static double LotGap(double size) => Math.Max(2, 0.35 * size);
 
     private static CanvasTextLayout Layout(CanvasDevice device, string text, double size) =>
         new(device, text, new CanvasTextFormat { FontFamily = "Times New Roman", FontSize = (float)size, WordWrapping = CanvasWordWrapping.NoWrap }, float.MaxValue, float.MaxValue);

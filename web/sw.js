@@ -6,7 +6,7 @@ const ASSETS = [
   './', 'index.html', 'app.css', 'app.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
   'core/geometry.js', 'core/imaging.js', 'core/rules.js', 'core/ocrprep.js', 'core/model.js',
-  'core/exports.js', 'core/importers.js', 'core/store.js', 'core/lots.js',
+  'core/exports.js', 'core/importers.js', 'core/store.js', 'core/lots.js', 'core/lotcolumn.js',
   'services/canvas.js', 'services/decode.js', 'services/ocr.js', 'services/db.js',
   'ui/pageview.js', 'ui/crop.js',
   'vendor/fflate.js', 'vendor/pdfjs/pdf.min.mjs', 'vendor/pdfjs/pdf.worker.min.mjs',

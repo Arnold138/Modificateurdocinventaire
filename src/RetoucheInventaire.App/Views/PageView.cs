@@ -45,7 +45,8 @@ public sealed class PageView
     private readonly Dictionary<Field, SolidColorBrush> _paper = [];
     private readonly Border _loupe = new() { BorderBrush = Accent, BorderThickness = new Thickness(2), Background = Paper, Visibility = Visibility.Collapsed };
     private readonly Raster? _image;
-    private readonly WriteableBitmap? _bitmap;
+    private WriteableBitmap? _bitmap;
+    private Image? _background;
     private Point? _dragStart;
 
     /// <summary>Image redressée d'origine (null pour les pages TXT/CSV/XLSX).</summary>
@@ -59,25 +60,39 @@ public sealed class PageView
 
     /// <summary>Colonne des numéros de lot, en dehors de la page : la mise en page du document n'est pas touchée.</summary>
     private readonly Canvas _gutter = new() { Width = GutterWidth };
-    public const double GutterWidth = 72;
+    public const double GutterWidth = 84;
+    private readonly Canvas _lotLayer = new();
+    private readonly Dictionary<PrintedLine, TextBox> _lotBoxes = [];
+    private readonly Func<bool> _lotsActive, _lotFrame;
+    private static readonly SolidColorBrush TrashFill = new(ColorHelper.FromArgb(255, 253, 236, 236));
+    private static readonly SolidColorBrush TrashInk = new(ColorHelper.FromArgb(255, 180, 40, 40));
+    private static readonly SolidColorBrush AddInk = new(ColorHelper.FromArgb(255, 154, 163, 173));
     private static readonly SolidColorBrush LotBorder = new(ColorHelper.FromArgb(255, 201, 214, 230));
 
     public event Action<PageView, Field>? FieldFocused;
     public event Action<PageView>? Edited;
     public event Action<PageView>? Touched;
     public event Action<PageView>? LocksChanged;
-    /// <summary>Numéro de lot tapé dans la colonne de gauche (ligne, valeur saisie).</summary>
+    /// <summary>Numéro de lot tapé sur la page (ligne, valeur saisie).</summary>
     public event Action<PageView, PrintedLine, string>? LotChanged;
+    /// <summary>Poubelle : cette ligne n'est pas un objet.</summary>
+    public event Action<PageView, PrintedLine>? LotRemoved;
+    /// <summary>« + » : ajouter un numéro sur cette ligne.</summary>
+    public event Action<PageView, PrintedLine>? LotAdded;
 
-    public PageView(ModelPage page, Raster? image)
+    /// <param name="display">Image affichée (avec la colonne des lots tracée), sinon <paramref name="image"/>.</param>
+    public PageView(ModelPage page, Raster? image, Raster? display, Func<bool> lotsActive, Func<bool> lotFrame)
     {
         Page = page;
         _image = image;
+        _lotsActive = lotsActive;
+        _lotFrame = lotFrame;
         Root = new Grid { Width = page.Width, Height = page.Height, Background = Paper, HorizontalAlignment = HorizontalAlignment.Center };
         if (image != null)
         {
-            _bitmap = WinImaging.ToBitmap(image);
-            Root.Children.Add(new Image { Source = _bitmap, Width = page.Width, Height = page.Height, Stretch = Stretch.Fill });
+            _bitmap = WinImaging.ToBitmap(display ?? image);
+            _background = new Image { Source = _bitmap, Width = page.Width, Height = page.Height, Stretch = Stretch.Fill };
+            Root.Children.Add(_background);
         }
         else
             Root.Children.Add(DrawGrid());
@@ -96,6 +111,7 @@ public sealed class PageView
         Host.Children.Add(_gutter);
         Host.Children.Add(frame);
         Root.Children.Add(_fieldLayer);
+        Root.Children.Add(_lotLayer);
         Root.Children.Add(_overlayLayer);
         Root.Children.Add(_inputLayer);
         Root.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, _) => Touched?.Invoke(this)), handledEventsToo: true);
@@ -141,7 +157,6 @@ public sealed class PageView
         foreach (var table in Page.Tables)
             foreach (var line in table.Rows.SelectMany(r => r.Lines))
             {
-                AddBadge(table, line);
                 foreach (var f in line.Cells.Where(c => !c.Locked)) AddField(f);
             }
         _overlayLayer.Children.Add(_focusFrame);
@@ -150,42 +165,143 @@ public sealed class PageView
         RefreshLots();
     }
 
-    /// <summary>Champs « Lot » de la colonne de gauche, à la hauteur de chaque objet.</summary>
+    /// <summary>Remplace l'image affichée (colonne des lots tracée ou non).</summary>
+    public void SetDisplay(Raster display)
+    {
+        if (_background is null) return;
+        _bitmap = WinImaging.ToBitmap(display);
+        _background.Source = _bitmap;
+    }
+
+    /// <summary>
+    /// Numéros de lot écrits sur la page, dans la colonne (modifiables au doigt), et colonne de gauche :
+    /// type de ligne (T, Σ…), poubelle sur les lignes numérotées, « + » sur les autres.
+    /// </summary>
     public void RefreshLots()
     {
-        _gutter.Children.Clear();
-        foreach (var (line, box) in Lots.Labels(Page))
-        {
-            double h = Math.Max(28, Math.Min(40, box.Height + 8));
-            var tb = new TextBox
+        var focused = _lotBoxes.FirstOrDefault(p => p.Value.FocusState != FocusState.Unfocused).Key;
+        _lotLayer.Children.Clear();
+        _lotBoxes.Clear();
+        var framed = _lotFrame() ? LotColumn.FramedTables(Page) : new List<Table>();
+        var labels = Lots.Labels(Page);
+        foreach (var t in Page.Tables)
+            foreach (var line in t.Rows.SelectMany(r => r.Lines))
             {
-                Text = line.Lot, Width = 58, Height = h, MinHeight = 0, MinWidth = 0, Padding = new Thickness(2, 0, 2, 0),
-                FontSize = 17, FontWeight = FontWeights.SemiBold, Foreground = Accent, TextAlignment = TextAlignment.Center,
-                VerticalContentAlignment = VerticalAlignment.Center, BorderBrush = LotBorder, BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(8), Background = Paper,
-            };
-            var scope = new InputScope();
-            scope.Names.Add(new InputScopeName(InputScopeNameValue.Number));
-            tb.InputScope = scope;
-            Canvas.SetLeft(tb, GutterWidth - 8 - 58);
-            Canvas.SetTop(tb, box.CenterY - h / 2);
-            var target = line;
-            bool done = false; // le champ est remplacé après validation : une seule fois suffit
-            void Commit()
-            {
-                if (done || tb.Text.Trim() == target.Lot) return;
-                done = true;
-                LotChanged?.Invoke(this, target, tb.Text);
+                if (line.Lot.Length == 0) continue;
+                var box = labels.First(l => l.Line == line).Box;
+                AddLotBox(line, box, framed.Contains(t) || _image is null);
             }
-            tb.LostFocus += (_, _) => Commit();
-            tb.KeyDown += (_, e) =>
-            {
-                if (e.Key != VirtualKey.Enter) return;
-                e.Handled = true;
-                Commit();
-            };
-            _gutter.Children.Add(tb);
+        if (focused != null && _lotBoxes.TryGetValue(focused, out var again)) again.Focus(FocusState.Programmatic);
+        RefreshGutter();
+    }
+
+    private void AddLotBox(PrintedLine line, RectD box, bool transparent)
+    {
+        var tb = new TextBox
+        {
+            Style = (Style)Application.Current.Resources["FieldBox"],
+            Text = line.Lot,
+            Width = Math.Max(1, box.Width),
+            Height = Math.Max(1, box.Height),
+            TextAlignment = TextAlignment.Center,
+            Foreground = Ink,
+            Background = transparent ? Clear : PaperOfBox(box),
+        };
+        var scope = new InputScope();
+        scope.Names.Add(new InputScopeName(InputScopeNameValue.Number));
+        tb.InputScope = scope;
+        Canvas.SetLeft(tb, box.X);
+        Canvas.SetTop(tb, box.Y);
+        LayoutLot(tb, line, box);
+
+        // Pendant la frappe, la suite se recale toute seule (petite pause après le dernier chiffre).
+        var timer = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread().CreateTimer();
+        timer.Interval = TimeSpan.FromMilliseconds(700);
+        timer.IsRepeating = false;
+        void Commit()
+        {
+            timer.Stop();
+            if (tb.Text.Trim() != line.Lot) LotChanged?.Invoke(this, line, tb.Text);
         }
+        timer.Tick += (_, _) => Commit();
+        tb.TextChanged += (_, _) =>
+        {
+            timer.Stop();
+            if (tb.Text.Trim().Length > 0 && tb.FocusState != FocusState.Unfocused) timer.Start();
+        };
+        tb.LostFocus += (_, _) => Commit();
+        tb.KeyDown += (_, e) =>
+        {
+            if (e.Key != VirtualKey.Enter) return;
+            e.Handled = true;
+            Commit();
+        };
+        _lotBoxes[line] = tb;
+        _lotLayer.Children.Add(tb);
+    }
+
+    /// <summary>Taille du numéro : celle du texte de l'objet, réduite si la colonne est étroite ; à la hauteur de la ligne.</summary>
+    private void LayoutLot(TextBox tb, PrintedLine line, RectD box)
+    {
+        double size = Math.Max(5, Math.Min(BaseFontSize(line.Cells[0]), box.Height / LineHeightRatio));
+        string text = line.Lot.Length == 0 ? " " : line.Lot;
+        while (size > 5 && Measure(text, size) > box.Width - 2) size -= 0.5;
+        tb.FontSize = size;
+        double top = Math.Clamp(box.CenterY - box.Y - 0.58 * size, 0, Math.Max(0, box.Height - LineHeightRatio * size));
+        tb.Padding = new Thickness(0, top, 0, 0);
+    }
+
+    /// <summary>Après un recalcul : met les nouveaux numéros en place sans quitter la case en cours de frappe.</summary>
+    public void UpdateLots()
+    {
+        var labels = Lots.Labels(Page);
+        bool same = labels.Count == _lotBoxes.Count && labels.All(l =>
+            _lotBoxes.TryGetValue(l.Line, out var tb) && Math.Abs(Canvas.GetLeft(tb) - l.Box.X) < 0.5 && Math.Abs(tb.Width - Math.Max(1, l.Box.Width)) < 0.5);
+        if (!same) { RefreshLots(); return; }
+        foreach (var (line, box) in labels)
+        {
+            var tb = _lotBoxes[line];
+            if (tb.FocusState == FocusState.Unfocused && tb.Text != line.Lot) tb.Text = line.Lot;
+            LayoutLot(tb, line, box);
+        }
+        RefreshGutter();
+    }
+
+    public void RefreshGutter()
+    {
+        _gutter.Children.Clear();
+        bool active = _lotsActive();
+        foreach (var table in Page.Tables)
+            foreach (var line in table.Rows.SelectMany(r => r.Lines))
+            {
+                if (line.OutsideTable || line.Cells.Count == 0) continue;
+                AddBadge(line);
+                if (!active) continue;
+                bool has = line.Lot.Length > 0;
+                if (!has && !Lots.CanAdd(line)) continue;
+                double h = Math.Max(26, Math.Min(40, line.Bounds.Height + 6));
+                var button = new Button
+                {
+                    Width = 42, Height = h, Padding = new Thickness(0), MinWidth = 0, MinHeight = 0,
+                    CornerRadius = new CornerRadius(10),
+                    Background = has ? TrashFill : Clear,
+                    BorderBrush = has ? Clear : AddInk, BorderThickness = new Thickness(has ? 0 : 1),
+                    Content = new FontIcon { Glyph = has ? "\uE74D" : "\uE710", FontSize = 16, Foreground = has ? TrashInk : AddInk },
+                };
+                ToolTipService.SetToolTip(button, has ? "Pas un objet : retirer ce numéro (les suivants se décalent)" : "Ajouter un numéro de lot sur cette ligne");
+                Canvas.SetLeft(button, GutterWidth - 6 - 42);
+                Canvas.SetTop(button, line.Bounds.CenterY - h / 2);
+                var target = line;
+                button.Click += (_, _) => { if (has) LotRemoved?.Invoke(this, target); else LotAdded?.Invoke(this, target); };
+                _gutter.Children.Add(button);
+            }
+    }
+
+    private SolidColorBrush PaperOfBox(RectD box)
+    {
+        if (_image is null) return Paper;
+        var (r, g, b) = ImageExporter.PaperColor(_image, box);
+        return new SolidColorBrush(ColorHelper.FromArgb(255, r, g, b));
     }
 
     // ---------- Champs ----------
@@ -356,7 +472,7 @@ public sealed class PageView
 
     // ---------- Repères : type de ligne, zones verrouillées ----------
 
-    private void AddBadge(Table table, PrintedLine line)
+    private void AddBadge(PrintedLine line)
     {
         if (line.Kind == LineKind.Article) return;
         var (letter, color) = line.Kind switch
@@ -376,9 +492,9 @@ public sealed class PageView
                 HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
             },
         };
-        Canvas.SetLeft(badge, Math.Max(2, table.Bounds.Left - 30));
+        Canvas.SetLeft(badge, 6);
         Canvas.SetTop(badge, line.Bounds.CenterY - 12);
-        _overlayLayer.Children.Add(badge);
+        _gutter.Children.Add(badge);
     }
 
     private void AddLockZone(RectD z)
