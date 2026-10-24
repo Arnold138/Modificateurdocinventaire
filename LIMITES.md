@@ -41,6 +41,14 @@
 - **Traits** : tracés droits, de la couleur moyenne des filets du scan ; sur une photo de travers, ils suivent la même perspective que le reste (tracés sur la page redressée puis remis dans la photo).
 - **Tableaux sans filets** : pas de colonne tracée, numéros seuls.
 - Un numéro non numérique (« 12 bis ») est gardé tel quel ; la suite reprend après le dernier numéro de la colonne.
+- **Lot 0** (absent, barré) : sur l'image, le 0 reste à sa place ; dans le .txt, l'objet (et ses lignes de suite) part à la fin.
+
+## Texte sur plusieurs lignes
+
+- Seule la **désignation** (1re colonne) passe à la ligne ; une valeur trop longue est encore réduite pour tenir sur une ligne.
+- La rangée s'agrandit en insérant une bande sous la ligne modifiée : les filets verticaux du tableau y sont prolongés, le reste est mis à la couleur du papier. Une page agrandie ne se superpose plus à la photo d'origine : son JPEG est la page **redressée** (droite, recadrée), plus longue de la hauteur ajoutée.
+- L'écran (champ de saisie) et l'export coupent les lignes avec la même règle ; un mot peut exceptionnellement passer à la ligne à un endroit légèrement différent.
+- Recadrer une page relit le texte : les agrandissements de cette page sont perdus.
 
 ## Export texte
 
@@ -54,5 +62,7 @@
 
 - **XLSX** : valeurs seulement (pas de formules ni de mise en forme) ; une date apparaît comme un nombre.
 - **PDF protégé par mot de passe** : refusé.
+- **PDF de scanner sur iPhone/iPad** : les images JPEG 2000 et JBIG2 sont décodées par l'app (décodeurs livrés avec elle). Si une page reste malgré tout blanche, l'app le signale : la retirer et importer une photo de la page.
+- **Dossier sur iPhone/iPad** : « Un dossier entier » dépend de la version d'iOS ; sinon, compresser le dossier dans Fichiers (appui long → Compresser) et importer le .zip, ou sélectionner toutes les photos du dossier.
 - **Photos très grandes** : lues à 4000 px maximum, pages redressées à 2400 px maximum.
 - **OCR français** : doit être présent dans Windows (c'est le cas sur un Windows en français ; sinon voir le README).

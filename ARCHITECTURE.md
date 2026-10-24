@@ -74,10 +74,18 @@ Application web installable (« Sur l'écran d'accueil »), sans étape de compi
 - **Exports** : JPEG (photo d'origine, seules les cases modifiées changent) et .txt, remis via le menu Partager de l'iPad.
 - **Mémoire (iPhone/iPad)** : une seule page à l'écran ; les images des 3 dernières pages vues sont gardées, les autres recalculées à la demande ; chaque canvas est vidé après usage (sur iOS la mémoire des images n'est rendue qu'ainsi — c'était la cause des pages blanches).
 
+## Rangée qui s'agrandit (`Model/PageLayout.cs`, `web/core/layout.js`)
+
+- Désignation à taille constante, coupée en lignes (`TextWrap`, même règle des deux côtés). Hauteur manquante → `PrintedLine.Extra`, bande insérée à `ExtraAt` (milieu de l'interligne sous le texte d'origine).
+- `SetExtra` décale tout ce qui est sous la bande (cases, encre, filets `RowYs`, rangées, tableaux, zones verrouillées, autres bandes) et allonge la page ; revenir à 0 rend exactement la géométrie d'origine.
+- `Stretch` produit l'image agrandie depuis l'image redressée d'origine (hauteur `BaseHeight`) : dans le tableau, pixels sombres de l'interligne (filets verticaux) prolongés, papier ailleurs. Identique à l'octet entre Windows et iPhone/iPad (vérifié avec la colonne des lots).
+- Export JPEG d'une page agrandie : la page redressée (plus de recomposition dans la photo d'origine).
+
 ## Numéros de lot (`Model/Lots.cs`, `web/core/lots.js`)
 
 - Objet = première ligne d'article de chaque rangée (celle qui porte des valeurs si plusieurs). Titres, totaux, en-têtes, lignes ignorées : pas de numéro.
 - `Lot` et `LotManual` sont enregistrés sur la ligne. Un numéro tapé est « manuel » ; `Resync` garde les manuels et numérote les autres à la suite, toutes pages confondues. Appelé après chaque saisie de lot, changement de type, ajout/retrait/recadrage de page, et quand une saisie fait apparaître ou disparaître un objet.
+- Lot 0 → objet absent/barré : ne consomme pas de numéro ; le .txt le regroupe (avec sa suite) en fin d'inventaire.
 - Poubelle → `NoLot` (la ligne n'est plus un objet) ; « + » → `ForceLot` (objet en plus, même sur une ligne de suite). `Resync` (bouton « Synchroniser ») garde les numéros tapés à la main.
 - Export .txt : 1re colonne « Lot » sur toutes les lignes quand des lots existent (« Lot » sur l'en-tête, vide sur titres/totaux).
 - Colonne tracée (`Export/LotColumn.cs`, `web/core/lotcolumn.js`) : pour chaque tableau à grille qui porte des lots, une colonne de largeur `ColumnWidth` (3 chiffres dans la taille du texte, limitée par la marge) collée à son filet gauche. Épaisseur et couleur des filets mesurées sur l'image (cœur des traits), fond de chaque case recopié depuis une partie sans texte de sa rangée. Calcul en entiers : même image à l'octet près sur les deux versions (vérifié à chaque compilation). Affichée à l'écran et à l'export ; numéros écrits par-dessus, centrés, en Times noir. La zone de la colonne est recopiée dans la photo d'origine comme une case modifiée. Réglage `LotFrame` du projet.
