@@ -92,6 +92,16 @@ function buildGridTable(grid, words, used) {
     const rowTop = grid.RowYs[r], rowBottom = grid.RowYs[r + 1];
     const row = { Bounds: Rect.fromEdges(grid.ColumnXs[0], rowTop, grid.ColumnXs[grid.ColumnXs.length - 1], rowBottom), Lines: [] };
     const lines = groupIntoLines(rowWords[r], (t) => t.W.Box);
+    // Rangée où l'OCR n'a rien lu (fond gris tramé d'un total…) : des cases vides, modifiables et relues une par une.
+    if (lines.length === 0) {
+      const line = { Kind: 'Article', KindChosenByUser: false, OutsideTable: false, Cells: [], Lot: '', LotManual: false, NoLot: false, ForceLot: false, Extra: 0, ExtraAt: 0 };
+      const top = rowTop + PAD, bottom = Math.max(rowTop + PAD + 1, rowBottom - PAD);
+      for (let c = 0; c < nCols; c++)
+        line.Cells.push(newField({ Column: c, Box: cellBox(grid.ColumnXs[c], grid.ColumnXs[c + 1], rowTop, rowBottom, top, bottom, Rect.empty()), FontSize: 0 }));
+      row.Lines.push(line);
+      table.Rows.push(row);
+      continue;
+    }
     for (let li = 0; li < lines.length; li++) {
       const lineWords = lines[li];
       const band = bandOf(lineWords);
@@ -118,6 +128,11 @@ function buildGridTable(grid, words, used) {
     table.Rows.push(row);
   }
   computeAlignment(table, nCols);
+  // Cases des rangées vides : taille d'écriture du tableau (médiane des autres lignes).
+  const sizes = table.Rows.flatMap((r) => r.Lines).map((l) => l.Cells[0]?.FontSize ?? 0).filter((s) => s > 0).sort((a, b) => a - b);
+  const em = sizes.length > 0 ? sizes[Math.trunc(sizes.length / 2)] : 12;
+  for (const f of table.Rows.flatMap((r) => r.Lines).flatMap((l) => l.Cells))
+    if (f.FontSize === 0) f.FontSize = Math.min(em, Math.max(6, f.Box.Height / 1.05));
   return table;
 }
 
@@ -230,10 +245,15 @@ function heightRatio(t) {
 const ITEM_START = /^\s*(\+\/-\s*)?\d{1,3}\s+\p{L}/u;
 const blank = (s) => s.trim().length === 0;
 
+/** « II - STOCK », « IV - MATERIEL … » : rubrique numérotée en chiffres romains (en-tête ou ligne de récapitulatif). */
+export const ROMAN_HEADING = /^\s*[IVX]{1,5}\s*[-–.]\s*\S/;
+export const isRomanHeading = (s) => ROMAN_HEADING.test(s ?? '');
+
 export function classify(table) {
   table.Rows.forEach((row, r) => {
     const lines = row.Lines;
-    const header = r === 0 && isHeaderRow(lines);
+    // En-tête : 1re rangée, ou rangée de libellés (« exploitation », « réalisation ») sans désignation (récapitulatif).
+    const header = isHeaderRow(lines) && (r === 0 || lines.every((l) => blank(l.Cells[0]?.Text ?? '') || isRomanHeading(l.Cells[0].Text)));
     lines.forEach((line, i) => {
       if (line.KindChosenByUser || line.OutsideTable) return;
       if (header) { line.Kind = 'EnTete'; return; }

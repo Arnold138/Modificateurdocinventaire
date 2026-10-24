@@ -1,32 +1,45 @@
 namespace RetoucheInventaire.Core.Model;
 
 /// <summary>
-/// Numéros de lot : un par objet (ligne d'article), continus d'une page à l'autre.
-/// Un numéro tapé à la main fait repartir la suite de lui (80 → 81 : le suivant devient 82…).
-/// La poubelle retire le numéro d'une ligne (ce n'est pas un objet) ; « + » en ajoute un.
+/// Numéros de lot : un par objet (ligne d'article), dans l'ordre d'affichage, d'une page à l'autre.
+/// Un numéro tapé ne change jamais les autres ; « Synchroniser automatiquement » remplit tout d'un coup.
+/// 0 = objet absent : sa ligne passe après le dernier lot (voir <see cref="Export.Arrangement"/>).
+/// La poubelle retire la case d'une ligne (ce n'est pas un objet) ; « + » en ajoute une.
 /// </summary>
 public static class Lots
 {
-    /// <summary>Lignes d'objet, dans l'ordre du document.</summary>
-    public static IEnumerable<(Page Page, Table Table, PrintedLine Line)> ObjectLines(InventoryProject project)
+    /// <summary>Ordre d'affichage des rangées d'un tableau (rangées déplacées à la main), sinon l'ordre imprimé.</summary>
+    public static List<int> RowOrder(Table table)
+    {
+        int n = table.Rows.Count;
+        var o = table.RowOrder;
+        if (o is null || o.Count != n || o.Distinct().Count() != n || o.Any(r => r < 0 || r >= n)) return Enumerable.Range(0, n).ToList();
+        return [.. o];
+    }
+
+    public static IEnumerable<Row> OrderedRows(Table table) => RowOrder(table).Select(r => table.Rows[r]);
+
+    /// <summary>Lignes d'objet, dans l'ordre d'affichage (pages, tableaux, rangées déplacées à la main).</summary>
+    public static IEnumerable<(Page Page, Table Table, int Row, PrintedLine Line)> ObjectLines(InventoryProject project)
     {
         foreach (var page in project.Pages)
             foreach (var table in page.Tables)
-                foreach (var row in table.Rows)
+                foreach (var r in RowOrder(table))
                 {
+                    var row = table.Rows[r];
                     var pick = DefaultPick(row);
                     foreach (var line in row.Lines)
-                        if (IsObject(line, pick)) yield return (page, table, line);
+                        if (IsObject(line, pick)) yield return (page, table, r, line);
                 }
     }
 
     /// <summary>
     /// L'objet de la rangée selon la règle : la ligne d'article qui porte les valeurs, sinon la première
-    /// (les suivantes sont la suite du même objet). Null si la rangée n'a pas d'article.
+    /// (les suivantes sont la suite du même objet ; pas les récapitulatifs « II - STOCK »). Null si la rangée n'a pas d'article.
     /// </summary>
     private static PrintedLine? DefaultPick(Row row)
     {
-        var articles = row.Lines.Where(l => l.Kind == LineKind.Article && !l.OutsideTable).ToList();
+        var articles = row.Lines.Where(l => l.Kind == LineKind.Article && !l.OutsideTable && !Analysis.LineClassifier.IsRomanHeading(l.FirstText)).ToList();
         if (articles.Count == 0) return null;
         var line = articles.FirstOrDefault(l => l.Cells.Skip(1).Any(c => !string.IsNullOrWhiteSpace(c.Text))) ?? articles[0];
         return line.Cells.All(c => string.IsNullOrWhiteSpace(c.Text)) ? null : line;
@@ -35,46 +48,72 @@ public static class Lots
     private static bool IsObject(PrintedLine line, PrintedLine? pick) =>
         !line.NoLot && !line.OutsideTable && (line == pick || (line.ForceLot && line.FirstText.Length > 0));
 
-    /// <summary>Ligne sans numéro à laquelle on peut en ajouter un (« + »).</summary>
-    public static bool CanAdd(PrintedLine line) =>
-        !HasCell(line) && !line.OutsideTable && line.Kind is not (LineKind.EnTete or LineKind.Ignoree) && line.FirstText.Length > 0;
+    /// <summary>
+    /// Ligne sans numéro à laquelle on peut en ajouter un (« + ») : article ou titre (pas un total, un en-tête, un récapitulatif),
+    /// qui commence sa rangée ou ressemble à un objet (« 1 gerbeur… »).
+    /// </summary>
+    public static bool CanAdd(PrintedLine line, Row? row = null)
+    {
+        if (HasCell(line) || line.OutsideTable || line.Kind is not (LineKind.Article or LineKind.Titre)) return false;
+        var t = line.FirstText;
+        if (t.Length == 0 || Analysis.LineClassifier.IsRomanHeading(t)) return false;
+        return row is null || row.Lines.FirstOrDefault(l => l.FirstText.Length > 0) == line || Analysis.LineClassifier.LooksLikeItem(t);
+    }
 
-    /// <summary>Lot 0 : objet absent ou barré (regroupé à la fin du .txt).</summary>
+    /// <summary>Lot 0 : objet absent ou barré, déplacé après le dernier lot.</summary>
     public static bool IsZero(PrintedLine line) => int.TryParse(line.Lot.Trim(), out var v) && v == 0;
 
     /// <summary>La colonne des lots existe (au moins une case, même vide).</summary>
     public static bool IsActive(InventoryProject project) =>
-        project.Pages.SelectMany(p => p.AllLines()).Any(l => l.Lot.Length > 0 || l.LotSlot);
+        project.Pages.SelectMany(p => p.AllLines()).Any(HasCell);
 
     /// <summary>Case de lot à afficher sur cette ligne (numérotée ou vide).</summary>
     public static bool HasCell(PrintedLine l) => l.Lot.Length > 0 || l.LotSlot;
 
-    /// <summary>
-    /// « Colonne vide » : une case par objet, toutes vides ; on les remplit soi-même, rien ne se remplit tout seul.
-    /// </summary>
+    /// <summary>Bouton « Lots » : une case vide par objet ; on tape les numéros soi-même, rien ne se remplit tout seul.</summary>
     public static void CreateEmpty(InventoryProject project)
     {
         Clear(project);
         project.LotsByHand = true;
-        foreach (var (_, _, line) in ObjectLines(project).ToList()) line.LotSlot = true;
+        foreach (var (_, _, _, line) in ObjectLines(project).ToList()) line.LotSlot = true;
     }
 
-    /// <summary>« Synchroniser automatiquement » : le logiciel remplit toutes les cases (les numéros tapés restent des repères).</summary>
+    /// <summary>
+    /// « Synchroniser automatiquement » : remplit toutes les cases d'un coup, dans l'ordre d'affichage.
+    /// Les numéros tapés à la main restent et la suite repart d'eux ; 0 ne prend pas de numéro.
+    /// </summary>
     public static void FillAutomatically(InventoryProject project)
     {
-        project.LotsByHand = false;
         Resync(project);
+        int next = 1;
+        foreach (var (_, _, _, line) in ObjectLines(project))
+        {
+            if (line.LotManual && int.TryParse(line.Lot, out var v))
+            {
+                if (v != 0) next = v + 1;
+            }
+            else if (line.LotManual && line.Lot.Length > 0) { /* « 12 bis » : gardé tel quel */ }
+            else { line.Lot = next.ToString(); line.LotManual = false; next++; }
+        }
     }
 
-    /// <summary>Numérote tous les objets à partir de <paramref name="start"/> (les lignes retirées à la poubelle le restent).</summary>
+    /// <summary>Renumérote tout à partir de <paramref name="start"/> (les numéros tapés sont oubliés, sauf les 0).</summary>
     public static void Number(InventoryProject project, int start = 1)
     {
-        project.LotsByHand = false;
-        foreach (var l in project.Pages.SelectMany(p => p.AllLines())) { l.Lot = ""; l.LotManual = false; }
-        var first = ObjectLines(project).FirstOrDefault();
+        Resync(project);
+        if (!IsActive(project)) foreach (var (_, _, _, line) in ObjectLines(project).ToList()) line.LotSlot = true;
+        foreach (var l in project.Pages.SelectMany(p => p.AllLines()).Where(l => !IsZero(l))) { l.Lot = ""; l.LotManual = false; }
+        var first = ObjectLines(project).FirstOrDefault(o => !IsZero(o.Line));
         if (first.Line is null) return;
         first.Line.Lot = start.ToString();
         first.Line.LotManual = true;
+        FillAutomatically(project);
+    }
+
+    /// <summary>Vide toutes les cases (la colonne reste).</summary>
+    public static void Empty(InventoryProject project)
+    {
+        foreach (var l in project.Pages.SelectMany(p => p.AllLines())) { l.Lot = ""; l.LotManual = false; }
         Resync(project);
     }
 
@@ -84,7 +123,7 @@ public static class Lots
         project.LotsByHand = false;
     }
 
-    /// <summary>Numéro tapé à la main sur une ligne : la suite se recale automatiquement.</summary>
+    /// <summary>Numéro tapé à la main : seule cette case change.</summary>
     public static void Set(InventoryProject project, PrintedLine line, string value)
     {
         line.Lot = value.Trim();
@@ -92,7 +131,7 @@ public static class Lots
         Resync(project);
     }
 
-    /// <summary>Poubelle : cette ligne n'est pas un objet ; les numéros suivants se décalent.</summary>
+    /// <summary>Poubelle : cette ligne n'est pas un objet ; sa case disparaît (les autres numéros ne bougent pas).</summary>
     public static void Remove(InventoryProject project, PrintedLine line)
     {
         line.NoLot = true;
@@ -102,7 +141,7 @@ public static class Lots
         Resync(project);
     }
 
-    /// <summary>« + » : cette ligne est un objet ; elle prend le numéro qui suit le précédent.</summary>
+    /// <summary>« + » : cette ligne est un objet ; une case vide apparaît.</summary>
     public static void Add(InventoryProject project, PrintedLine line)
     {
         line.NoLot = false;
@@ -113,10 +152,7 @@ public static class Lots
         Resync(project);
     }
 
-    /// <summary>
-    /// Recalcule les numéros (bouton « Synchroniser », et après chaque lot tapé, type de ligne changé,
-    /// page ajoutée ou retirée). Les numéros tapés à la main sont gardés ; les autres suivent le précédent.
-    /// </summary>
+    /// <summary>Met les cases en place (une par objet) sans toucher à aucun numéro.</summary>
     public static void Resync(InventoryProject project)
     {
         if (!IsActive(project)) return;
@@ -125,17 +161,6 @@ public static class Lots
         {
             l.LotSlot = objects.Contains(l);
             if (!l.LotSlot) { l.Lot = ""; l.LotManual = false; }
-        }
-        if (project.LotsByHand) return; // remplis à la main : on ne touche à aucun numéro
-        int next = 1;
-        foreach (var (_, _, line) in ObjectLines(project))
-        {
-            if (line.LotManual && int.TryParse(line.Lot, out var v))
-            {
-                if (v != 0) next = v + 1; // 0 : objet absent ou barré, ne prend pas de numéro
-            }
-            else if (line.LotManual && line.Lot.Length > 0) { /* « 12 bis » : gardé tel quel */ }
-            else { line.Lot = next.ToString(); line.LotManual = false; next++; }
         }
     }
 

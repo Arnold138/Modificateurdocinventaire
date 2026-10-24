@@ -12,8 +12,8 @@ namespace RetoucheInventaire.Core.Export;
 /// </summary>
 public static class LotColumn
 {
-    /// <summary>Un tableau à encadrer et ce qu'il faut tracer.</summary>
-    public sealed record Frame(Table Table, int Left, int Right, int Top, int Bottom, int VThick, int HThick, byte[] Color);
+    /// <summary>Un tableau à encadrer et ce qu'il faut tracer (rangées encadrées, dans l'ordre d'affichage).</summary>
+    public sealed record Frame(Table Table, int Left, int Right, List<int> Rows, int VThick, int HThick, byte[] Color);
 
     private static int R(double v) => (int)Math.Floor(v + 0.5);
 
@@ -22,9 +22,24 @@ public static class LotColumn
         page.Tables.Where(t => t.HasGrid && t.ColumnXs.Count >= 2 && t.RowYs.Count >= 2
                                && t.Rows.SelectMany(r => r.Lines).Any(Lots.HasCell)).ToList();
 
+    /// <summary>
+    /// Rangées où la colonne est tracée : de la 1re à la dernière rangée qui porte une case de lot (ordre d'affichage),
+    /// plus l'en-tête juste au-dessus. Rien sous le dernier objet (totaux, rangées vides).
+    /// </summary>
+    public static List<int> FramedRows(Table table)
+    {
+        var order = Lots.RowOrder(table).Where(r => r + 1 < table.RowYs.Count).ToList();
+        var has = order.Select(r => table.Rows[r].Lines.Any(Lots.HasCell)).ToList();
+        int first = has.IndexOf(true), last = has.LastIndexOf(true);
+        if (first < 0) return [];
+        int from = first;
+        while (from > 0 && table.Rows[order[from - 1]].Lines.Count > 0 && table.Rows[order[from - 1]].Lines.All(l => l.Kind == LineKind.EnTete)) from--;
+        return order.GetRange(from, last + 1 - from);
+    }
+
     /// <summary>Signature de ce qui est tracé (pour savoir s'il faut redessiner l'écran).</summary>
     public static string Signature(Page page, bool enabled) =>
-        !enabled ? "" : string.Join(",", FramedTables(page).Select(t => page.Tables.IndexOf(t))) + "/" + Lots.ColumnWidth(page);
+        !enabled ? "" : string.Join(",", FramedTables(page).Select(t => page.Tables.IndexOf(t) + ":" + string.Join(".", FramedRows(t)))) + "/" + Lots.ColumnWidth(page);
 
     public static List<Frame> Frames(Raster image, Page page)
     {
@@ -34,8 +49,10 @@ public static class LotColumn
         {
             int right = R(t.ColumnXs[0]), left = R(t.ColumnXs[0] - w);
             if (right - left < 8) continue;
+            var rows = FramedRows(t);
+            if (rows.Count == 0) continue;
             var (vt, ht, color) = MeasureRules(image, t);
-            frames.Add(new Frame(t, left, right, R(t.RowYs[0]), R(t.RowYs[^1]), vt, ht, color));
+            frames.Add(new Frame(t, left, right, rows, vt, ht, color));
         }
         return frames;
     }
@@ -47,7 +64,12 @@ public static class LotColumn
         var framed = enabled ? FramedTables(page) : [];
         double w = Lots.ColumnWidth(page);
         foreach (var t in framed)
-            boxes.Add(RectD.FromEdges(t.ColumnXs[0] - w - 8, t.RowYs[0] - 8, t.ColumnXs[0] - 1, t.RowYs[^1] + 8));
+        {
+            var rows = FramedRows(t);
+            if (rows.Count == 0) continue;
+            double top = rows.Min(r => t.RowYs[r]), bottom = rows.Max(r => t.RowYs[r + 1]);
+            boxes.Add(RectD.FromEdges(t.ColumnXs[0] - w - 8, top - 8, t.ColumnXs[0] - 1, bottom + 8));
+        }
         foreach (var t in page.Tables.Where(t => !framed.Contains(t)))
             foreach (var l in t.Rows.SelectMany(r => r.Lines).Where(l => l.Lot.Length > 0))
                 boxes.Add(Lots.NumberBox(t, l, w));
@@ -61,17 +83,22 @@ public static class LotColumn
         foreach (var f in Frames(image, page))
         {
             DrawBackgrounds(image, output, f);
-            int half = f.VThick / 2;
-            Fill(output, f.Left - half, f.Top - f.HThick / 2, f.VThick, f.Bottom - f.Top + f.HThick, f.Color);
-            foreach (var y in f.Table.RowYs)
-                Fill(output, f.Left - half, R(y) - f.HThick / 2, f.Right - (f.Left - half), f.HThick, f.Color);
+            int half = f.VThick / 2, hh = f.HThick / 2;
+            // Chaque rangée porte ses traits (gauche, haut, bas) : elle peut être déplacée avec eux.
+            foreach (var r in f.Rows)
+            {
+                int y0 = R(f.Table.RowYs[r]), y1 = R(f.Table.RowYs[r + 1]);
+                Fill(output, f.Left - half, y0 - hh, f.VThick, y1 - y0 + f.HThick, f.Color);
+                Fill(output, f.Left - half, y0 - hh, f.Right - (f.Left - half), f.HThick, f.Color);
+                Fill(output, f.Left - half, y1 - hh, f.Right - (f.Left - half), f.HThick, f.Color);
+            }
         }
         return output;
     }
 
     /// <summary>
-    /// Fond de chaque case de la colonne : le même que celui de la rangée (gris hachuré de l'en-tête
-    /// ou des totaux, papier ailleurs), recopié depuis une partie de la rangée sans texte.
+    /// Fond de chaque case de la colonne : le même que celui de la rangée (gris hachuré de l'en-tête, papier ailleurs),
+    /// recopié depuis le morceau le plus clair de la 1re colonne (jamais du texte, même si l'OCR ne l'a pas lu).
     /// </summary>
     private static void DrawBackgrounds(Raster source, Raster output, Frame f)
     {
@@ -79,20 +106,26 @@ public static class LotColumn
         int x0 = f.Left - f.VThick / 2 + f.VThick, x1 = f.Right - f.VThick / 2;   // intérieur de la colonne
         int w = x1 - x0;
         if (w <= 0) return;
-        for (int r = 0; r + 1 < t.RowYs.Count; r++)
+        foreach (var r in f.Rows)
         {
             int y0 = R(t.RowYs[r]) - f.HThick / 2 + f.HThick, y1 = R(t.RowYs[r + 1]) - f.HThick / 2;
             if (y1 <= y0) continue;
             var ink = (r < t.Rows.Count ? t.Rows[r].Lines : [])
                 .SelectMany(l => l.Cells).Where(c => !c.Ink.IsEmpty).Select(c => c.Ink).ToList();
             int start = R(t.ColumnXs[0]) + f.VThick + 2, end = R(t.ColumnXs[1]) - f.VThick - 2 - w;
+            int best = -1;
+            long bestSum = -1;
             for (int sx = start; sx <= end; sx += 2)
             {
                 var patch = new RectD(sx - 3, y0, w + 6, y1 - y0);
                 if (ink.Any(i => i.IntersectsWith(patch))) continue;
-                Copy(source, output, sx, y0, x0, y0, w, y1 - y0);
-                break;
+                long sum = 0;
+                for (int y = y0; y < y1; y += 2)
+                    for (int x = sx; x < sx + w; x += 2)
+                        if (x >= 0 && x < source.Width && y >= 0 && y < source.Height) sum += Gray(source, x, y);
+                if (sum > bestSum) { bestSum = sum; best = sx; }
             }
+            if (best >= 0) Copy(source, output, best, y0, x0, y0, w, y1 - y0);
         }
     }
 

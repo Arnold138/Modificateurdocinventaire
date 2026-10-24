@@ -14,12 +14,22 @@ public static partial class LineClassifier
     [GeneratedRegex(@"^\s*(\+/-\s*)?\d{1,3}\s+\p{L}")]
     private static partial Regex ItemStart();
 
+    [GeneratedRegex(@"^\s*[IVX]{1,5}\s*[-–.]\s*\S")]
+    private static partial Regex RomanHeadingRegex();
+
+    /// <summary>« II - STOCK », « IV - MATERIEL … » : rubrique numérotée en chiffres romains (en-tête ou ligne de récapitulatif).</summary>
+    public static bool IsRomanHeading(string? s) => RomanHeadingRegex().IsMatch(s ?? "");
+
+    /// <summary>Ressemble à un objet : « 1 gerbeur… », « +/- 20 palettes… ».</summary>
+    public static bool LooksLikeItem(string s) => ItemStart().IsMatch(s);
+
     public static void Classify(Table table)
     {
         for (int r = 0; r < table.Rows.Count; r++)
         {
             var lines = table.Rows[r].Lines;
-            bool header = r == 0 && IsHeaderRow(lines);
+            // En-tête : 1re rangée, ou rangée de libellés (« exploitation », « réalisation ») sans désignation (récapitulatif).
+            bool header = IsHeaderRow(lines) && (r == 0 || lines.All(l => string.IsNullOrWhiteSpace(l.Cells.FirstOrDefault()?.Text) || IsRomanHeading(l.Cells[0].Text)));
             for (int i = 0; i < lines.Count; i++)
             {
                 var line = lines[i];

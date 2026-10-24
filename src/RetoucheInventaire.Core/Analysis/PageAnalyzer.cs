@@ -92,6 +92,18 @@ public static class PageAnalyzer
             var row = new Row { Bounds = RectD.FromEdges(grid.ColumnXs[0], rowTop, grid.ColumnXs[^1], rowBottom) };
             var lines = GroupIntoLines(rowWords[r], t => t.W.Box);
 
+            // Rangée où l'OCR n'a rien lu (fond gris tramé d'un total…) : des cases vides, modifiables et relues une par une.
+            if (lines.Count == 0)
+            {
+                var blank = new PrintedLine();
+                double top = rowTop + Pad, bottom = Math.Max(rowTop + Pad + 1, rowBottom - Pad);
+                for (int c = 0; c < nCols; c++)
+                    blank.Cells.Add(new Field { Column = c, Box = CellBox(grid.ColumnXs[c], grid.ColumnXs[c + 1], rowTop, rowBottom, top, bottom, RectD.Empty), FontSize = 0 });
+                row.Lines.Add(blank);
+                table.Rows.Add(row);
+                continue;
+            }
+
             for (int li = 0; li < lines.Count; li++)
             {
                 var lineWords = lines[li];
@@ -127,6 +139,11 @@ public static class PageAnalyzer
         }
 
         ComputeAlignment(table, nCols);
+        // Cases des rangées vides : taille d'écriture du tableau (médiane des autres lignes).
+        var sizes = table.Rows.SelectMany(r => r.Lines).Select(l => l.Cells.FirstOrDefault()?.FontSize ?? 0).Where(v => v > 0).OrderBy(v => v).ToList();
+        double tableEm = sizes.Count > 0 ? sizes[sizes.Count / 2] : 12;
+        foreach (var f in table.Rows.SelectMany(r => r.Lines).SelectMany(l => l.Cells))
+            if (f.FontSize == 0) f.FontSize = Math.Min(tableEm, Math.Max(6, f.Box.Height / 1.05));
         return table;
     }
 

@@ -93,27 +93,22 @@ if (args.Length > 0 && args[0] == "export-frame")
     var framed = RetoucheInventaire.Core.Export.LotColumn.Draw(stretched, page);
     Pgm.Write(args[1], framed);
     foreach (var f in RetoucheInventaire.Core.Export.LotColumn.Frames(stretched, page))
-        Console.WriteLine($"x {f.Left}-{f.Right} y {f.Top}-{f.Bottom} traits {f.VThick}/{f.HThick} gris {f.Color[3]}");
+        Console.WriteLine($"x {f.Left}-{f.Right} rangées {string.Join(",", f.Rows)} traits {f.VThick}/{f.HThick} gris {f.Color[3]}");
     return 0;
 }
-if (args.Length > 0 && args[0] == "export-zero")
+if (args.Length > 0 && args[0] == "export-arrange")
 {
-    // Lots 0 : rangées retirées de leur page et recollées sous le dernier tableau de la dernière page.
-    var project = new InventoryProject();
-    foreach (var name in new[] { "page1", "page5" }) project.Pages.Add(Fixtures.Analyze(name));
-    Lots.Number(project, 1);
-    Lots.Set(project, project.Pages[0].AllLines().First(l => l.Cells[0].Text == "2 rolls en métal"), "0");
-    Lots.Set(project, project.Pages[1].AllLines().First(l => l.Cells[0].Text == "CARTONNAGE"), "0");
-    var strips = new List<RetoucheInventaire.Core.Export.ZeroRows.Strip>();
+    // Lots 0 recollés après le dernier lot, rangée déplacée, totaux : .txt et pages recomposées, pour comparaison avec l'iPad.
+    var project = Tests.ArrangeScenario();
+    var plan = RetoucheInventaire.Core.Export.Arrangement.Build(project);
+    Totals.Recompute(project, plan);
+    Directory.CreateDirectory(args[1]);
+    RetoucheInventaire.Core.Export.TxtExporter.Write(project, Path.Combine(args[1], "export.txt"));
+    var images = Tests.ComposeAll(project, plan, pg => RetoucheInventaire.Core.Export.LotColumn.Draw(Fixtures.Load(pg.Id).Image, pg));
     for (int i = 0; i < project.Pages.Count; i++)
     {
-        var page = project.Pages[i];
-        var img = RetoucheInventaire.Core.Export.LotColumn.Draw(Fixtures.Load(page.Id).Image, page);
-        var cut = RetoucheInventaire.Core.Export.ZeroRows.Cut(img, page);
-        strips.AddRange(cut.Strips);
-        var final = i == project.Pages.Count - 1 ? RetoucheInventaire.Core.Export.ZeroRows.Append(cut.Image, cut.InsertAt, cut.TableLeft, strips) : cut.Image;
-        Pgm.Write(Path.Combine(args[1], page.Id + "-zero.pgm"), final);
-        Console.WriteLine($"{page.Id}: {img.Height} -> {final.Height}");
+        Pgm.Write(Path.Combine(args[1], project.Pages[i].Id + ".pgm"), images[i]);
+        Console.WriteLine($"{project.Pages[i].Id}: {project.Pages[i].Height} -> {images[i].Height}");
     }
     return 0;
 }

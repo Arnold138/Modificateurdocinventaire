@@ -2,7 +2,7 @@
 import { Rect, Quad, pt } from './geometry.js';
 import { homography, homographyPts, toRgba, raster } from './imaging.js';
 import { allFields, firstText, isModified } from './model.js';
-import { lotsActive, isZeroLot } from './lots.js';
+import { lotsActive, isZeroLot, hasLotCell, orderedRows } from './lots.js';
 import { lotRegions } from './lotcolumn.js';
 
 // ---------- Texte ----------
@@ -35,10 +35,18 @@ function exportRow(row, lots) {
     else moved.set(target, l.Cells.slice(1).map((c) => c.Text));
   });
   const out = [];
+  // Lignes d'un objet numéroté (l'objet et sa suite) : les lots 0 se placent après la dernière.
+  let inObject = false;
+  const objectPart = (l) => {
+    if (hasLotCell(l)) inObject = !isZeroLot(l);
+    else if (l.Kind !== 'Article') inObject = false;
+    return inObject;
+  };
   for (const line of lines) {
+    const obj = lots && objectPart(line);
     if (line.Kind === 'Titre' && !titlesKeeping.has(line)) {
       const t = cleanText(firstText(line));
-      if (t.length > 0) out.push({ text: prefix(line) + t, zero: zero(line) });
+      if (t.length > 0) out.push({ text: prefix(line) + t, zero: zero(line), obj });
       continue;
     }
     const cells = line.Cells.map((c) => c.Text);
@@ -46,7 +54,7 @@ function exportRow(row, lots) {
     if (values) for (let c = 1; c < cells.length && c - 1 < values.length; c++) cells[c] = values[c - 1];
     const parts = cells.map((t, c) => (c === 0 ? cleanText(t) : cleanValue(t)));
     while (parts.length > 0 && parts[parts.length - 1].length === 0) parts.pop();
-    if (parts.length > 0) out.push({ text: prefix(line) + parts.join('\t'), zero: zero(line) });
+    if (parts.length > 0) out.push({ text: prefix(line) + parts.join('\t'), zero: zero(line), obj });
   }
   return out;
 }
@@ -63,17 +71,18 @@ function looksLikeFormula(cell) {
 export function buildTxt(project) {
   const output = [];
   const lots = lotsActive(project);
-  const zeroLines = []; // objets au lot 0 (absents ou barrés) : regroupés à la fin de l'inventaire
+  const zeroLines = []; // objets au lot 0 (absents ou barrés) : placés après le dernier lot
+  let after = -1;       // fin du dernier objet numéroté
   for (const page of project.Pages)
     for (const table of page.Tables) {
-      const rows = table.Rows.flatMap((r) => exportRow(r, lots));
+      const rows = orderedRows(table).flatMap((r) => exportRow(r, lots));
       zeroLines.push(...rows.filter((x) => x.zero).map((x) => x.text));
-      const tableLines = rows.filter((x) => !x.zero).map((x) => x.text);
-      const first = table.Rows.flatMap((r) => r.Lines).find((l) => l.Kind !== 'Ignoree');
-      if (tableLines.length > 0 && first?.Kind === 'EnTete' && output.length > 0 && output[output.length - 1].length > 0) output.push('');
-      output.push(...tableLines);
+      const kept = rows.filter((x) => !x.zero);
+      const first = orderedRows(table).flatMap((r) => r.Lines).find((l) => l.Kind !== 'Ignoree');
+      if (kept.length > 0 && first?.Kind === 'EnTete' && output.length > 0 && output[output.length - 1].length > 0) output.push('');
+      for (const x of kept) { output.push(x.text); if (x.obj) after = output.length; }
     }
-  output.push(...zeroLines);
+  output.splice(after < 0 ? output.length : after, 0, ...zeroLines);
   const warnings = [];
   output.forEach((l, i) => {
     for (const cell of l.split('\t'))
@@ -91,7 +100,7 @@ export const txtBlob = (text) => new Blob(['﻿' + text], { type: 'text/plain;ch
 export const editedFields = (page) => [...allFields(page)].filter((f) => isModified(f) && !f.Locked);
 
 /** Champs qui portent un trait (texte barré). */
-export const struckFields = (page) => [...allFields(page)].filter((f) => (f.Strikes?.length ?? 0) > 0 && !f.Locked);
+export const struckFields = (page) => [...allFields(page)].filter((f) => ((f.Strikes?.length ?? 0) > 0 || (f.Colors?.length ?? 0) > 0) && !f.Locked);
 
 /** Couleur du papier autour d'une case (moyenne des pixels clairs du pourtour). */
 export function paperColor(image, box) {

@@ -36,21 +36,20 @@ public static partial class TxtExporter
         var warnings = new List<string>();
 
         bool lots = Lots.IsActive(project);
-        // Objets au lot 0 (absents ou barrés) : retirés de leur place et regroupés à la fin de l'inventaire.
+        // Objets au lot 0 (absents ou barrés) : retirés de leur place et placés après le dernier lot.
         var zeroLines = new List<string>();
+        int after = -1; // fin du dernier objet numéroté
         foreach (var table in project.Pages.SelectMany(p => p.Tables))
         {
-            var tableLines = new List<string>();
-            foreach (var row in table.Rows)
-                foreach (var (rowText, zero) in ExportRow(row, lots))
-                    (zero ? zeroLines : tableLines).Add(rowText);
-
-            bool startsWithHeader = table.Rows.SelectMany(r => r.Lines).FirstOrDefault(l => l.Kind != LineKind.Ignoree)?.Kind == LineKind.EnTete;
-            if (tableLines.Count > 0 && startsWithHeader && output.Count > 0 && output[^1].Length > 0)
+            var rows = Lots.OrderedRows(table).SelectMany(r => ExportRow(r, lots)).ToList();
+            zeroLines.AddRange(rows.Where(x => x.Zero).Select(x => x.Text));
+            var kept = rows.Where(x => !x.Zero).ToList();
+            bool startsWithHeader = Lots.OrderedRows(table).SelectMany(r => r.Lines).FirstOrDefault(l => l.Kind != LineKind.Ignoree)?.Kind == LineKind.EnTete;
+            if (kept.Count > 0 && startsWithHeader && output.Count > 0 && output[^1].Length > 0)
                 output.Add(""); // une ligne vide sépare deux tableaux
-            output.AddRange(tableLines);
+            foreach (var x in kept) { output.Add(x.Text); if (x.Object) after = output.Count; }
         }
-        output.AddRange(zeroLines);
+        output.InsertRange(after < 0 ? output.Count : after, zeroLines);
 
         for (int i = 0; i < output.Count; i++)
             foreach (var cell in output[i].Split('\t'))
@@ -61,7 +60,7 @@ public static partial class TxtExporter
         return new TxtExportResult(text, output.Count, warnings);
     }
 
-    private static IEnumerable<(string Text, bool Zero)> ExportRow(Row row, bool lots)
+    private static IEnumerable<(string Text, bool Zero, bool Object)> ExportRow(Row row, bool lots)
     {
         // Lignes qui partent en fin d'inventaire : l'objet au lot 0 et, s'il est le seul objet de la rangée,
         // les lignes d'article sans numéro qui le décrivent (suite de l'objet).
@@ -84,12 +83,21 @@ public static partial class TxtExporter
             else movedValues[target] = lines[i].Cells.Skip(1).Select(c => c.Text).ToArray();
         }
 
+        // Lignes d'un objet numéroté (l'objet et sa suite) : les lots 0 se placent après la dernière.
+        bool inObject = false;
+        bool ObjectPart(PrintedLine l)
+        {
+            if (Lots.HasCell(l)) inObject = !Lots.IsZero(l);
+            else if (l.Kind != LineKind.Article) inObject = false;
+            return inObject;
+        }
         foreach (var line in lines)
         {
+            bool obj = lots && ObjectPart(line);
             if (line.Kind == LineKind.Titre && !titlesKeepingValues.Contains(line))
             {
                 var title = CleanText(line.FirstText);
-                if (title.Length > 0) yield return (Prefix(line) + title, Zero(line));
+                if (title.Length > 0) yield return (Prefix(line) + title, Zero(line), obj);
                 continue;
             }
 
@@ -99,7 +107,7 @@ public static partial class TxtExporter
 
             var parts = cells.Select((t, c) => c == 0 ? CleanText(t) : CleanValue(t)).ToList();
             while (parts.Count > 0 && parts[^1].Length == 0) parts.RemoveAt(parts.Count - 1);
-            if (parts.Count > 0) yield return (Prefix(line) + string.Join("\t", parts), Zero(line));
+            if (parts.Count > 0) yield return (Prefix(line) + string.Join("\t", parts), Zero(line), obj);
         }
     }
 

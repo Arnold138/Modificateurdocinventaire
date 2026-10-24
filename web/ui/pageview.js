@@ -1,56 +1,70 @@
-// Une page à l'écran : l'image d'origine et, par-dessus, un champ par case à sa position exacte.
+// Une page à l'écran : l'image (recomposée si des rangées ont bougé) et, par-dessus, un champ par case à sa place.
 // Case non modifiée : invisible (opacité 0, toujours touchable) → on ne voit que l'original.
-// Case modifiée ou en cours d'édition : fond couleur papier + texte noir, réduit pour tenir dans la case.
+// Case modifiée ou en cours d'édition : fond couleur papier + texte noir (ou en couleur), même taille que l'imprimé.
+// Les cases sont placées d'après la mise en page (arrange.js) : un lot 0 recollé en fin d'inventaire s'édite là où il est affiché.
 import { Rect } from '../core/geometry.js';
 import { isModified, addLockZone, removeLockZoneAt } from '../core/model.js';
 import { paperColor } from '../core/exports.js';
-import { lotLabels, canAddLot, hasLotCell } from '../core/lots.js';
-import { framedTables } from '../core/lotcolumn.js';
-import { zeroRows } from '../core/zerorows.js';
-import { rasterToCanvas, freeCanvas, font, lotSize, textLayout, isMultiline, LINE_HEIGHT, strikeSegments } from '../services/canvas.js';
-import { adjustStrikes } from '../core/strikes.js';
+import { canAddLot, hasLotCell, isZeroLot } from '../core/lots.js';
+import { font, lotSize, textLayout, isMultiline, LINE_HEIGHT, strikeSegments, rasterToCanvas, freeCanvas, cleanPatch } from '../services/canvas.js';
+import { adjustStrikes, colorRuns, hasColors, textColor } from '../core/strikes.js';
 import { baseBox } from '../core/layout.js';
+import { isComputedCell } from '../core/totals.js';
 
 const BADGES = { Titre: ['T', '#0067c0'], Total: ['Σ', '#107c10'], EnTete: ['E', '#606060'], Ignoree: ['×', '#b42828'] };
 const el = (tag, cls, parent) => { const e = document.createElement(tag); if (cls) e.className = cls; parent?.appendChild(e); return e; };
 const px = (e, r) => { Object.assign(e.style, { left: r.X + 'px', top: r.Y + 'px', width: r.Width + 'px', height: r.Height + 'px' }); return e; };
+const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
 export class PageView {
   /**
-   * @param page modèle ; @param image raster redressé d'origine (null pour TXT/CSV/XLSX) ;
-   * display : image affichée (avec la colonne des lots tracée) ; zoom : fonction qui renvoie le zoom courant ;
-   * lotFrame : vrai si la colonne des lots est tracée.
+   * @param view ce qu'affiche la page (viewOf) ; @param display image affichée (null pour TXT/CSV/XLSX) ;
+   * cb : rappels (onFocus, onEdited, onLot, onLotRemove, onLotAdd, onMoveRow, onLocks, beforeEdit, beforeChange),
+   * lotsActive, zoom, mapY / unmapY (zones verrouillées : page d'origine ↔ écran).
    */
-  constructor(page, image, { display, onFocus, onEdited, onTouch, onLocks, onLot, onLotRemove, onLotAdd, lotsActive, lotFrame, zoom, beforeEdit, beforeChange }) {
-    this.page = page;
-    this.image = image;
-    this.cb = { onFocus, onEdited, onTouch, onLocks, onLot, onLotRemove, onLotAdd, lotsActive, lotFrame, zoom, beforeEdit, beforeChange };
-    this.lotInputs = new Map();
-    this.lineOf = new Map();
+  constructor(view, display, cb) {
+    this.cb = cb;
     this.inputs = new Map();
-    this.base = new Map();
+    this.lotInputs = new Map();
+    this.colorBoxes = new Map();
     this.paper = new Map();
+    this.selection = null; // dernière sélection dans une case (pour « Barrer » et « Couleur »)
+    this.setView(view);
+    this.image = display;
 
-    // Colonne des lots à gauche, en dehors de la page : la mise en page du document n'est pas touchée.
+    // Colonne de gauche, en dehors de la page : poignées, type de ligne, poubelle / « + » des lots.
     this.row = el('div', 'page-row');
     this.gutter = el('div', 'gutter', this.row);
-    this.gutter.style.height = page.Height + 'px';
     this.root = el('div', 'page', this.row);
-    Object.assign(this.root.style, { width: page.Width + 'px', height: page.Height + 'px' });
-    if (image) {
-      this.canvas = rasterToCanvas(display ?? image);
+    this.size();
+    if (display) {
+      this.canvas = rasterToCanvas(display);
       this.canvas.className = 'bg';
       this.root.appendChild(this.canvas);
     } else this.drawGrid();
     this.fields = el('div', 'layer', this.root);
+    this.colors = el('div', 'layer colors', this.root);
     this.lots = el('div', 'layer lots', this.root);
     this.strikes = el('div', 'layer strikes', this.root);
-    this.selection = null; // dernière sélection dans une case (pour « Barrer »)
     this.overlay = el('div', 'layer overlay', this.root);
     this.lockpad = el('div', 'layer lockpad', this.root);
-    this.root.addEventListener('pointerdown', () => onTouch?.(this), true);
     this.initLockPad();
     this.build();
+  }
+
+  get page() { return this.view.page; }
+
+  setView(view) {
+    this.view = view;
+    this.place = new Map();
+    this.lineOf = new Map();
+    for (const entry of view.lines)
+      for (const pl of entry.cells) { this.place.set(pl.f, { ...pl, entry }); this.lineOf.set(pl.f, entry.line); }
+  }
+
+  size() {
+    Object.assign(this.root.style, { width: this.view.width + 'px', height: this.view.height + 'px' });
+    this.gutter.style.height = this.view.height + 'px';
   }
 
   /** Libère la mémoire de l'image (important sur iPhone/iPad). */
@@ -59,8 +73,9 @@ export class PageView {
     this.row.remove();
   }
 
-  /** Remplace l'image affichée (colonne des lots tracée ou non). */
   setDisplay(display) {
+    this.image = display;
+    this.paper.clear();
     if (!this.canvas || !display) return;
     const c = rasterToCanvas(display);
     c.className = 'bg';
@@ -69,16 +84,97 @@ export class PageView {
     this.canvas = c;
   }
 
+  build() {
+    this.drawLockZones();
+    for (const [f, pl] of this.place) if (!f.Locked) this.addField(f, pl);
+    this.loupe = el('div', 'loupe', this.overlay);
+    this.refreshLots();
+    this.refreshStrikes();
+    this.refreshColors();
+  }
+
+  refresh() {
+    this.fields.replaceChildren();
+    this.overlay.replaceChildren();
+    this.colors.replaceChildren();
+    this.inputs.clear();
+    this.colorBoxes.clear();
+    this.build();
+  }
+
   /**
-   * Numéros de lot écrits sur la page, dans la colonne (modifiables au doigt), et colonne de gauche :
-   * type de ligne (T, Σ…), poubelle sur les lignes numérotées, « + » sur les autres.
+   * Nouvelle mise en page (rangée agrandie, total recalculé…) : tout est replacé sans fermer le clavier.
+   * Si d'autres cases apparaissent ou disparaissent, la page est reconstruite.
    */
+  relayout(view, display) {
+    const before = [...this.place.keys()];
+    this.setView(view);
+    const same = before.length === this.place.size && before.every((f) => this.place.has(f));
+    this.size();
+    if (display) this.setDisplay(display);
+    else if (!this.canvas) { this.root.querySelector('svg.grid')?.remove(); this.drawGrid(); }
+    this.paper.clear();
+    if (!same) return this.refresh();
+    for (const [f, input] of this.inputs) {
+      this.layout(input, f);
+      this.visual(input, f, input === document.activeElement);
+    }
+    this.drawLockZones();
+    this.updateLots();
+    this.refreshStrikes();
+    this.refreshColors();
+  }
+
+  setLockMode(on) { this.lockpad.classList.toggle('active', on); }
+
+  /** Textes changés ailleurs (totaux recalculés) : les cases affichées suivent. */
+  syncFields(fields) {
+    for (const f of fields) {
+      const input = this.inputs.get(f);
+      if (!input || input === document.activeElement) continue;
+      input.value = f.Text;
+      this.layout(input, f);
+      this.visual(input, f, false);
+    }
+    this.refreshStrikes();
+    this.refreshColors();
+  }
+
+  revert(f) {
+    adjustStrikes(f, f.Text, f.OriginalText);
+    f.Text = f.OriginalText;
+    const input = this.inputs.get(f);
+    if (input) { input.value = f.Text; this.layout(input, f); this.visual(input, f, document.activeElement === input); }
+    this.refreshStrikes();
+    this.refreshColors();
+  }
+
+  focus(f) { this.inputs.get(f)?.focus({ preventScroll: true }); }
+  entryOf(f) { return this.place.get(f)?.entry ?? null; }
+
+  // ---------- Zones verrouillées ----------
+
+  drawLockZones() {
+    for (const z of this.overlay.querySelectorAll('.lockzone')) z.remove();
+    for (const z of this.page.LockZones) {
+      const y = this.cb.mapY?.(z.Y) ?? z.Y;
+      if (y === null) continue;
+      const d = px(el('div', 'lockzone', this.overlay), { ...z, Y: y });
+      d.textContent = '🔒';
+      this.overlay.prepend(d);
+    }
+  }
+
+  // ---------- Numéros de lot ----------
+
+  /** Numéros écrits sur la page, dans la colonne (modifiables au doigt), puis la colonne de gauche. */
   refreshLots() {
     const focused = [...this.lotInputs].find(([, i]) => i === document.activeElement)?.[0];
     this.lots.replaceChildren();
     this.lotInputs.clear();
-    const framed = this.cb.lotFrame?.() ? framedTables(this.page) : [];
-    for (const { line, table, box } of lotLabels(this.page)) {
+    for (const entry of this.view.lines) {
+      if (!entry.lotBox) continue;
+      const { line, lotBox: box } = entry;
       const input = el('input', 'lotfield', this.lots);
       input.type = 'text';
       input.inputMode = 'numeric';
@@ -88,8 +184,8 @@ export class PageView {
       px(input, box);
       input.style.font = font(lotSize(line, box));
       input.style.lineHeight = box.Height + 'px';
-      input.style.background = framed.includes(table) || !this.image ? 'transparent' : this.paperOfBox(box);
-      // La suite se recale quand on quitte la case (Entrée ou toucher ailleurs), pas pendant la frappe.
+      input.style.background = 'transparent';
+      // Le numéro est enregistré quand on quitte la case (Entrée ou toucher ailleurs) ; rien d'autre ne change.
       const commit = () => {
         if (input.value.trim() !== line.Lot) this.cb.onLot?.(this, line, input.value);
       };
@@ -102,25 +198,11 @@ export class PageView {
     this.refreshGutter();
   }
 
-  /** Rangées au lot 0 : voilées, avec la mention « déplacée en fin d'inventaire » (fait à l'export). */
-  refreshZeroRows() {
-    for (const z of this.overlay.querySelectorAll('.zerorow')) z.remove();
-    for (const { table: t, row: r } of zeroRows(this.page)) {
-      const left = t.ColumnXs?.length ? t.ColumnXs[0] : t.Bounds.X, right = t.ColumnXs?.length ? t.ColumnXs[t.ColumnXs.length - 1] : Rect.right(t.Bounds);
-      const d = px(el('div', 'zerorow', this.overlay), Rect.fromEdges(left, t.RowYs[r], right, t.RowYs[r + 1]));
-      el('span', '', d).textContent = 'Lot 0 → fin d\'inventaire';
-    }
-  }
-
-  /** Après un recalcul : met les nouveaux numéros en place sans fermer le clavier si on est en train de taper. */
   updateLots() {
-    const labels = lotLabels(this.page);
-    const same = labels.length === this.lotInputs.size && labels.every(({ line, box }) => {
-      const i = this.lotInputs.get(line);
-      return i && Math.abs(parseFloat(i.style.left) - box.X) < 0.5 && Math.abs(parseFloat(i.style.width) - box.Width) < 0.5;
-    });
+    const boxes = this.view.lines.filter((e) => e.lotBox);
+    const same = boxes.length === this.lotInputs.size && boxes.every((e) => this.lotInputs.has(e.line));
     if (!same) return this.refreshLots();
-    for (const { line, box } of labels) {
+    for (const { line, lotBox: box } of boxes) {
       const i = this.lotInputs.get(line);
       px(i, box);
       i.style.lineHeight = box.Height + 'px';
@@ -130,84 +212,131 @@ export class PageView {
     this.refreshGutter();
   }
 
+  /** Repère de hauteur d'une ligne à l'écran : sa 1re ligne de texte. */
+  lineBand(entry) {
+    const c = entry.cells[0];
+    if (!c) return null;
+    const b = baseBox(entry.line, c.f);
+    return { ...b, X: b.X + c.dx, Y: b.Y + c.dy };
+  }
+
   refreshGutter() {
-    this.refreshZeroRows();
     this.gutter.replaceChildren();
     const active = this.cb.lotsActive?.() ?? false;
-    for (const t of this.page.Tables)
-      for (const line of t.Rows.flatMap((r) => r.Lines)) {
-        if (line.OutsideTable || line.Cells.length === 0) continue;
-        const lb = line.Cells.reduce((r, f) => Rect.union(r, f.Box), Rect.empty());
-        const b = { ...lb, Height: lb.Height - (line.Extra ?? 0) };
-        const badge = BADGES[line.Kind];
-        if (badge) {
-          const d = el('div', 'badge', this.gutter);
-          d.textContent = badge[0];
-          d.style.background = badge[1];
-          d.style.top = Rect.cy(b) - 12 + 'px';
-        }
-        if (!active) continue;
-        const has = hasLotCell(line);
-        if (!has && !canAddLot(line)) continue;
-        const btn = el('button', has ? 'gbtn trash' : 'gbtn add', this.gutter);
-        btn.innerHTML = `<svg><use href="#${has ? 'i-trash' : 'i-plus'}"/></svg>`;
-        btn.setAttribute('aria-label', has ? `Retirer le lot ${line.Lot}` : 'Ajouter un numéro de lot');
-        btn.title = has ? 'Pas un objet : retirer ce numéro (les suivants se décalent)' : 'Ajouter un numéro de lot sur cette ligne';
-        const h = Math.max(26, Math.min(40, b.Height + 6));
-        Object.assign(btn.style, { top: Rect.cy(b) - h / 2 + 'px', height: h + 'px' });
-        btn.onclick = () => (has ? this.cb.onLotRemove : this.cb.onLotAdd)?.(this, line);
+    for (const entry of this.view.lines) {
+      const { line } = entry;
+      if (line.OutsideTable || entry.carriedOnly || line.Cells.length === 0) continue;
+      const b = this.lineBand(entry);
+      if (!b) continue;
+      const badge = BADGES[line.Kind];
+      if (badge) {
+        const d = el('div', 'badge', this.gutter);
+        d.textContent = badge[0];
+        d.style.background = badge[1];
+        d.style.top = Rect.cy(b) - 12 + 'px';
       }
+      if (!active) continue;
+      const has = hasLotCell(line);
+      if (!has && !canAddLot(line, entry.table.Rows?.find((r) => r.Lines.includes(line)))) continue;
+      const btn = el('button', has ? 'gbtn trash' : 'gbtn add', this.gutter);
+      btn.innerHTML = `<svg><use href="#${has ? 'i-trash' : 'i-plus'}"/></svg>`;
+      btn.setAttribute('aria-label', has ? `Retirer la case de lot ${line.Lot}` : 'Ajouter une case de lot');
+      btn.title = has ? 'Pas un objet : retirer cette case' : 'Ajouter une case de lot sur cette ligne';
+      const h = Math.max(26, Math.min(40, b.Height + 6));
+      Object.assign(btn.style, { top: Rect.cy(b) - h / 2 + 'px', height: h + 'px' });
+      btn.onclick = () => (has ? this.cb.onLotRemove : this.cb.onLotAdd)?.(this, line);
+    }
+    this.drawHandles();
   }
+
+  // ---------- Déplacer une rangée (poignée ⋮⋮ à gauche) ----------
+
+  drawHandles() {
+    if (!this.cb.onMoveRow) return;
+    for (const vt of this.view.tables) {
+      if (vt.strips.length < 2) continue;
+      for (const s of vt.strips) {
+        const row = vt.table.Rows[s.r];
+        if (!row || row.Lines.length === 0 || row.Lines.every((l) => l.Kind === 'EnTete')) continue;
+        if (row.Lines.every((l) => l.Cells.every((c) => !c.Text.trim()))) continue;
+        const h = el('div', 'grip', this.gutter);
+        h.innerHTML = '<svg><use href="#i-grip"/></svg>';
+        h.title = 'Glisser pour déplacer la rangée';
+        h.setAttribute('aria-label', 'Déplacer la rangée');
+        const hh = Math.max(24, Math.min(40, s.bottom - s.top - 4));
+        Object.assign(h.style, { top: (s.top + s.bottom) / 2 - hh / 2 + 'px', height: hh + 'px' });
+        this.initDrag(h, vt, s);
+      }
+    }
+  }
+
+  initDrag(handle, vt, strip) {
+    let marker = null, ghost = null, target = null;
+    const yOf = (e) => (e.clientY - this.root.getBoundingClientRect().top) / this.cb.zoom();
+    handle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      handle.setPointerCapture(e.pointerId);
+      ghost = px(el('div', 'dragghost', this.overlay), Rect.fromEdges(0, strip.top, this.view.width, strip.bottom));
+      marker = el('div', 'dropline', this.overlay);
+      Object.assign(marker.style, { left: '0px', width: this.view.width + 'px', display: 'none' });
+    });
+    handle.addEventListener('pointermove', (e) => {
+      if (!marker) return;
+      const y = yOf(e);
+      ghost.style.top = y - (strip.bottom - strip.top) / 2 + 'px';
+      // Point d'insertion : avant la première rangée dont le milieu est sous le doigt.
+      const i = vt.strips.findIndex((s) => y < (s.top + s.bottom) / 2);
+      target = i < 0 ? { before: null } : { before: vt.strips[i].r };
+      const at = i < 0 ? vt.strips[vt.strips.length - 1].bottom : vt.strips[i].top;
+      Object.assign(marker.style, { top: at - 2 + 'px', display: 'block' });
+    });
+    const end = (ok) => {
+      marker?.remove(); ghost?.remove();
+      marker = ghost = null;
+      const t = target;
+      target = null;
+      if (!ok || !t || t.before === strip.r) return;
+      const next = vt.strips[vt.strips.findIndex((s) => s.r === strip.r) + 1];
+      if (next && t.before === next.r) return; // même place
+      this.cb.onMoveRow?.(this, vt.table, strip.r, t.before);
+    };
+    handle.addEventListener('pointerup', () => end(true));
+    handle.addEventListener('pointercancel', () => end(false));
+  }
+
+  // ---------- Cases ----------
 
   paperOfBox(box) {
+    if (!this.image) return 'transparent';
     const [r, g, b] = paperColor(this.image, box);
     return `rgb(${r},${g},${b})`;
-  }
-
-  refresh() {
-    this.fields.replaceChildren();
-    this.overlay.replaceChildren();
-    this.inputs.clear();
-    this.build();
-  }
-
-  setLockMode(on) { this.lockpad.classList.toggle('active', on); }
-
-  revert(f) {
-    adjustStrikes(f, f.Text, f.OriginalText);
-    f.Text = f.OriginalText;
-    const input = this.inputs.get(f);
-    if (input) { input.value = f.Text; this.layout(input, f); this.visual(input, f, document.activeElement === input); }
-  }
-
-  focus(f) { this.inputs.get(f)?.focus({ preventScroll: true }); }
-
-  build() {
-    for (const z of this.page.LockZones) {
-      const d = px(el('div', 'lockzone', this.overlay), z);
-      d.textContent = '🔒';
-    }
-    for (const t of this.page.Tables)
-      for (const row of t.Rows)
-        for (const line of row.Lines) {
-          for (const f of line.Cells) {
-            this.lineOf.set(f, line);
-            if (!f.Locked) this.addField(f);
-          }
-        }
-    this.loupe = el('div', 'loupe', this.overlay);
-    this.refreshLots();
-    this.refreshStrikes();
   }
 
   /** Traits des morceaux barrés, posés par-dessus le texte (scan ou texte retapé). */
   refreshStrikes() {
     this.strikes.replaceChildren();
-    for (const [f, line] of this.lineOf)
-      for (const g of strikeSegments(line, f)) {
+    for (const [f, pl] of this.place)
+      for (const g of strikeSegments(this.lineOf.get(f), f)) {
         const d = el('div', 'strike', this.strikes);
-        Object.assign(d.style, { left: g.x0 + 'px', width: g.x1 - g.x0 + 'px', top: g.y - g.thick / 2 + 'px', height: g.thick + 'px', background: g.color });
+        Object.assign(d.style, { left: g.x0 + pl.dx + 'px', width: g.x1 - g.x0 + 'px', top: g.y + pl.dy - g.thick / 2 + 'px', height: g.thick + 'px', background: g.color });
       }
+  }
+
+  /** Texte retapé avec des couleurs : écrit par-dessus la case (une zone de saisie ne sait écrire qu'en noir). */
+  refreshColors() {
+    for (const [f, input] of this.inputs) this.drawColors(f, input, input === document.activeElement);
+  }
+
+  drawColors(f, input, focused) {
+    const show = !focused && isModified(f) && hasColors(f) && f.Text.length > 0;
+    let box = this.colorBoxes.get(f);
+    input.style.color = show ? 'transparent' : '#000';
+    if (!show) { box?.remove(); this.colorBoxes.delete(f); return; }
+    if (!box) { box = el('div', 'colortext', this.colors); this.colorBoxes.set(f, box); }
+    for (const k of ['left', 'top', 'width', 'height', 'font', 'lineHeight', 'paddingTop', 'paddingLeft', 'paddingRight', 'textAlign', 'whiteSpace'])
+      box.style[k] = input.style[k] || getComputedStyle(input)[k];
+    box.classList.toggle('multi', isMultiline(f));
+    box.innerHTML = colorRuns(f).map((r) => `<span style="color:${textColor(r.color)}">${escapeHtml(f.Text.slice(r.start, r.end))}</span>`).join('');
   }
 
   /** Morceau sélectionné dans la case (vide : toute la case). */
@@ -215,7 +344,8 @@ export class PageView {
     return this.selection?.f === f ? this.selection : { f, start: 0, end: 0 };
   }
 
-  addField(f) {
+  addField(f, pl) {
+    const line = this.lineOf.get(f);
     // Désignation : zone de texte sur plusieurs lignes (Entrée = nouvelle ligne dans la case).
     const multi = isMultiline(f);
     const input = el(multi ? 'textarea' : 'input', multi ? 'field multi' : 'field', this.fields);
@@ -228,7 +358,9 @@ export class PageView {
     input.spellcheck = multi;
     input.lang = 'fr';
     if (f.Column > 0 && (f.OriginalText.length === 0 || /\d/.test(f.OriginalText))) input.inputMode = 'decimal';
+    if (isComputedCell(line, f)) input.classList.add('computed');
     input.style.textAlign = f.Align === 'Right' ? 'right' : f.Align === 'Center' ? 'center' : 'left';
+    this.inputs.set(f, input);
     this.layout(input, f);
     this.visual(input, f, false);
 
@@ -252,42 +384,21 @@ export class PageView {
         e.preventDefault();
         this.focusNextInColumn(f);
       });
-    this.inputs.set(f, input);
   }
 
   /** Place le champ sur sa case : même taille d'écriture que l'imprimé, 1re ligne à la place du texte d'origine. */
   layout(input, f) {
+    const pl = this.place.get(f);
+    if (!pl) return;
     const line = this.lineOf.get(f);
     const t = textLayout(line, f, input.value);
-    px(input, f.Box);
-    input.style.font = font(t.size);
+    px(input, pl.box);
+    input.style.font = font(t.size, t.bold);
     const lh = LINE_HEIGHT * t.size;
     input.style.lineHeight = lh + 'px';
-    input.style.paddingTop = Math.max(0, t.top - f.Box.Y) + 'px';
-    input.style.paddingLeft = f.Align === 'Left' ? f.Indent + 'px' : '0';
-    input.style.paddingRight = f.Align === 'Right' ? f.Indent + 'px' : isMultiline(f) ? '3px' : '0';
-  }
-
-  /** La page a changé de hauteur (texte sur plusieurs lignes) : tout est replacé sans fermer le clavier. */
-  relayout(image, display) {
-    this.image = image;
-    Object.assign(this.root.style, { height: this.page.Height + 'px' });
-    this.gutter.style.height = this.page.Height + 'px';
-    if (image) this.setDisplay(display ?? image);
-    else { this.root.querySelector('svg.grid')?.remove(); this.drawGrid(); }
-    this.paper.clear();
-    for (const [f, input] of this.inputs) {
-      this.layout(input, f);
-      this.visual(input, f, input === document.activeElement);
-    }
-    for (const z of this.overlay.querySelectorAll('.lockzone')) z.remove();
-    for (const z of this.page.LockZones) {
-      const d = px(el('div', 'lockzone', this.overlay), z);
-      d.textContent = '🔒';
-      this.overlay.prepend(d);
-    }
-    this.updateLots();
-    this.refreshStrikes();
+    input.style.paddingTop = Math.max(0, t.top + pl.dy - pl.box.Y) + 'px';
+    input.style.paddingLeft = f.Align === 'Left' ? Math.max(0, f.Box.X + pl.dx + f.Indent - pl.box.X) + 'px' : '0';
+    input.style.paddingRight = f.Align === 'Right' ? Math.max(0, Rect.right(pl.box) - (Rect.right(f.Box) + pl.dx - f.Indent)) + 'px' : isMultiline(f) ? '3px' : '0';
   }
 
   visual(input, f, focused) {
@@ -295,12 +406,24 @@ export class PageView {
     const show = focused || isModified(f) || !onImage;
     input.style.opacity = show ? '1' : '0';
     input.style.background = onImage ? this.paperOf(f) : 'transparent';
+    this.drawColors(f, input, focused);
   }
 
+  /** Fond de la case : couleur du papier, ou motif tramé de la rangée (totaux, en-têtes sur fond gris). */
   paperOf(f) {
     if (!this.paper.has(f)) {
-      const [r, g, b] = paperColor(this.image, f.Box);
-      this.paper.set(f, `rgb(${r},${g},${b})`);
+      const pl = this.place.get(f);
+      let bg = this.paperOfBox(pl?.box ?? f.Box);
+      if (this.image && this.canvas && pl && pl.dx === 0) {
+        const patch = cleanPatch(this.image, pl.entry.page, this.lineOf.get(f), f, pl.dy);
+        if (patch) {
+          const c = document.createElement('canvas');
+          c.width = patch.Width; c.height = patch.Height;
+          c.getContext('2d').drawImage(this.canvas, patch.X, patch.Y, patch.Width, patch.Height, 0, 0, patch.Width, patch.Height);
+          bg = `${bg} url(${c.toDataURL()}) repeat-x 0 0 / ${patch.Width}px ${patch.Height}px`;
+        }
+      }
+      this.paper.set(f, bg);
     }
     return this.paper.get(f);
   }
@@ -308,7 +431,8 @@ export class PageView {
   /** Pendant l'édition, l'original de la case est montré en loupe juste au-dessus. */
   showLoupe(f) {
     if (!this.canvas) return;
-    const b = Rect.fromEdges(Math.max(0, f.Box.X - 4), Math.max(0, f.Box.Y - 2), Math.min(this.page.Width, Rect.right(f.Box) + 4), Math.min(this.page.Height, Rect.bottom(f.Box) + 2));
+    const box = this.place.get(f)?.box ?? f.Box;
+    const b = Rect.fromEdges(Math.max(0, box.X - 4), Math.max(0, box.Y - 2), Math.min(this.view.width, Rect.right(box) + 4), Math.min(this.view.height, Rect.bottom(box) + 2));
     const scale = 1.4;
     const c = document.createElement('canvas');
     c.width = Math.ceil(b.Width * scale); c.height = Math.ceil(b.Height * scale);
@@ -319,27 +443,29 @@ export class PageView {
     const h = c.height + 22;
     let top = b.Y - h - 6;
     if (top < 0) top = Rect.bottom(b) + 6;
-    Object.assign(this.loupe.style, { display: 'block', left: Math.max(0, Math.min(b.X, this.page.Width - c.width - 6)) + 'px', top: top + 'px' });
+    Object.assign(this.loupe.style, { display: 'block', left: Math.max(0, Math.min(b.X, this.view.width - c.width - 6)) + 'px', top: top + 'px' });
   }
 
   focusNextInColumn(f) {
-    const col = this.page.Tables.flatMap((t) => t.Rows).flatMap((r) => r.Lines).flatMap((l) => l.Cells).filter((c) => c.Column === f.Column && this.inputs.has(c));
-    const i = col.indexOf(f);
-    if (i >= 0 && i + 1 < col.length) this.inputs.get(col[i + 1]).focus();
+    const col = [...this.place.values()].filter((p) => p.f.Column === f.Column && this.inputs.has(p.f)).sort((a, b) => a.box.Y - b.box.Y);
+    const i = col.findIndex((p) => p.f === f);
+    if (i >= 0 && i + 1 < col.length) this.inputs.get(col[i + 1].f).focus();
   }
 
+  /** Pages TXT/CSV/XLSX : le quadrillage du tableau, tel qu'affiché. */
   drawGrid() {
     const ns = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(ns, 'svg');
     svg.setAttribute('class', 'grid');
-    svg.setAttribute('width', this.page.Width);
-    svg.setAttribute('height', this.page.Height);
+    svg.setAttribute('width', this.view.width);
+    svg.setAttribute('height', this.view.height);
     const line = (x1, y1, x2, y2) => {
       const l = document.createElementNS(ns, 'line');
       Object.entries({ x1, y1, x2, y2, stroke: '#000', 'stroke-width': 1.5 }).forEach(([k, v]) => l.setAttribute(k, v));
       svg.appendChild(l);
     };
-    for (const t of this.page.Tables) {
+    for (const t of this.view.tables) {
+      if (!t.RowYs?.length || !t.ColumnXs?.length) continue;
       const top = t.RowYs[0], bottom = t.RowYs[t.RowYs.length - 1], left = t.ColumnXs[0], right = t.ColumnXs[t.ColumnXs.length - 1];
       for (const x of t.ColumnXs) line(x, top, x, bottom);
       for (const y of t.RowYs) line(left, y, right, y);
@@ -355,6 +481,7 @@ export class PageView {
       const r = this.lockpad.getBoundingClientRect(), z = this.cb.zoom();
       return { x: (e.clientX - r.left) / z, y: (e.clientY - r.top) / z };
     };
+    const toPage = (y) => this.cb.unmapY?.(y) ?? y;
     this.lockpad.addEventListener('pointerdown', (e) => {
       start = local(e);
       this.lockpad.setPointerCapture(e.pointerId);
@@ -371,12 +498,16 @@ export class PageView {
       const p = local(e), a = start;
       start = null;
       rubber?.remove();
-      const zone = Rect.fromEdges(Math.min(a.x, p.x), Math.min(a.y, p.y), Math.max(a.x, p.x), Math.max(a.y, p.y));
+      const y0 = toPage(Math.min(a.y, p.y)), y1 = toPage(Math.max(a.y, p.y));
+      if (y0 === null || y1 === null) return;
+      const zone = Rect.fromEdges(Math.min(a.x, p.x), y0, Math.max(a.x, p.x), y1);
       this.cb.beforeChange?.();
-      const changed = zone.Width < 8 && zone.Height < 8 ? removeLockZoneAt(this.page, p.x, p.y) : addLockZone(this.page, zone);
+      const changed = zone.Width < 8 && zone.Height < 8 ? removeLockZoneAt(this.page, p.x, toPage(p.y) ?? -1) : addLockZone(this.page, zone);
       if (changed) { this.refresh(); this.cb.onLocks?.(this); }
     };
     this.lockpad.addEventListener('pointerup', end);
     this.lockpad.addEventListener('pointercancel', () => { start = null; rubber?.remove(); });
   }
 }
+
+export { isZeroLot };

@@ -2,7 +2,7 @@
 // trait vertical à gauche, filets horizontaux prolongés, chaque case au même fond que sa rangée.
 // Portage de LotColumn.cs, en entiers : résultat identique, pixel pour pixel, à la version Windows.
 import { Rect } from './geometry.js';
-import { columnWidth, numberBox, hasLotCell } from './lots.js';
+import { columnWidth, numberBox, hasLotCell, rowOrder } from './lots.js';
 
 const R = (v) => Math.floor(v + 0.5);
 const half = (n) => Math.trunc(n / 2);
@@ -16,9 +16,23 @@ export const lotFrameEnabled = (project) => project.LotFrame !== false;
 export const framedTables = (page) =>
   page.Tables.filter((t) => t.HasGrid !== false && t.ColumnXs?.length >= 2 && t.RowYs?.length >= 2 && hasLot(t));
 
+/**
+ * Rangées où la colonne est tracée : de la 1re à la dernière rangée qui porte une case de lot (ordre d'affichage),
+ * plus l'en-tête juste au-dessus. Rien sous le dernier objet (totaux, rangées vides).
+ */
+export function framedRows(table) {
+  const order = rowOrder(table).filter((r) => r + 1 < table.RowYs.length);
+  const has = order.map((r) => table.Rows[r].Lines.some(hasLotCell));
+  const first = has.indexOf(true), last = has.lastIndexOf(true);
+  if (first < 0) return [];
+  let from = first;
+  while (from > 0 && table.Rows[order[from - 1]].Lines.length > 0 && table.Rows[order[from - 1]].Lines.every((l) => l.Kind === 'EnTete')) from--;
+  return order.slice(from, last + 1);
+}
+
 /** Signature de ce qui est tracé (pour savoir s'il faut redessiner l'écran). */
 export const frameSignature = (page, enabled) =>
-  !enabled ? '' : framedTables(page).map((t) => page.Tables.indexOf(t)).join(',') + '/' + columnWidth(page);
+  !enabled ? '' : framedTables(page).map((t) => page.Tables.indexOf(t) + ':' + framedRows(t).join('.')).join(',') + '/' + columnWidth(page);
 
 export function frames(image, page) {
   const w = columnWidth(page);
@@ -26,8 +40,10 @@ export function frames(image, page) {
   for (const t of framedTables(page)) {
     const right = R(t.ColumnXs[0]), left = R(t.ColumnXs[0] - w);
     if (right - left < 8) continue;
+    const rows = framedRows(t);
+    if (rows.length === 0) continue;
     const m = measureRules(image, t);
-    out.push({ table: t, left, right, top: R(t.RowYs[0]), bottom: R(t.RowYs[t.RowYs.length - 1]), vThick: m.vThick, hThick: m.hThick, color: m.color });
+    out.push({ table: t, left, right, rows, vThick: m.vThick, hThick: m.hThick, color: m.color });
   }
   return out;
 }
@@ -36,7 +52,13 @@ export function frames(image, page) {
 export function lotRegions(page, enabled) {
   const framed = enabled ? framedTables(page) : [];
   const w = columnWidth(page);
-  const boxes = framed.map((t) => Rect.fromEdges(t.ColumnXs[0] - w - 8, t.RowYs[0] - 8, t.ColumnXs[0] - 1, t.RowYs[t.RowYs.length - 1] + 8));
+  const boxes = [];
+  for (const t of framed) {
+    const rows = framedRows(t);
+    if (rows.length === 0) continue;
+    const top = Math.min(...rows.map((r) => t.RowYs[r])), bottom = Math.max(...rows.map((r) => t.RowYs[r + 1]));
+    boxes.push(Rect.fromEdges(t.ColumnXs[0] - w - 8, top - 8, t.ColumnXs[0] - 1, bottom + 8));
+  }
   for (const t of page.Tables.filter((x) => !framed.includes(x)))
     for (const l of t.Rows.flatMap((r) => r.Lines).filter((x) => (x.Lot ?? '').length > 0)) boxes.push(numberBox(t, l, w));
   return boxes;
@@ -47,30 +69,42 @@ export function drawLotColumns(image, page) {
   const output = { w: image.w, h: image.h, ch: image.ch, data: new Uint8ClampedArray(image.data) };
   for (const f of frames(image, page)) {
     drawBackgrounds(image, output, f);
-    const hv = half(f.vThick);
-    fill(output, f.left - hv, f.top - half(f.hThick), f.vThick, f.bottom - f.top + f.hThick, f.color);
-    for (const y of f.table.RowYs) fill(output, f.left - hv, R(y) - half(f.hThick), f.right - (f.left - hv), f.hThick, f.color);
+    const hv = half(f.vThick), hh = half(f.hThick);
+    // Chaque rangée porte ses traits (gauche, haut, bas) : elle peut être déplacée avec eux.
+    for (const r of f.rows) {
+      const y0 = R(f.table.RowYs[r]), y1 = R(f.table.RowYs[r + 1]);
+      fill(output, f.left - hv, y0 - hh, f.vThick, y1 - y0 + f.hThick, f.color);
+      fill(output, f.left - hv, y0 - hh, f.right - (f.left - hv), f.hThick, f.color);
+      fill(output, f.left - hv, y1 - hh, f.right - (f.left - hv), f.hThick, f.color);
+    }
   }
   return output;
 }
 
-/** Fond de chaque case : celui de la rangée (gris hachuré de l'en-tête et des totaux, papier ailleurs). */
+/**
+ * Fond de chaque case : celui de la rangée (gris hachuré de l'en-tête, papier ailleurs), recopié depuis
+ * le morceau le plus clair de la 1re colonne (jamais du texte, même si l'OCR ne l'a pas lu).
+ */
 function drawBackgrounds(source, output, f) {
   const t = f.table;
   const x0 = f.left - half(f.vThick) + f.vThick, x1 = f.right - half(f.vThick);
   const w = x1 - x0;
   if (w <= 0) return;
-  for (let r = 0; r + 1 < t.RowYs.length; r++) {
+  for (const r of f.rows) {
     const y0 = R(t.RowYs[r]) - half(f.hThick) + f.hThick, y1 = R(t.RowYs[r + 1]) - half(f.hThick);
     if (y1 <= y0) continue;
     const ink = (r < t.Rows.length ? t.Rows[r].Lines : []).flatMap((l) => l.Cells).filter((c) => !Rect.isEmpty(c.Ink)).map((c) => c.Ink);
     const start = R(t.ColumnXs[0]) + f.vThick + 2, end = R(t.ColumnXs[1]) - f.vThick - 2 - w;
+    let best = -1, bestSum = -1;
     for (let sx = start; sx <= end; sx += 2) {
       const patch = Rect.make(sx - 3, y0, w + 6, y1 - y0);
       if (ink.some((i) => intersects(i, patch))) continue;
-      copy(source, output, sx, y0, x0, y0, w, y1 - y0);
-      break;
+      let sum = 0;
+      for (let y = y0; y < y1; y += 2)
+        for (let x = sx; x < sx + w; x += 2) if (x >= 0 && x < source.w && y >= 0 && y < source.h) sum += gray(source, x, y);
+      if (sum > bestSum) { bestSum = sum; best = sx; }
     }
+    if (best >= 0) copy(source, output, best, y0, x0, y0, w, y1 - y0);
   }
 }
 

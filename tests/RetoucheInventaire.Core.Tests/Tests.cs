@@ -353,7 +353,7 @@ public static class Tests
         Equal(int.Parse(page1Last.Lot) + 1, int.Parse(page2First.Lot), "numérotation continue d'une page à l'autre");
     }
 
-    public static void T_Lots_resynchro_apres_saisie()
+    public static void T_Lots_un_numero_tape_ne_change_rien_d_autre()
     {
         var p = ThreePages();
         Lots.Number(p, 1);
@@ -361,14 +361,16 @@ public static class Tests
         Lots.Set(p, objects[9], "81");
         Equal("9", objects[8].Lot, "les lots d'avant ne bougent pas");
         Equal("81", objects[9].Lot, "lot saisi");
-        Equal("82", objects[10].Lot, "le suivant suit");
+        Equal("11", objects[10].Lot, "le suivant ne bouge pas tout seul");
+        Lots.FillAutomatically(p);
+        Equal("82", objects[10].Lot, "« Synchroniser » : la suite repart du numéro tapé");
         Equal((81 + objects.Count - 10).ToString(), objects[^1].Lot, "toute la suite est recalée");
-        // Un objet devient titre : la suite se recale sans perdre le 81.
         PageEdits.CycleKind(objects[11]); // Article → Titre
         Lots.Resync(p);
         Equal("", objects[11].Lot, "plus de lot sur un titre");
-        Equal("82", objects[10].Lot, "inchangé");
-        Equal("83", objects[12].Lot, "la suite reprend après");
+        Equal("84", objects[12].Lot, "les autres ne bougent pas");
+        Lots.FillAutomatically(p);
+        Equal("83", objects[12].Lot, "la suite reprend à la synchronisation");
         Lots.Clear(p);
         Check(!Lots.IsActive(p), "numérotation enlevée");
     }
@@ -378,22 +380,50 @@ public static class Tests
         var p = ThreePages();
         Lots.Number(p, 1);
         var objects = Lots.ObjectLines(p).Select(o => o.Line).ToList();
-        int n = objects.Count;
         Lots.Remove(p, objects[30]);
         Equal("", objects[30].Lot, "ligne retirée à la poubelle");
-        Equal("31", objects[31].Lot, "le suivant prend sa place");
-        Equal((n - 1).ToString(), objects[^1].Lot, "le dernier est décalé");
-        Lots.Resync(p);
-        Equal("", objects[30].Lot, "reste retirée après « Synchroniser »");
+        Check(!objects[30].LotSlot, "case retirée");
+        Equal("32", objects[31].Lot, "le suivant garde son numéro");
         Check(Lots.CanAdd(objects[30]), "« + » proposé");
         Lots.Add(p, objects[30]);
-        Equal("31", objects[30].Lot, "remise avec « + »");
-        Equal(n.ToString(), objects[^1].Lot, "le dernier est recalé");
+        Check(objects[30].LotSlot && objects[30].Lot == "", "case vide remise avec « + »");
+        Lots.FillAutomatically(p);
+        Equal("31", objects[30].Lot, "synchronisée");
         // « + » sur une ligne de suite : un objet de plus.
         var cd3 = p.Pages[0].AllLines().First(l => l.Cells[0].Text.StartsWith("CD3+"));
+        var row = p.Pages[0].Tables[0].Rows.First(r => r.Lines.Contains(cd3));
+        Check(!Lots.CanAdd(cd3, row), "pas de « + » sur une suite qui n'a pas l'air d'un objet");
         Lots.Add(p, cd3);
-        Check(cd3.Lot.Length > 0, "lot ajouté sur une ligne de suite");
-        Equal((n + 1).ToString(), objects[^1].Lot, "la suite est décalée d'un");
+        Check(cd3.LotSlot, "case ajoutée sur une ligne de suite");
+    }
+
+    public static void T_Lots_ni_totaux_ni_en_tete_ni_recapitulatif()
+    {
+        var rows = new List<string[]>
+        {
+            new[] { "RECAPITULATIF", "", "" }, new[] { "", "exploitation", "réalisation" },
+            new[] { "I - MOBILIER ET MATERIEL", "148 760", "47 405" }, new[] { "II - STOCK", "44 550", "9 000" },
+            new[] { "TOTAL GENERAL", "193 310", "56 405" },
+        };
+        var p = new InventoryProject();
+        p.Pages.Add(RetoucheInventaire.Core.Import.DataPageBuilder.Build("recap.csv", rows));
+        var lines = p.Pages[0].Tables[0].Rows.SelectMany(r => r.Lines).ToList();
+        Equal(LineKind.EnTete, lines[1].Kind, "en-tête du récapitulatif");
+        Equal(LineKind.Total, lines[4].Kind, "total");
+        Lots.CreateEmpty(p);
+        Equal(0, Lots.ObjectLines(p).Count(), "aucun objet");
+    }
+
+    public static void T_Rangee_sans_texte_lu_cases_modifiables()
+    {
+        var (image, words) = Fixtures.Load("page5");
+        var page = new Page { Id = "page5", Source = PageSource.Image };
+        PageAnalyzer.Analyze(page, image, words.Where(w => !(w.Box.CenterY > 530 && w.Box.CenterY < 556)).ToList());
+        var row = page.Tables[0].Rows[5];
+        Equal(1, row.Lines.Count, "une ligne vide");
+        Equal(3, row.Lines[0].Cells.Count, "une case par colonne");
+        Check(row.Lines[0].Cells.All(c => !c.Locked && c.Text == "" && c.Box.Width > 10), "cases modifiables");
+        Check(row.Lines[0].Cells[0].FontSize > 10, "taille d'écriture du tableau");
     }
 
     public static void T_Lots_colonne_tracee_dans_la_marge()
@@ -405,6 +435,7 @@ public static class Tests
         var image = Fixtures.Load("page5").Image;
         var frames = LotColumn.Frames(image, page);
         Equal(3, frames.Count, "une colonne par tableau");
+        Equal("0,1,2,3,4", string.Join(",", LotColumn.FramedRows(page.Tables[0])), "en-tête et objets, pas TOTAL STOCK");
         var drawn = LotColumn.Draw(image, page);
         int changed = 0, outside = 0;
         for (int y = 0; y < image.Height; y++)
@@ -412,11 +443,13 @@ public static class Tests
             {
                 if (drawn.Data[y * image.Width + x] == image.Data[y * image.Width + x]) continue;
                 changed++;
-                if (!frames.Any(f => x >= f.Left - 8 && x < f.Right && y >= f.Top - 8 && y <= f.Bottom + 8)) outside++;
+                if (!frames.Any(f => x >= f.Left - 8 && x < f.Right && f.Rows.Any(r => y >= f.Table.RowYs[r] - 8 && y <= f.Table.RowYs[r + 1] + 8))) outside++;
             }
         Check(changed > 1000, $"traits tracés : {changed} pixels");
         Equal(0, outside, "pixels modifiés hors de la colonne");
-        // Les numéros tiennent dans la colonne, à gauche du tableau.
+        int total = (int)Math.Round(page.Tables[0].RowYs[5] + 6), onTotal = 0;
+        for (int x = frames[0].Left - 4; x < frames[0].Right; x++) if (drawn.Data[total * image.Width + x] != image.Data[total * image.Width + x]) onTotal++;
+        Equal(0, onTotal, "rien dessiné sur la rangée TOTAL STOCK");
         foreach (var (line, box) in Lots.Labels(page))
             Check(box.Left >= 0 && box.Right <= page.Tables[0].ColumnXs[0] + 1, $"lot {line.Lot} hors de la colonne");
     }
@@ -427,6 +460,7 @@ public static class Tests
         Lots.Number(p, 1);
         var objects = Lots.ObjectLines(p).Select(o => o.Line).ToList();
         Lots.Set(p, objects[3], "0");
+        Lots.FillAutomatically(p);
         Equal("0", objects[3].Lot, "lot 0 gardé");
         Equal("4", objects[4].Lot, "le 0 ne prend pas de numéro");
         Equal((objects.Count - 1).ToString(), objects[^1].Lot, "la suite continue");
@@ -525,28 +559,133 @@ public static class Tests
         Equal("12", objects[0].Lot, "numéro tapé gardé");
         Equal("0", objects[1].Lot, "lot 0 gardé");
         Equal("13", objects[2].Lot, "le reste rempli à la suite");
-        Check(!p.LotsByHand, "numérotation automatique ensuite");
     }
 
-    public static void T_Lots_zero_rangee_deplacee_en_fin()
+    /// <summary>Scénario partagé avec la version iPad (commande export-arrange, test JS).</summary>
+    public static InventoryProject ArrangeScenario()
     {
         var p = new InventoryProject();
         foreach (var n in new[] { "page1", "page5" }) p.Pages.Add(Fixtures.Analyze(n));
+        Lots.CreateEmpty(p);
+        Lots.FillAutomatically(p);
+        PrintedLine Find(Page pg, string t) => pg.AllLines().First(l => l.Cells[0].Text == t);
+        Lots.Set(p, Find(p.Pages[0], "2 rolls en métal"), "0");
+        Lots.Set(p, Find(p.Pages[0], "1 gazelle TULESCA inox"), "0");
+        Lots.Set(p, Find(p.Pages[1], "CARTONNAGE"), "0");
+        p.Pages[1].Tables[2].RowOrder = [0, 2, 1, 3]; // « Appartient à Orange » monté au-dessus de VDM
+        Find(p.Pages[1], "EN COURS DE FABRICATION").Cells[1].Text = "150";
+        return p;
+    }
+
+    public static List<Raster> ComposeAll(InventoryProject p, Arrangement.Plan plan, Func<Page, Raster> imageOf)
+    {
+        var images = p.Pages.Select(imageOf).ToList();
+        return p.Pages.Select((pg, k) => Arrangement.ComposePage(plan, k, images[k],
+            plan.Pages[k].Pieces.Where(pc => pc.IsUnit).ToDictionary(pc => pc.Unit!, pc => (Arrangement.Crop?)Arrangement.UnitCrop(pc.Unit!, images[pc.Unit!.P])))).ToList();
+    }
+
+    public static void T_Lot_zero_passe_apres_le_dernier_lot()
+    {
+        var p = ArrangeScenario();
+        var plan = Arrangement.Build(p);
+        Equal(3, plan.Units.Count, "trois objets déplacés");
+        Equal("1,2,3", $"{plan.Dest!.P},{plan.Dest.Ti},{plan.Dest.R}", "après « Appartenant à ULMA »");
+        Check(plan.Units[1].Title != null && !plan.Units[1].Whole, "gazelle : objet seul + valeurs du titre");
+        int cut0 = plan.Units.Where(u => u.P == 0).Sum(u => u.Bottom - u.Top);
+        Equal(p.Pages[0].Height - cut0, plan.Pages[0].Height, "page 1 raccourcie");
+        int add = plan.Units.Sum(u => u.Height) - plan.Units.Where(u => u.P == 1).Sum(u => u.Bottom - u.Top);
+        Equal(p.Pages[1].Height + add, plan.Pages[1].Height, "page 5 allongée");
+        var v0 = Arrangement.ViewOf(p, plan, 0);
+        var v1 = Arrangement.ViewOf(p, plan, 1);
+        Check(!v0.Lines.Any(l => l.Line.Cells[0].Text == "2 rolls en métal"), "retirée de la page 1");
+        Equal("2 rolls en métal|1 gazelle TULESCA inox|CARTONNAGE|42057 € à l'achat HT",
+            string.Join("|", v1.Lines.Where(l => l.Moved && !l.CarriedOnly).Select(l => l.Line.Cells[0].Text)), "recollées en fin, dans l'ordre");
+        Equal(1, v0.Lines.First(l => l.Line.Cells[0].Text == "SALLE LAVAGE :").Cells.Count, "le titre reste, sans ses valeurs");
+        var images = ComposeAll(p, plan, pg => LotColumn.Draw(Fixtures.Load(pg.Id).Image, pg));
+        var src = LotColumn.Draw(Fixtures.Load("page1").Image, p.Pages[0]);
+        var u = plan.Units[0];
+        int y = u.Bottom + 40, w = src.Width;
+        Check(src.Data.AsSpan(y * w, w).SequenceEqual(images[0].Data.AsSpan((y - (u.Bottom - u.Top)) * w, w)), "la suite remonte intacte");
+        // Le numéro repris : tout revient.
+        Lots.Set(p, p.Pages[0].AllLines().First(l => l.Cells[0].Text == "2 rolls en métal"), "4");
+        Lots.Set(p, p.Pages[0].AllLines().First(l => l.Cells[0].Text == "1 gazelle TULESCA inox"), "28");
+        Lots.Set(p, p.Pages[1].AllLines().First(l => l.Cells[0].Text == "CARTONNAGE"), "31");
+        p.Pages[1].Tables[2].RowOrder = null;
+        var back = Arrangement.Build(p);
+        Equal(0, back.Units.Count, "plus rien à déplacer");
+        Check(!Arrangement.PageArranged(p, back, 0) && !Arrangement.PageArranged(p, back, 1), "pages d'origine");
+    }
+
+    public static void T_Rangee_deplacee_a_la_main()
+    {
+        var p = new InventoryProject();
+        p.Pages.Add(Fixtures.Analyze("page1"));
         Lots.Number(p, 1);
-        var rolls = p.Pages[0].AllLines().First(l => l.Cells[0].Text == "2 rolls en métal");
-        Lots.Set(p, rolls, "0");
-        var row = p.Pages[0].Tables[0].Rows.First(r => r.Lines.Contains(rolls));
-        var img1 = Fixtures.Load("page1").Image;
-        var cut = ZeroRows.Cut(img1, p.Pages[0]);
-        Equal(1, cut.Strips.Count, "une rangée découpée");
-        int h = cut.Strips[0].Image.Height;
-        Check(Math.Abs(h - row.Bounds.Height) <= 3, $"hauteur de la rangée : {h}");
-        Equal(img1.Height - h, cut.Image.Height, "la page raccourcit d'autant");
-        var img5 = Fixtures.Load("page5").Image;
-        var last = ZeroRows.Cut(img5, p.Pages[1]);
-        var final = ZeroRows.Append(last.Image, last.InsertAt, last.TableLeft, cut.Strips);
-        Equal(img5.Height + h, final.Height, "la dernière page s'allonge d'autant");
-        Check(img5.Data.AsSpan(0, last.InsertAt * img5.Width).SequenceEqual(final.Data.AsSpan(0, last.InsertAt * img5.Width)), "haut de la dernière page intact");
+        var t = p.Pages[0].Tables[0];
+        var order = Enumerable.Range(0, t.Rows.Count).ToList();
+        order.RemoveAt(2); order.Insert(5, 2); // « aspirateur » descend sous « distributeurs »
+        t.RowOrder = order;
+        var l = ExportLines(p).ToList();
+        Check(l.FindIndex(x => x.Contains("aspirateur")) > l.FindIndex(x => x.Contains("distributeurs")), ".txt dans le nouvel ordre");
+        Lots.FillAutomatically(p);
+        Equal("5", p.Pages[0].AllLines().First(x => x.Cells[0].Text.StartsWith("1 aspirateur")).Lot, "numéro selon l'ordre affiché");
+        var img = Fixtures.Load("page1").Image;
+        var plan = Arrangement.Build(p);
+        var outImg = ComposeAll(p, plan, _ => img)[0];
+        Equal(img.Height, outImg.Height, "même hauteur");
+        int a0 = (int)Math.Floor(t.RowYs[2] + 0.5) - 2, a1 = (int)Math.Floor(t.RowYs[3] + 0.5) - 2, e0 = (int)Math.Floor(t.RowYs[6] + 0.5) - 2;
+        var moved = plan.Pages[0].Pieces.First(pc => !pc.IsUnit && pc.Y0 == a0);
+        Equal(e0 - (a1 - a0), moved.Dst, "rangée posée sous « distributeurs »");
+        Check(img.Data.AsSpan(a0 * img.Width, (a1 - a0) * img.Width).SequenceEqual(outImg.Data.AsSpan(moved.Dst * img.Width, (a1 - a0) * img.Width)), "pixels intacts");
+    }
+
+    public static void T_Totaux_recalcules_et_saisie_a_la_main()
+    {
+        Equal(4455000L, Totals.ParseAmount("44 550"), "lecture");
+        Equal(550000L, Totals.ParseAmount("S 500"), "lecture OCR");
+        Equal(0L, Totals.ParseAmount("mémoire"), "mémoire");
+        Equal("198 310", Totals.FormatAmount(19831000), "écriture");
+        var p = new InventoryProject();
+        p.Pages.Add(Fixtures.Analyze("page5"));
+        p.Pages.Add(RetoucheInventaire.Core.Import.DataPageBuilder.Build("recap.csv", new List<string[]>
+        {
+            new[] { "", "exploitation", "réalisation" }, new[] { "II - STOCK", "44 550", "9 000" }, new[] { "TOTAL GENERAL", "44 550", "9 000" },
+        }));
+        PrintedLine Find(Page pg, string t) => pg.AllLines().First(l => l.Cells[0].Text == t);
+        var total = Find(p.Pages[0], "TOTAL STOCK");
+        var recap = Find(p.Pages[1], "II - STOCK");
+        var general = Find(p.Pages[1], "TOTAL GENERAL");
+        Equal(0, Totals.Recompute(p).Count, "rien ne change sans modification");
+        Find(p.Pages[0], "CARTONNAGE").Cells[1].Text = "17 000";
+        Totals.Recompute(p);
+        Equal("45 550", total.Cells[1].Text, "total de la rubrique");
+        Equal("45 550", recap.Cells[1].Text, "récapitulatif");
+        Equal("45 550", general.Cells[1].Text, "total général");
+        Lots.CreateEmpty(p);
+        Lots.Set(p, Find(p.Pages[0], "PRODUITS FINIS"), "0");
+        Totals.Recompute(p, Arrangement.Build(p));
+        Equal("42 050", total.Cells[1].Text, "lot 0 retiré du total");
+        Equal("8 000", total.Cells[2].Text, "autre colonne");
+        total.Cells[1].Text = "50 000"; total.Cells[1].Manual = true;
+        Totals.Recompute(p);
+        Equal("50 000", total.Cells[1].Text, "tapé à la main : gardé");
+        Equal("50 000", recap.Cells[1].Text, "le récapitulatif suit le total tapé");
+        total.Cells[1].Manual = false;
+        Totals.Recompute(p, Arrangement.Build(p));
+        Equal("42 050", total.Cells[1].Text, "Recalculer");
+    }
+
+    public static void T_Couleur_du_texte()
+    {
+        var f = new Field { Text = "2 rolls en métal", OriginalText = "2 rolls en métal" };
+        Strikes.SetColor(f, 2, 7, "red");
+        Equal("-|red|-", string.Join("|", Strikes.ColorRuns(f).Select(r => r.Color ?? "-")), "morceaux");
+        var old = f.Text; f.Text = "Lot " + old; Strikes.Adjust(f, old, f.Text);
+        Equal("rolls", f.Text.Substring(f.Colors[0].Start, f.Colors[0].Length), "suit le texte");
+        Strikes.SetColor(f, f.Colors[0].Start, f.Colors[0].Start + f.Colors[0].Length, "red");
+        Equal(0, f.Colors.Count, "même couleur une 2e fois : retirée");
+        Strikes.SetColor(f, 0, 0, "blue");
+        Equal(f.Text.Length, f.Colors[0].Length, "sans sélection : toute la case");
     }
 
     public static void T_Nom_decompose_iphone_repare()

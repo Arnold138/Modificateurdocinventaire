@@ -14,9 +14,9 @@ public static class ImageExporter
     public static List<Field> EditedFields(Page page) =>
         page.AllFields().Where(f => f.IsModified && !f.Locked).ToList();
 
-    /// <summary>Champs qui portent un trait (texte barré).</summary>
+    /// <summary>Champs qui portent un trait (texte barré) ou une couleur.</summary>
     public static List<Field> StruckFields(Page page) =>
-        page.AllFields().Where(f => f.Strikes.Count > 0 && !f.Locked).ToList();
+        page.AllFields().Where(f => (f.Strikes.Count > 0 || f.Colors.Count > 0) && !f.Locked).ToList();
 
     /// <summary>
     /// Couleur du papier autour d'une case : moyenne des pixels clairs de son pourtour,

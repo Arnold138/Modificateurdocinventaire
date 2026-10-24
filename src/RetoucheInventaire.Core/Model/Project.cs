@@ -54,6 +54,12 @@ public sealed class Field
     /// <summary>Morceaux de texte barrés (trait rouge ou noir), voir <see cref="Strikes"/>.</summary>
     public List<Strike> Strikes { get; set; } = [];
 
+    /// <summary>Morceaux de texte en couleur (« red », « blue », « green »), voir <see cref="Strikes.SetColor"/>.</summary>
+    public List<Strike> Colors { get; set; } = [];
+
+    /// <summary>Montant de total tapé à la main : il ne se recalcule plus tout seul (« Recalculer » le remet en automatique).</summary>
+    public bool Manual { get; set; }
+
     [JsonIgnore] public bool IsModified => !string.Equals(Text, OriginalText, StringComparison.Ordinal);
 }
 
@@ -104,6 +110,8 @@ public sealed class Table
     public List<double> ColumnXs { get; set; } = [];
     public List<double> RowYs { get; set; } = [];
     public List<Row> Rows { get; set; } = [];
+    /// <summary>Ordre d'affichage des rangées (rangées déplacées à la main), null : l'ordre imprimé.</summary>
+    public List<int>? RowOrder { get; set; }
 }
 
 public sealed class Page

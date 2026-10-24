@@ -9,15 +9,16 @@ import { newPage, newProject, analyze, reclassify, allFields, isModified, cycleK
 import { buildTxt, txtBlob, composeIntoSource, outputName } from './core/exports.js';
 import { decodeText, parseDelimited, readXlsx, buildDataPage } from './core/importers.js';
 import { packProject, unpackProject, EXTENSION } from './core/store.js';
-import { objectLines, lotsActive, numberLots, clearLots, setLot, resyncLots, removeLot, addLot, lotLabels, repairName, naturalCompare, createEmptyLots, fillLotsAutomatically } from './core/lots.js';
+import { objectLines, lotsActive, numberLots, clearLots, setLot, resyncLots, removeLot, addLot, repairName, naturalCompare, createEmptyLots, fillLotsAutomatically, emptyLots, isZeroLot, rowOrder } from './core/lots.js';
 import { unzipSync } from './vendor/fflate.js';
 import { stretch, setExtra, baseHeight, totalExtra } from './core/layout.js';
-import { toggleStrike, isStruck, RED, BLACK } from './core/strikes.js';
-import { zeroRows, cutZeroRows, appendStrips } from './core/zerorows.js';
-import { drawLotColumns, framedTables, frameSignature, lotFrameEnabled } from './core/lotcolumn.js';
+import { toggleStrike, isStruck, setColor, RED, BLACK, TEXT_COLORS } from './core/strikes.js';
+import { planArrangement, viewOf, composePage, unitCrop, pageArranged, mapY, unmapY } from './core/arrange.js';
+import { recomputeTotals, isComputedCell, computedValue } from './core/totals.js';
+import { frameSignature, lotFrameEnabled } from './core/lotcolumn.js';
 import { decodeImage, pdfPages, isImageName, mimeOf } from './services/decode.js';
 import { recognize, warmUp } from './services/ocr.js';
-import { rasterToCanvas, canvasToBlob, renderEdits, freeCanvas, lineExtra } from './services/canvas.js';
+import { rasterToCanvas, canvasToBlob, renderEdits, freeCanvas, lineExtra, pageRaster } from './services/canvas.js';
 import * as db from './services/db.js';
 import { PageView } from './ui/pageview.js';
 import { cropDialog } from './ui/crop.js';
@@ -39,6 +40,8 @@ const state = {
   view: null,           // PageView de la page affichée
   field: null,          // case sélectionnée
   busy: false,
+  plan: null,           // mise en page : lots 0 recollés après le dernier lot, rangées déplacées
+  crops: new Map(),     // morceaux d'image des lots 0 (pour recomposer la page où ils arrivent)
   undo: [],             // états précédents du projet (bouton ↶)
   editSession: null,    // case en cours de frappe (un seul retour en arrière pour toute la saisie)
   lock: false,
@@ -75,6 +78,7 @@ function updateButtons() {
   $('btnCrop').disabled = b || page?.Source !== 'Image';
   $('btnLock').disabled = b || !page;
   $('btnLots').disabled = b || n === 0;
+  $('btnEdit').disabled = b || n === 0;
   $('btnUndo').disabled = b || state.undo.length === 0;
   $('btnExport').disabled = b || n === 0;
   $('pager').hidden = n === 0;
@@ -93,12 +97,19 @@ function updateEditBar() {
   const f = state.field;
   const hit = f ? findLine(state.project, f) : null;
   $('editbar').hidden = !hit;
-  if (!hit) return;
+  if (!hit) { hidePalette(); return; }
   $('kindLabel').textContent = kindLabel(hit.line.Kind);
   $('btnRevert').disabled = state.busy || !isModified(f);
   $('btnKind').disabled = state.busy;
+  const computed = isComputedCell(hit.line, f);
+  $('btnRecalc').hidden = !computed || !f.Manual;
   const t = firstText(hit.line);
-  $('editInfo').textContent = isModified(f) ? `Original : « ${f.OriginalText || '(vide)'} »` : `« ${t.length > 48 ? t.slice(0, 48) + '…' : t} »`;
+  if (computed) {
+    $('editInfo').textContent = f.Manual
+      ? `Total tapé à la main · calculé : ${computedValue(state.project, state.plan, f) || '(vide)'}`
+      : `Total calculé automatiquement${isModified(f) ? ` (imprimé : ${f.OriginalText || 'illisible'})` : ''}`;
+  } else
+    $('editInfo').textContent = isModified(f) ? `Original : « ${f.OriginalText || '(vide)'} »` : `« ${t.length > 48 ? t.slice(0, 48) + '…' : t} »`;
 }
 
 async function run(work) {
@@ -131,6 +142,8 @@ function dialog(title, html, buttons, onBody = null) {
     $('dialog').hidden = false;
   });
 }
+
+const hidePalette = () => { $('palette').hidden = true; };
 
 const confirmDialog = (title, text, ok = 'Continuer') =>
   dialog(title, `<p>${escapeHtml(text)}</p>`, [{ label: 'Annuler', value: false }, { label: ok, value: true, className: 'accent' }]);
@@ -211,7 +224,9 @@ async function undo() {
   const currentId = old.size ? [...old.values()][state.index]?.Id : null;
   const index = Math.max(0, pages().findIndex((p) => p.Id === currentId));
   state.editSession = null;
-  await showPage(Math.min(index, pages().length - 1), { fit: false });
+  state.field = null;
+  state.crops.clear();
+  await showPage(Math.min(index, pages().length - 1), { fit: false, keepScroll: index === state.index });
   status('Dernière action annulée.');
   scheduleSave();
 }
@@ -225,29 +240,71 @@ function disposeView() {
   $('pages').replaceChildren();
 }
 
+// ---------- Mise en page et images ----------
+
+/** Recalcule la mise en page (lots 0, rangées déplacées). */
+function replan() {
+  state.plan = planArrangement(state.project);
+  return state.plan;
+}
+
+/** Totaux recalculés (cases non tapées à la main) ; renvoie les cases changées. */
+function recomputeAll() {
+  return recomputeTotals(state.project, state.plan ?? replan());
+}
+
+const colorSig = (page) => JSON.stringify([...allFields(page)].map((f) => (f.Colors?.length ? [f.Text === f.OriginalText, f.Colors] : 0)));
+
+/** Image de la page avant corrections : redressée, agrandie, colonne des lots tracée, écriture en couleur. */
+async function ownDisplay(page) {
+  if (page.Source !== 'Image') return null;
+  let flat = state.flats.get(page);
+  if (!flat) {
+    flat = await restoreFlat(page);
+    if (!flat) return null;
+  }
+  remember(state.flats, page, flat, 3);
+  return pageRaster(page, stretch(flat, page), lotFrameEnabled(state.project));
+}
+
+/** Morceau d'image d'un lot 0 (gardé en mémoire : sa page n'a pas besoin d'être rouverte). */
+async function cropOf(u) {
+  if (u.page.Source !== 'Image') return null;
+  const key = JSON.stringify([u.page.Id, imageKey(u.page), frameSignature(u.page, lotFrameEnabled(state.project)), colorSig(u.page), u.bodyTop, u.bottom, !!u.title]);
+  if (state.crops.has(key)) return state.crops.get(key);
+  const own = await ownDisplay(u.page);
+  const crop = own ? unitCrop(u, own) : null;
+  remember(state.crops, key, crop, 60);
+  return crop;
+}
+
+/** Image affichée de la page k : la sienne, recomposée si des rangées partent ou arrivent. */
+async function displayOf(k) {
+  const page = pages()[k];
+  const own = await ownDisplay(page);
+  if (!own || !pageArranged(state.project, state.plan, k)) return own;
+  const crops = new Map();
+  for (const pc of state.plan.pages[k].pieces) if (pc.kind === 'unit') crops.set(pc.unit, await cropOf(pc.unit));
+  return composePage(state.project, state.plan, k, own, crops);
+}
+
 /** Affiche la page n (et seulement elle). */
-async function showPage(n, { flat = null, fit = true } = {}) {
+async function showPage(n, { flat = null, fit = true, keepScroll = false } = {}) {
   const list = pages();
+  const vp = $('viewport');
+  const scroll = keepScroll ? { x: vp.scrollLeft, y: vp.scrollTop } : null;
+  const focusedField = keepScroll ? state.field : null;
   disposeView();
   if (list.length === 0) { state.index = 0; updateButtons(); applyZoom(1); return; }
   state.index = Math.min(list.length - 1, Math.max(0, n));
   const page = list[state.index];
   updateButtons();
-
-  let image = null;
-  if (page.Source === 'Image') {
-    image = flat ?? state.flats.get(page) ?? null;
-    if (!image) {
-      status(`Ouverture de la page ${state.index + 1}…`);
-      await tick();
-      image = await restoreFlat(page);
-    }
-    if (image) remember(state.flats, page, image, 3);
-    if (list[state.index] !== page) return; // l'utilisateur a déjà changé de page
-  }
-  // Page agrandie (textes sur plusieurs lignes) : l'image d'origine est étirée aux bons endroits.
-  const base = image;
-  if (base) image = stretch(base, page);
+  if (flat) remember(state.flats, page, flat, 3);
+  replan();
+  if (page.Source === 'Image' && !state.flats.get(page)) { status(`Ouverture de la page ${state.index + 1}…`); await tick(); }
+  const k = state.index;
+  const display = await displayOf(k);
+  if (list[state.index] !== page) return; // l'utilisateur a déjà changé de page
 
   const head = document.createElement('div');
   head.className = 'page-head';
@@ -262,98 +319,118 @@ async function showPage(n, { flat = null, fit = true } = {}) {
   sync.onclick = () => { pushUndo(); syncLots(); };
   head.append(title, sync, remove);
 
-  const view = new PageView(page, image, {
-    display: displayFor(page, image),
+  const pp = () => state.plan.pages[k];
+  const view = new PageView(viewOf(state.project, state.plan, k), display, {
     lotsActive: () => lotsActive(state.project),
-    lotFrame: () => lotFrameEnabled(state.project),
     zoom: () => state.zoom,
+    mapY: (y) => mapY(pp(), y),
+    unmapY: (y) => unmapY(pp(), y),
     onFocus: (v, f) => { state.field = f; state.editSession = null; updateEditBar(); },
     beforeEdit: (v, f) => { if (state.editSession !== f) { pushUndo(); state.editSession = f; } },
     beforeChange: () => pushUndo(),
-    onEdited: (v, f) => { afterEdit(v, f); updateEditBar(); scheduleSave(); },
-    onTouch: () => {},
+    onEdited: (v, f) => {
+      if (isComputedCell(v.lineOf.get(f), f)) f.Manual = true; // total tapé à la main : il ne bouge plus tout seul
+      afterEdit(v, f);
+      updateEditBar();
+      scheduleSave();
+    },
     onLocks: () => { status('Zones verrouillées mises à jour.'); scheduleSave(); },
     onLot: (v, line, value) => {
       pushUndo();
+      const wasZero = isZeroLot(line), sig = frameSignature(v.page, lotFrameEnabled(state.project));
       setLot(state.project, line, value);
-      lotsChanged(v, true);
-      status(`Lot ${line.Lot || '(automatique)'} : les numéros suivants ont été recalés.`);
+      const zero = isZeroLot(line);
+      replan();
+      recomputeAll();
+      if (zero !== wasZero || sig !== frameSignature(v.page, lotFrameEnabled(state.project))) refreshView();
+      else v.updateLots();
+      if (zero && !wasZero) {
+        const d = state.plan.dest;
+        status(d ? `Lot 0 : « ${firstText(line)} » est passé après le dernier lot (page ${d.p + 1}). Retapez un numéro pour le remettre à sa place.` : 'Lot 0 : aucun autre lot numéroté, la ligne reste en place.');
+      } else if (wasZero && !zero) status(`Lot ${line.Lot} : « ${firstText(line)} » est revenu à sa place.`);
+      else status(line.Lot ? `Lot ${line.Lot} enregistré.` : 'Case de lot vidée.');
       scheduleSave();
     },
     onLotRemove: (v, line) => {
       pushUndo();
-      const old = line.Lot;
       removeLot(state.project, line);
-      lotsChanged(v);
-      status(`Lot ${old} retiré : les numéros suivants ont été décalés.`);
+      recomputeAll();
+      refreshView();
+      status('Case de lot retirée : cette ligne n\'est pas un objet.');
       scheduleSave();
     },
     onLotAdd: (v, line) => {
       pushUndo();
       addLot(state.project, line);
-      lotsChanged(v);
-      status(`Lot ${line.Lot} ajouté : les numéros suivants ont été décalés.`);
+      refreshView();
+      status('Case de lot ajoutée : tapez le numéro.');
+      scheduleSave();
+    },
+    onMoveRow: (v, table, from, before) => {
+      pushUndo();
+      const order = rowOrder(table).filter((r) => r !== from);
+      order.splice(before === null ? order.length : order.indexOf(before), 0, from);
+      table.RowOrder = order;
+      refreshView();
+      status('Rangée déplacée. ↶ pour annuler.');
       scheduleSave();
     },
   });
-  view.frameSig = frameSignature(page, lotFrameEnabled(state.project));
-  view.baseFlat = base;
+  view.baseFlat = state.flats.get(page) ?? null;
   view.setLockMode(state.lock);
   state.view = view;
   $('pages').append(head, view.row);
-  $('viewport').scrollTop = 0;
-  if (fit) requestAnimationFrame(fitWidth); else applyZoom(state.zoom);
-  status(page.Source === 'Image'
-    ? 'Touchez une case pour la corriger ; l\'original s\'affiche en loupe au-dessus.'
-    : 'Touchez une case pour la corriger.');
+  if (scroll) { applyZoom(state.zoom); vp.scrollLeft = scroll.x; vp.scrollTop = scroll.y; }
+  else { vp.scrollTop = 0; if (fit) requestAnimationFrame(fitWidth); else applyZoom(state.zoom); }
+  if (focusedField && view.inputs.has(focusedField)) { state.field = focusedField; view.focus(focusedField); }
+  if (!keepScroll)
+    status(page.Source === 'Image'
+      ? 'Touchez une case pour la corriger ; l\'original s\'affiche en loupe au-dessus.'
+      : 'Touchez une case pour la corriger.');
   updateButtons();
 }
 
-const lotSignature = (page) => lotLabels(page).map((l) => l.line.Cells[0]?.Id + ':' + l.line.Lot).join('|');
-
-/** Image affichée : la page redressée, avec la colonne des lots tracée si elle est demandée. */
-function displayFor(page, flat) {
-  if (!flat || !lotFrameEnabled(state.project) || framedTables(page).length === 0) return flat;
-  return drawLotColumns(flat, page);
+/** Reconstruit la page affichée (même zoom, même endroit). */
+function refreshView() {
+  return showPage(state.index, { fit: false, keepScroll: true });
 }
 
-/** Les numéros ont changé : mise à jour de l'écran (et de la colonne tracée si elle change de forme). */
-function lotsChanged(view, typing = false) {
-  if (!view) return updateButtons();
-  const sig = frameSignature(view.page, lotFrameEnabled(state.project));
-  if (sig !== view.frameSig) {
-    view.frameSig = sig;
-    view.setDisplay(displayFor(view.page, view.image) ?? view.image);
-  }
-  if (typing) { view.updateLots(); view.refreshGutter(); } else view.refreshLots();
-  updateButtons();
+/** La page a changé (rangée agrandie, couleur…) : nouvelle image et cases replacées, sans fermer le clavier. */
+async function redraw(view = state.view) {
+  if (!view) return;
+  replan();
+  const k = state.index;
+  const display = await displayOf(k);
+  if (state.view !== view) return;
+  view.relayout(viewOf(state.project, state.plan, k), display);
 }
 
-/** Bouton « Synchroniser » : recalcule tous les numéros (ceux tapés à la main sont gardés). */
 /** « Synchroniser automatiquement » : le logiciel remplit toutes les cases (les numéros tapés restent des repères). */
 function syncLots() {
   fillLotsAutomatically(state.project);
-  lotsChanged(state.view);
-  const objs = [...objectLines(state.project)];
+  recomputeAll();
+  refreshView();
+  const objs = [...objectLines(state.project)].filter((o) => !isZeroLot(o.line));
   status(objs.length ? `Lots synchronisés : ${objs.length} objets, de ${objs[0].line.Lot} à ${objs[objs.length - 1].line.Lot}.` : 'Aucun objet à numéroter.');
   scheduleSave();
 }
 
 /**
  * Après une saisie : la rangée grandit si le texte passe sur plus de lignes (tout ce qui est en dessous descend),
- * et si une ligne devient (ou cesse d'être) un objet, les lots se recalent.
+ * les totaux suivent, et si une ligne devient (ou cesse d'être) un objet, sa case de lot apparaît ou disparaît.
  */
 function afterEdit(view, f = null) {
-  const line = f ? view.lineOf.get(f) : null;
-  if (line && setExtra(view.page, line, lineExtra(line))) {
-    const img = view.baseFlat ? stretch(view.baseFlat, view.page) : null;
-    view.frameSig = frameSignature(view.page, lotFrameEnabled(state.project));
-    view.relayout(img, img ? displayFor(view.page, img) : null);
+  const entry = f ? view.entryOf(f) : null;
+  const grew = entry && setExtra(entry.page, entry.line, lineExtra(entry.line));
+  const changed = recomputeAll();
+  let lots = false;
+  if (lotsActive(state.project)) {
+    const before = [...objectLines(state.project)].length;
+    resyncLots(state.project);
+    lots = [...objectLines(state.project)].length !== before;
   }
-  if (!lotsActive(state.project)) return;
-  const before = lotSignature(view.page);
-  resyncLots(state.project);
-  if (lotSignature(view.page) !== before) lotsChanged(view, true);
+  if (grew || lots) redraw(view);
+  else if (changed.length) view.syncFields(changed);
 }
 
 function goTo(n) {
@@ -663,31 +740,40 @@ async function exportTxt() {
   await deliver([file], 'Fichier texte prêt', `<p>${lineCount} lignes, colonnes séparées par des tabulations (UTF-8).${lots}</p>${warn}`);
 }
 
+/** Page redressée avec toutes les corrections dessinées (colonne des lots, textes, traits, couleurs). */
+async function editedOf(page) {
+  const base = state.flats.get(page) ?? (await restoreFlat(page));
+  return base ? renderEdits(page, stretch(base, page), lotFrameEnabled(state.project)) : null;
+}
+
 async function exportJpeg(only = null) {
-  const all = pages().filter((p) => p.Source === 'Image');
-  const lastPage = all[all.length - 1];
-  const targets = only ? [only] : all;
-  // Lots 0 : leurs rangées quittent leur page et sont recollées sous le dernier tableau de la dernière page.
-  const needStrips = targets.includes(lastPage) && all.some((p) => zeroRows(p).length > 0);
-  const work = all.filter((p) => targets.includes(p) || (needStrips && zeroRows(p).length > 0));
-  const strips = [];
-  let moved = 0;
+  const plan = replan();
+  recomputeAll();
+  const all = pages().map((page, k) => ({ page, k })).filter((x) => x.page.Source === 'Image');
+  const targets = only ? all.filter((x) => x.page === only) : all;
+  // Lots 0 : leurs morceaux sont pris sur leur page (corrections comprises), puis recollés après le dernier lot.
+  const crops = new Map();
+  const unitPages = [...new Set(targets.flatMap(({ k }) => plan.pages[k].pieces.filter((pc) => pc.kind === 'unit').map((pc) => pc.unit.p)))];
+  for (let i = 0; i < unitPages.length; i++) {
+    const page = pages()[unitPages[i]];
+    if (page.Source !== 'Image') continue;
+    status(`Préparation des lots 0 (${i + 1}/${unitPages.length})…`); await tick();
+    const edited = await editedOf(page);
+    if (edited) for (const u of plan.units.filter((x) => x.p === unitPages[i])) crops.set(u, unitCrop(u, edited));
+  }
   const files = [];
-  for (let i = 0; i < work.length; i++) {
-    const page = work[i];
-    progress(i / work.length);
-    status(`Création de l'image ${i + 1} sur ${work.length}…`); await tick();
-    const base = state.flats.get(page) ?? (await restoreFlat(page));
-    if (!base) continue;
-    const frame = lotFrameEnabled(state.project);
-    const edited = renderEdits(page, stretch(base, page), frame);
-    let final = edited, changed = totalExtra(page) > 0;
-    const cut = cutZeroRows(edited, page);
-    if (cut.strips.length > 0) { strips.push(...cut.strips); final = cut.image; changed = true; moved += zeroRows(page).length; }
-    if (page === lastPage && strips.length > 0) { final = appendStrips(final, cut.insertAt, cut.tableLeft, strips); changed = true; }
-    if (!targets.includes(page)) continue;
-    // Page changée de forme (rangée agrandie, lots 0 déplacés) : on exporte la page scannée bien droite.
-    if (!changed) {
+  const frame = lotFrameEnabled(state.project);
+  for (let i = 0; i < targets.length; i++) {
+    const { page, k } = targets[i];
+    progress(i / targets.length);
+    status(`Création de l'image ${i + 1} sur ${targets.length}…`); await tick();
+    const edited = await editedOf(page);
+    if (!edited) continue;
+    let final = edited;
+    const arranged = pageArranged(state.project, plan, k);
+    if (arranged) final = composePage(state.project, plan, k, edited, crops);
+    // Page qui garde sa forme : la photo d'origine, inchangée sauf dans les cases modifiées.
+    if (!arranged && totalExtra(page) === 0) {
       const src = await orientedSource(page);
       if (!src) continue;
       final = composeIntoSource(src, page, edited, frame);
@@ -699,7 +785,7 @@ async function exportJpeg(only = null) {
   }
   progress(null);
   status(`${files.length} image(s) prête(s).`);
-  const zero = moved > 0 ? ` ${moved} rangée(s) au lot 0 déplacée(s) à la fin de la dernière page.` : '';
+  const zero = plan.units.length > 0 ? ` ${plan.units.length} lot(s) 0 placé(s) après le dernier lot (page ${plan.dest.p + 1}).` : '';
   await deliver(files, files.length > 1 ? 'Images prêtes' : 'Image prête', "<p>Chaque photo d'origine, inchangée sauf dans les cases modifiées" + (lotsActive(state.project) ? ' et la colonne des numéros de lot' : '') + '.' + zero + '</p>');
 }
 
@@ -720,31 +806,42 @@ async function exportDialog() {
 
 // ---------- Lots ----------
 
+/**
+ * Bouton « Lots » : la 1re fois, la colonne est créée tout de suite, cases vides (on tape les numéros soi-même).
+ * Ensuite : synchroniser (remplir tout d'un coup), renuméroter, vider, enlever.
+ */
 async function lotsDialog() {
+  if (!lotsActive(state.project)) {
+    pushUndo();
+    createEmptyLots(state.project);
+    const n = [...objectLines(state.project)].length;
+    await refreshView();
+    status(`Colonne des lots créée : ${n} cases vides. Touchez une case pour taper un numéro (0 = absent : la ligne passe après le dernier lot).`);
+    scheduleSave();
+    return;
+  }
   const objects = [...objectLines(state.project)].map((o) => o.line);
-  const active = lotsActive(state.project);
-  const byHand = !!state.project.LotsByHand;
-  const filled = objects.filter((l) => l.Lot).length;
-  const first = objects.find((l) => l.Lot)?.Lot ?? '', last = [...objects].reverse().find((l) => l.Lot)?.Lot ?? '';
+  const filled = objects.filter((l) => l.Lot && !isZeroLot(l)).length, zeros = objects.filter(isZeroLot).length;
+  const nums = objects.filter((l) => l.Lot && !isZeroLot(l));
+  const first = nums[0]?.Lot ?? '', last = nums[nums.length - 1]?.Lot ?? '';
   const html = `
-    <p>Un numéro de lot par objet, dans une colonne à gauche du tableau. Il apparaît dans le <b>.txt</b> (1re colonne) et sur le <b>JPEG</b>. Les titres, totaux et en-têtes n'en ont pas.</p>
-    ${!active ? `<p><b>${objects.length} objets</b> trouvés sur ${pages().length} page(s).</p>
-      <p><b>Colonne vide</b> : toutes les cases vides, vous tapez les numéros vous-même, rien ne se remplit tout seul.<br><b>Numéroter automatiquement</b> : 1, 2, 3… à partir du nombre choisi.</p>`
-    : `<p><b>${objects.length} objets</b>, ${filled} numéroté(s)${filled ? ` (de <b>${escapeHtml(first)}</b> à <b>${escapeHtml(last)}</b>)` : ''}. ${byHand ? 'Remplissage <b>à la main</b> : rien ne change tout seul.' : 'Numérotation <b>automatique</b> : un numéro tapé recale les suivants.'}</p>
-      <p class="muted">Touchez une case sur la page pour taper un numéro. 0 = absent ou barré (mis en fin d'inventaire). 🗑 : ce n'est pas un objet. « + » : ajouter une case.</p>`}
+    <p><b>${objects.length} objets</b> : ${filled} numéroté(s)${filled ? ` (de <b>${escapeHtml(first)}</b> à <b>${escapeHtml(last)}</b>)` : ''}${zeros ? `, ${zeros} au lot 0` : ''}, ${objects.length - filled - zeros} case(s) vide(s).</p>
+    <p class="muted">Touchez une case sur la page pour taper un numéro : rien d'autre ne change. <b>0</b> = objet absent : sa ligne passe après le dernier lot ; retapez un numéro pour la remettre à sa place. 🗑 : ce n'est pas un objet. « + » : ajouter une case. ⋮⋮ : glisser pour déplacer une rangée.</p>
+    <p class="muted"><b>Synchroniser automatiquement</b> remplit toutes les cases d'un coup (les numéros tapés restent, la suite repart d'eux).</p>
     <label class="switch"><input id="lotFrame" type="checkbox" ${lotFrameEnabled(state.project) ? 'checked' : ''}> Tracer la colonne dans le tableau (traits et fond comme le tableau imprimé)</label>
-    <label>Commencer à <input id="lotStart" type="number" inputmode="numeric" min="0" value="${/^\d+$/.test(first) ? first : 1}"></label>`;
+    <label>Renuméroter à partir de <input id="lotStart" type="number" inputmode="numeric" min="0" value="${/^\d+$/.test(first) ? first : 1}"></label>`;
   const shown = dialog('Numéros de lot', html, [
-    ...(active ? [{ label: 'Synchroniser automatiquement', value: 'sync', className: 'accent' }] : []),
-    { label: active ? 'Vider les cases (remplir moi-même)' : 'Colonne vide (remplir moi-même)', value: 'empty', className: active ? '' : 'accent' },
-    { label: active ? 'Renuméroter automatiquement' : 'Numéroter automatiquement', value: 'number' },
-    ...(active ? [{ label: 'Enlever la colonne', value: 'clear', className: 'danger' }] : []),
+    { label: 'Synchroniser automatiquement', value: 'sync', className: 'accent' },
+    { label: 'Renuméroter tout', value: 'number' },
+    { label: 'Vider les cases', value: 'empty' },
+    { label: 'Enlever la colonne', value: 'clear', className: 'danger' },
     { label: 'Fermer', value: null },
   ]);
+  let frameChanged = false;
   $('lotFrame').onchange = (e) => {
     pushUndo();
     state.project.LotFrame = e.target.checked;
-    lotsChanged(state.view);
+    frameChanged = true;
     scheduleSave();
   };
   const choice = await shown;
@@ -752,24 +849,65 @@ async function lotsDialog() {
     pushUndo();
     const start = parseInt($('lotStart')?.value ?? '1', 10);
     numberLots(state.project, Number.isFinite(start) ? start : 1);
-    const objs = [...objectLines(state.project)];
-    status(`Lots numérotés de ${objs[0]?.line.Lot ?? ''} à ${objs[objs.length - 1]?.line.Lot ?? ''}.`);
+    const objs = [...objectLines(state.project)].filter((o) => !isZeroLot(o.line));
+    status(`Lots renumérotés de ${objs[0]?.line.Lot ?? ''} à ${objs[objs.length - 1]?.line.Lot ?? ''}.`);
   } else if (choice === 'empty') {
-    if (filled > 0 && !(await confirmDialog('Vider les cases ?', 'Tous les numéros seront effacés ; vous les taperez vous-même (bouton ↶ pour revenir en arrière).', 'Vider'))) return;
+    if (!(await confirmDialog('Vider les cases ?', 'Tous les numéros seront effacés (les 0 aussi) ; vous les taperez vous-même (bouton ↶ pour revenir en arrière).', 'Vider'))) return frameChanged && refreshView();
     pushUndo();
-    createEmptyLots(state.project);
-    status(`Colonne de lots créée : ${objects.length} cases vides. Touchez une case pour taper un numéro.`);
+    emptyLots(state.project);
+    status(`Cases vidées : ${objects.length} cases à remplir.`);
   } else if (choice === 'sync') {
     pushUndo();
     return syncLots();
   } else if (choice === 'clear') {
-    if (!(await confirmDialog('Enlever la colonne des lots ?', 'Tous les numéros seront retirés (texte et images).', 'Enlever'))) return;
+    if (!(await confirmDialog('Enlever la colonne des lots ?', 'Tous les numéros seront retirés (texte et images).', 'Enlever'))) return frameChanged && refreshView();
     pushUndo();
     clearLots(state.project);
     status('Colonne des lots enlevée.');
-  } else return;
-  lotsChanged(state.view);
+  } else return frameChanged && refreshView();
+  recomputeAll();
+  await refreshView();
   scheduleSave();
+}
+
+/** « Modifier » : le document (nom, pages) ; les outils de la case sélectionnée sont dans la barre du haut. */
+async function editDialog() {
+  const page = currentPage();
+  const choice = await dialog('Modifier', `<p>Le document <b>${escapeHtml(state.project.Name)}</b>${page ? `, page ${state.index + 1} sur ${pages().length}` : ''}.</p>
+    <p class="muted">Pour une case : touchez-la, puis en haut <b>Barrer</b>, <b>Couleur</b>, <b>Type de ligne</b>, <b>Rétablir</b> (et <b>Recalculer</b> pour un total). Sélectionnez quelques mots pour ne barrer ou colorer qu'eux.</p>`, [
+    { label: 'Renommer le document', value: 'rename', className: 'accent' },
+    { label: 'Liste des pages', value: 'pages' },
+    ...(lotsActive(state.project) ? [{ label: 'Synchroniser les lots', value: 'sync' }] : []),
+    ...(page ? [{ label: 'Retirer cette page', value: 'remove', className: 'danger' }] : []),
+    { label: 'Fermer', value: null },
+  ]);
+  if (choice === 'rename') await renameProject();
+  else if (choice === 'pages') await pagesDialog();
+  else if (choice === 'sync') { pushUndo(); syncLots(); }
+  else if (choice === 'remove') await removePage(page);
+}
+
+async function renameProject() {
+  const name = await promptDialog('Renommer le document', 'Nom (utilisé pour les fichiers exportés)', state.project.Name);
+  if (!name?.trim() || name.trim() === state.project.Name) return;
+  pushUndo();
+  state.project.Name = name.trim();
+  await saveNow();
+  updateButtons();
+  status(`Document renommé : ${state.project.Name}`);
+}
+
+/** Champ de saisie dans une fenêtre (prompt() n'est pas toujours disponible dans l'app installée). */
+function promptDialog(title, label, value) {
+  const shown = dialog(title, `<label style="flex-direction:column;align-items:stretch">${escapeHtml(label)}<input id="promptValue" type="text" value="${escapeHtml(value)}" style="min-height:48px;font-size:18px;padding:6px 12px;border:1px solid var(--line);border-radius:10px;-webkit-user-select:text;user-select:text"></label>`, [
+    { label: 'Annuler', value: null },
+    { label: 'OK', value: 'ok', className: 'accent' },
+  ]);
+  const input = $('promptValue');
+  input.focus();
+  input.select();
+  input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); [...$('dialogButtons').children].pop().click(); } };
+  return shown.then((v) => (v === 'ok' ? input.value : null));
 }
 
 // ---------- Boutons ----------
@@ -818,17 +956,15 @@ function initButtons() {
     pushUndo();
     cycleKind(hit.line);
     resyncLots(state.project);
-    view.refresh();
-    lotsChanged(view);
-    view.focus(f);
+    replan();
+    recomputeAll();
     state.field = f;
-    updateEditBar();
-    status(`Type de ligne : ${kindLabel(hit.line.Kind)}.`);
+    refreshView().then(() => { updateEditBar(); status(`Type de ligne : ${kindLabel(hit.line.Kind)}.`); });
     scheduleSave();
   };
 
   // Barrer : sur la sélection (toute la case sans sélection) ; même bouton pour enlever le trait.
-  for (const id of ['btnStrike', 'btnStrikeColor', 'btnRevert', 'btnKind'])
+  for (const id of ['btnStrike', 'btnStrikeColor', 'btnColor', 'btnRevert', 'btnKind', 'btnRecalc'])
     $(id).addEventListener('pointerdown', (e) => e.preventDefault()); // garde la case active et sa sélection
   const showColor = () => $('btnStrikeColor').classList.toggle('black', state.strikeColor === BLACK);
   try { state.strikeColor = localStorage.getItem('strikeColor') === BLACK ? BLACK : RED; } catch { state.strikeColor = RED; }
@@ -853,13 +989,60 @@ function initButtons() {
     scheduleSave();
   };
 
+  // Couleur du texte : rouge, bleu, vert (noir = enlever) sur la sélection, ou toute la case.
+  try { state.textColor = localStorage.getItem('textColor') || 'red'; } catch { state.textColor = 'red'; }
+  const showTextColor = () => { $('colorIcon').style.borderBottomColor = TEXT_COLORS[state.textColor] ?? '#000'; };
+  showTextColor();
+  $('btnColor').onclick = () => {
+    if (!$('palette').hidden) return hidePalette();
+    const r = $('btnColor').getBoundingClientRect(), top = document.querySelector('.top').getBoundingClientRect();
+    Object.assign($('palette').style, { left: Math.max(8, Math.min(r.left, innerWidth - 270)) + 'px', top: r.bottom - top.top + 6 + 'px' });
+    $('palette').hidden = false;
+  };
+  for (const b of $('palette').querySelectorAll('button')) {
+    b.addEventListener('pointerdown', (e) => e.preventDefault());
+    b.onclick = () => {
+      hidePalette();
+      const f = state.field, view = state.view;
+      if (!f || !view) return;
+      const color = b.dataset.color;
+      state.textColor = TEXT_COLORS[color] ? color : state.textColor;
+      try { localStorage.setItem('textColor', state.textColor); } catch { /* sans importance */ }
+      showTextColor();
+      const sel = view.selectionFor(f);
+      const [a, z] = sel.end > sel.start ? [sel.start, sel.end] : [0, f.Text.length];
+      pushUndo();
+      const on = setColor(f, a, z, color);
+      if (isModified(f)) view.refreshColors(); else redraw(view);
+      const part = f.Text.slice(a, z).trim();
+      status(`${on ? `En ${b.textContent.toLowerCase()}` : 'Couleur retirée'} : « ${part.length > 40 ? part.slice(0, 40) + '…' : part} ».`);
+      scheduleSave();
+    };
+  }
+  document.addEventListener('pointerdown', (e) => { if (!e.target.closest?.('#palette, #btnColor')) hidePalette(); });
+
   $('btnRevert').onclick = () => {
     const f = state.field;
     if (!f || !state.view) return;
     pushUndo();
+    if (isComputedCell(state.view.lineOf.get(f), f)) f.Manual = true; // total : on garde le montant imprimé
     state.view.revert(f);
     afterEdit(state.view, f);
     updateEditBar();
+    scheduleSave();
+  };
+
+  $('btnRecalc').onclick = () => {
+    const f = state.field, view = state.view;
+    if (!f || !view) return;
+    pushUndo();
+    f.Manual = false;
+    const changed = recomputeAll();
+    view.syncFields([f, ...changed]);
+    const input = view.inputs.get(f);
+    if (input) { input.value = f.Text; view.layout(input, f); view.visual(input, f, document.activeElement === input); }
+    updateEditBar();
+    status(`Total recalculé : ${f.Text || '(vide)'}.`);
     scheduleSave();
   };
 
@@ -886,6 +1069,7 @@ function initButtons() {
   });
 
   $('btnLots').onclick = () => run(lotsDialog);
+  $('btnEdit').onclick = () => run(editDialog);
   $('btnExport').onclick = () => run(exportDialog);
   $('btnProjects').onclick = () => run(projectsDialog);
 }
@@ -925,8 +1109,7 @@ async function projectsDialog() {
     newProjectState();
     status('Nouveau projet : touchez « Photo » ou « Importer ».');
   } else if (choice === 'rename') {
-    const name = prompt('Nom du projet', state.project.Name);
-    if (name?.trim()) { state.project.Name = name.trim(); await saveNow(); updateButtons(); status(`Projet renommé : ${state.project.Name}`); }
+    await renameProject();
   } else if (choice === 'backup') {
     const blob = new Blob([packProject(state.project, state.sources)], { type: 'application/zip' });
     await deliver([new File([blob], `${state.project.Name}${EXTENSION}`, { type: 'application/zip' })], 'Copie de sauvegarde',
@@ -959,4 +1142,5 @@ async function start() {
 }
 
 window.addEventListener('DOMContentLoaded', start);
+window.__app = { state }; // essais automatiques
 export { state };
