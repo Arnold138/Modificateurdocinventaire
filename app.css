@@ -1,0 +1,190 @@
+:root {
+  --accent: #0a66c2;
+  --accent-soft: #e8f1fb;
+  --bg: #eef0f3;
+  --surface: #ffffff;
+  --bar: rgba(250, 251, 252, .94);
+  --text: #1c1e21;
+  --muted: #65676b;
+  --line: #dfe2e6;
+  --warn: #c75c00;
+  --radius: 14px;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 16px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; overscroll-behavior: none; }
+body { display: flex; flex-direction: column; -webkit-user-select: none; user-select: none; }
+button { font: inherit; color: inherit; border: 0; background: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; cursor: pointer; }
+button:disabled { opacity: .35; cursor: default; }
+svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+/* Haut de l'écran : tout est là (rien en bas, sur iPhone, iPad et PC) */
+.top { flex: none; background: var(--bar); border-bottom: 1px solid var(--line); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); position: relative; z-index: 5;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
+.topbar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; min-height: 54px; }
+.chip { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 12px; border-radius: 22px; background: var(--surface); border: 1px solid var(--line); max-width: 34vw; flex: none; }
+.chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.pager[hidden] { display: none; }
+.pager { display: flex; align-items: center; gap: 6px; margin: 0 auto; }
+.pagelabel { min-height: 44px; min-width: 84px; padding: 0 14px; border-radius: 22px; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-variant-numeric: tabular-nums; }
+.round { width: 44px; height: 44px; border-radius: 22px; display: grid; place-items: center; background: var(--surface); border: 1px solid var(--line); flex: none; }
+.round.small { width: 38px; height: 38px; }
+.round.small svg { width: 20px; height: 20px; }
+.savestate { font-size: 13px; color: var(--muted); white-space: nowrap; min-width: 44px; text-align: right; }
+.pager[hidden] + .zoom { margin-left: auto; }
+.zoom { display: flex; gap: 4px; flex: none; }
+
+/* Outils : une rangée de gros boutons (défile au doigt si l'écran est étroit) */
+.toolbar { display: flex; gap: 4px; padding: 0 8px 6px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.toolbar::-webkit-scrollbar { display: none; }
+.toolbar button { flex: 1 0 auto; min-width: 74px; max-width: 160px; min-height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 15px; font-weight: 500; color: #33363a; padding: 0 10px; background: var(--surface); border: 1px solid var(--line); }
+.toolbar button:active { background: var(--accent-soft); }
+.toolbar button.primary { color: var(--accent); }
+.toolbar button.primary svg { stroke-width: 2.1; }
+.toolbar button[aria-pressed="true"] { background: #fff0e0; color: var(--warn); border-color: #f3c99b; }
+.toolbar button.on { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+@media (max-width: 560px) {
+  .toolbar { gap: 3px; padding: 0 6px 6px; }
+  .toolbar button { flex: 1 1 0; flex-direction: column; gap: 2px; font-size: 10.5px; min-width: 0; min-height: 50px; padding: 2px 1px; }
+  .toolbar button svg { width: 22px; height: 22px; }
+  .chip { padding: 6px 10px; max-width: 26vw; }
+  .savestate, .zoom #zoomFit { display: none; }
+  .topbar { gap: 5px; padding: 4px 6px; min-height: 50px; }
+  .round { width: 40px; height: 40px; }
+  .round.small { width: 34px; height: 34px; }
+  .pagelabel { min-width: 60px; min-height: 40px; padding: 0 8px; }
+}
+@media (max-width: 400px) { .chip span { display: none; } }
+
+/* Zone des pages */
+#viewport { flex: 1; overflow: auto; position: relative; -webkit-overflow-scrolling: touch; }
+#sizer { position: relative; }
+#zoomer { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+#pages { padding: 16px; width: max-content; }
+.page-head { display: flex; align-items: center; gap: 12px; margin: 0 0 8px 112px; font-size: 15px; color: var(--muted); }
+.page-head button { min-height: 40px; padding: 4px 14px; border-radius: 20px; background: var(--surface); border: 1px solid var(--line); font-size: 14px; display: flex; align-items: center; gap: 6px; }
+.page-head button[hidden] { display: none; }
+.page-head button.sync { background: var(--accent-soft); color: var(--accent); border-color: transparent; font-weight: 600; }
+.page-head button svg { width: 18px; height: 18px; }
+.page-row { display: flex; align-items: flex-start; }
+/* Colonne de gauche, hors de la page : type de ligne, poubelle / « + » des lots. */
+.gutter { position: relative; width: 112px; flex: none; }
+.gutter .badge { left: 34px; }
+/* Poignée pour monter / descendre une rangée */
+.grip { position: absolute; left: 2px; width: 28px; border-radius: 8px; display: grid; place-items: center; color: #9aa3ad; touch-action: none; cursor: grab; }
+.grip svg { width: 20px; height: 20px; fill: currentColor; stroke: none; }
+.grip:hover, .grip:active { background: var(--accent-soft); color: var(--accent); }
+.dragghost { position: absolute; background: rgba(10,102,194,.10); outline: 2px solid var(--accent); pointer-events: none; z-index: 4; }
+.dropline { position: absolute; height: 4px; background: var(--accent); border-radius: 2px; pointer-events: none; z-index: 4; }
+.gbtn { position: absolute; right: 6px; width: 42px; border-radius: 10px; display: grid; place-items: center; }
+.gbtn svg { width: 20px; height: 20px; }
+.gbtn.trash { background: #fdecec; color: #b42828; }
+.gbtn.add { background: transparent; color: #9aa3ad; border: 1px dashed #c5cbd2; }
+.gbtn.add:active, .gbtn.add:hover { color: var(--accent); border-color: var(--accent); }
+/* Numéros de lot écrits sur la page, dans la colonne : texte noir comme l'imprimé. */
+.layer.lots { pointer-events: none; }
+.lotfield { position: absolute; pointer-events: auto; margin: 0; border: 0; border-radius: 0; padding: 0; outline: none; color: #000; text-align: center;
+  -webkit-appearance: none; appearance: none; -webkit-user-select: text; user-select: text; caret-color: #000; }
+.lotfield:focus { outline: 2px solid var(--accent); outline-offset: 1px; z-index: 2; }
+.page { position: relative; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12), 0 8px 24px rgba(0,0,0,.06); overflow: hidden; flex: none; }
+.page .bg, .page .grid { position: absolute; left: 0; top: 0; }
+.layer { position: absolute; inset: 0; }
+.overlay, .lockpad { pointer-events: none; }
+.lockpad.active { pointer-events: auto; touch-action: none; cursor: crosshair; }
+.empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; color: var(--text); }
+.empty[hidden] { display: none; }
+.empty img { border-radius: 22px; box-shadow: 0 6px 20px rgba(0,0,0,.15); }
+.empty h1 { margin: 18px 0 6px; font-size: 24px; }
+.empty p { max-width: 460px; font-size: 18px; line-height: 1.45; margin: 6px 0; }
+.muted { color: var(--muted); }
+
+/* Champs posés sur la page */
+.field { position: absolute; margin: 0; border: 0; border-radius: 0; padding: 0; outline: none; color: #000; background: transparent;
+  -webkit-appearance: none; appearance: none; white-space: nowrap; -webkit-user-select: text; user-select: text; caret-color: #000; }
+.field:focus { outline: 2px solid var(--accent); outline-offset: 1px; z-index: 2; }
+.badge { position: absolute; width: 24px; height: 24px; border-radius: 12px; color: #fff; font: bold 14px/24px system-ui, sans-serif; text-align: center; }
+.lockzone { position: absolute; background: rgba(255,140,0,.18); border: 2px dashed var(--warn); font-size: 16px; padding: 2px 4px; }
+.lockzone.rubber { border-style: solid; }
+.loupe { position: absolute; display: none; background: #fff; border: 2px solid var(--accent); border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,.22); z-index: 3; padding: 0 0 2px; overflow: hidden; }
+.loupe canvas { display: block; }
+.loupe-label { font: 600 11px system-ui, sans-serif; color: var(--accent); padding: 2px 6px; background: var(--accent-soft); }
+
+/* « Modifier » : la case sélectionnée (barrer, couleur, type de ligne, rétablir, recalculer) */
+.editbar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--surface); border-top: 1px solid var(--line); }
+.editbar[hidden] { display: none; }
+.editinfo { flex: 1 1 120px; font-size: 14px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.edittools { display: flex; align-items: center; gap: 6px; overflow-x: auto; scrollbar-width: none; flex: 0 1 auto; }
+.edittools::-webkit-scrollbar { display: none; }
+.edittools [hidden] { display: none; }
+@media (max-width: 560px) { .editbar { flex-direction: column; align-items: stretch; gap: 4px; padding: 4px 6px; } .editinfo { flex: none; font-size: 13px; } .pill { min-height: 38px; padding: 0 10px; font-size: 14px; gap: 4px; } }
+.color-icon { font: 700 17px "Times New Roman", serif; border-bottom: 4px solid #d40000; line-height: 16px; padding: 0 2px; }
+.palette { position: absolute; z-index: 20; display: flex; gap: 6px; padding: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+.palette[hidden] { display: none; }
+.palette button { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 56px; min-height: 52px; border-radius: 10px; font-size: 13px; }
+.palette button:active, .palette button:hover { background: var(--accent-soft); }
+.palette i { width: 22px; height: 22px; border-radius: 11px; display: block; }
+.field.computed:focus { outline-color: #107c10; }
+.pill { display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 14px; border-radius: 22px; background: var(--accent-soft); color: var(--accent); font-weight: 600; white-space: nowrap; }
+.pill svg { width: 20px; height: 20px; }
+
+/* Ligne d'état + progression (fine, en haut) */
+.statusline { display: flex; align-items: center; gap: 10px; padding: 3px 12px 5px; border-top: 1px solid var(--line); min-height: 26px; }
+#status { flex: 1; font-size: 13px; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.progress { width: 160px; height: 8px; border-radius: 4px; background: var(--accent-soft); overflow: hidden; flex: none; }
+.progress[hidden] { display: none; }
+#progressBar { height: 100%; width: 0; background: var(--accent); transition: width .25s; }
+.zoom { display: flex; gap: 4px; flex: none; }
+
+/* Fenêtres : carte centrée */
+.modal { position: fixed; inset: 0; z-index: 30; display: flex; }
+.modal[hidden] { display: none; }
+.modal.sheet { background: rgba(0,0,0,.4); align-items: center; justify-content: center; padding: 12px; }
+.modal.dark { background: rgba(18,18,18,.95); flex-direction: column; padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+.card { background: var(--surface); border-radius: 18px; padding: 20px; width: 100%; max-width: 560px; max-height: 86vh; overflow: auto; box-shadow: 0 8px 30px rgba(0,0,0,.2); }
+.card h2 { margin: 0 0 12px; font-size: 20px; }
+#dialogBody { font-size: 16px; line-height: 1.5; }
+#dialogBody ul { padding-left: 20px; }
+#dialogBody label { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+#dialogBody label.switch { align-items: flex-start; }
+#dialogBody input[type=checkbox] { width: 24px; height: 24px; flex: none; accent-color: var(--accent); }
+#dialogBody input[type=number] { width: 100px; min-height: 44px; font-size: 18px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.dialog-buttons { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; padding-top: 14px; }
+.dialog-buttons button { min-height: 50px; min-width: 120px; padding: 6px 18px; border-radius: 12px; background: #f1f3f5; font-size: 16px; font-weight: 500; flex: 1 1 auto; }
+.dialog-buttons button.accent { background: var(--accent); color: #fff; }
+.dialog-buttons button.danger { color: #b42828; }
+.modal.dark .dialog-buttons { padding: 12px; }
+.modal.dark .dialog-buttons button { flex: 0 1 auto; background: #2b2d31; color: #fff; }
+.modal.dark .dialog-buttons button.accent { background: var(--accent); }
+.crop-area { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+#cropStage { position: relative; touch-action: none; }
+#cropStage canvas { display: block; }
+#cropSvg { position: absolute; left: 0; top: 0; pointer-events: none; width: auto; height: auto; }
+#cropPoly { fill: rgba(61,139,255,.15); stroke: #3d8bff; stroke-width: 3; }
+.handle { position: absolute; width: 56px; height: 56px; margin: -28px 0 0 -28px; border-radius: 50%; background: rgba(61,139,255,.6); border: 3px solid #fff; touch-action: none; }
+.list { list-style: none; padding: 0; margin: 0 0 8px; }
+.list li { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.list li .name { flex: 1; min-width: 0; }
+.list li .name small { display: block; color: var(--muted); }
+.list li.current .name { font-weight: 600; }
+.list button { min-height: 44px; padding: 4px 14px; border-radius: 10px; background: #f1f3f5; }
+
+/* Liste des pages (toucher « 3 / 10 ») */
+.pagelist li { cursor: pointer; }
+.pagelist .num { width: 36px; height: 36px; border-radius: 18px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-weight: 700; flex: none; }
+.pagelist li.current .num { background: var(--accent); color: #fff; }
+.dialog-buttons button.danger { background: #fdecec; }
+
+/* Désignation sur plusieurs lignes : même taille d'écriture, la case s'agrandit vers le bas. */
+.field.multi { resize: none; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; padding-bottom: 0; }
+
+/* Texte barré : trait fin au milieu des lettres, rouge ou noir. */
+.layer.strikes { pointer-events: none; z-index: 3; }
+.strike { position: absolute; border-radius: 0.5px; }
+.strike-icon { font: 600 16px "Times New Roman", serif; text-decoration: line-through; text-decoration-color: #d40000; text-decoration-thickness: 2px; }
+.swatch #strikeDot { width: 18px; height: 18px; border-radius: 9px; display: block; background: #d40000; }
+.swatch.black #strikeDot { background: #000; }
+
+/* Texte retapé en couleur : écrit par-dessus la case quand on n'est pas en train de la modifier. */
+.layer.colors { pointer-events: none; }
+.colortext { position: absolute; white-space: pre; overflow: hidden; box-sizing: border-box; }
+.colortext.multi { white-space: pre-wrap; overflow-wrap: anywhere; }

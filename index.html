@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <title>Retouche d'inventaire</title>
+  <meta name="description" content="Corriger un inventaire imprimé sur la page, hors ligne, puis l'exporter en JPEG ou en texte.">
+  <meta name="theme-color" content="#f7f8fa">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Inventaire">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="app.css">
+  <script src="vendor/tesseract/tesseract.min.js" defer></script>
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <!-- Icônes (traits simples) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3z"/><path d="M12 11v6M9 14h6"/></symbol>
+      <symbol id="i-hash" viewBox="0 0 24 24"><path d="M9 4 7 20M17 4l-2 16M4 9h17M3 15h17"/></symbol>
+      <symbol id="i-crop" viewBox="0 0 24 24"><path d="M6 2v16h16M2 6h16v16"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+      <symbol id="i-share" viewBox="0 0 24 24"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 12v8h14v-8"/></symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+      <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+      <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 7H5v-4"/><path d="M5 7a8 8 0 1 1-1 7"/></symbol>
+      <symbol id="i-tag" viewBox="0 0 24 24"><path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.5"/></symbol>
+      <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></symbol>
+      <symbol id="i-sync" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 1-14 5.3M4 12a8 8 0 0 1 14-5.3"/><path d="M18 3v4h-4M6 21v-4h4"/></symbol>
+      <symbol id="i-fit" viewBox="0 0 24 24"><path d="M3 12h18M7 8l-4 4 4 4M17 8l4 4-4 4"/></symbol>
+      <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></symbol>
+      <symbol id="i-grip" viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.3"/><circle cx="15" cy="6" r="1.3"/><circle cx="9" cy="12" r="1.3"/><circle cx="15" cy="12" r="1.3"/><circle cx="9" cy="18" r="1.3"/><circle cx="15" cy="18" r="1.3"/></symbol>
+    </defs>
+  </svg>
+
+  <!-- Tout est en haut : rien en bas de l'écran (iPhone, iPad, PC). -->
+  <header class="top">
+    <div class="topbar">
+      <button id="btnProjects" class="chip" aria-label="Projets"><svg><use href="#i-menu"/></svg><span id="projectName">Inventaire</span></button>
+      <button id="btnUndo" class="round undo" aria-label="Annuler la dernière action" title="Annuler la dernière action (Ctrl+Z)" disabled><svg><use href="#i-undo"/></svg></button>
+      <nav class="pager" id="pager" hidden>
+        <button id="pagePrev" class="round" aria-label="Page précédente"><svg><use href="#i-left"/></svg></button>
+        <button id="pageLabel" class="pagelabel">1 / 1</button>
+        <button id="pageNext" class="round" aria-label="Page suivante"><svg><use href="#i-right"/></svg></button>
+      </nav>
+      <span class="zoom">
+        <button id="zoomOut" class="round small" aria-label="Dézoomer" title="Dézoomer"><svg><use href="#i-minus"/></svg></button>
+        <button id="zoomFit" class="round small" aria-label="Ajuster à la largeur" title="Ajuster à la largeur"><svg><use href="#i-fit"/></svg></button>
+        <button id="zoomIn" class="round small" aria-label="Zoomer" title="Zoomer"><svg><use href="#i-plus"/></svg></button>
+      </span>
+      <span id="saveState" class="savestate"></span>
+    </div>
+
+    <nav class="toolbar" id="toolbar">
+      <button id="btnPhoto" class="primary"><svg><use href="#i-camera"/></svg><span>Photo</span></button>
+      <button id="btnImport"><svg><use href="#i-folder"/></svg><span>Importer</span></button>
+      <button id="btnLots"><svg><use href="#i-hash"/></svg><span>Lots</span></button>
+      <button id="btnEdit"><svg><use href="#i-pen"/></svg><span>Modifier</span></button>
+      <button id="btnCrop"><svg><use href="#i-crop"/></svg><span>Recadrer</span></button>
+      <button id="btnLock" aria-pressed="false"><svg><use href="#i-lock"/></svg><span>Verrouiller</span></button>
+      <button id="btnExport" class="primary"><svg><use href="#i-share"/></svg><span>Exporter</span></button>
+    </nav>
+
+    <!-- Case sélectionnée : barrer, couleur, type de ligne, rétablir, recalculer -->
+    <div id="editbar" class="editbar" hidden>
+      <span id="editInfo" class="editinfo"></span>
+      <div class="edittools">
+        <button id="btnStrike" class="pill" title="Barrer le texte sélectionné (toute la case sans sélection)"><span class="strike-icon">ab</span>Barrer</button>
+        <button id="btnStrikeColor" class="round small swatch" aria-label="Couleur du trait" title="Couleur du trait : rouge ou noir"><span id="strikeDot"></span></button>
+        <button id="btnColor" class="pill" title="Mettre le texte sélectionné en couleur (toute la case sans sélection)"><span class="color-icon" id="colorIcon">A</span>Couleur</button>
+        <button id="btnKind" class="pill"><svg><use href="#i-tag"/></svg><span id="kindLabel">Article</span></button>
+        <button id="btnRevert" class="pill"><svg><use href="#i-undo"/></svg>Rétablir</button>
+        <button id="btnRecalc" class="pill" hidden title="Remettre le total en calcul automatique"><svg><use href="#i-sync"/></svg>Recalculer</button>
+      </div>
+    </div>
+    <div id="palette" class="palette" hidden>
+      <button data-color="red" aria-label="Rouge"><i style="background:#d40000"></i>Rouge</button>
+      <button data-color="blue" aria-label="Bleu"><i style="background:#0050c8"></i>Bleu</button>
+      <button data-color="green" aria-label="Vert"><i style="background:#107c10"></i>Vert</button>
+      <button data-color="black" aria-label="Noir (couleur retirée)"><i style="background:#000"></i>Noir</button>
+    </div>
+
+    <div class="statusline">
+      <span id="status">Chargement…</span>
+      <div id="progress" class="progress" hidden><div id="progressBar"></div></div>
+    </div>
+  </header>
+
+  <main id="viewport">
+    <div id="sizer"><div id="zoomer"><div id="pages"></div></div></div>
+    <div id="emptyHint" class="empty">
+      <img src="icons/icon-192.png" alt="" width="96" height="96">
+      <h1>Retouche d'inventaire</h1>
+      <p>Touchez <b>Photo</b> pour photographier un inventaire, ou <b>Importer</b> pour ouvrir une photo, un PDF, un fichier texte ou un tableur.</p>
+      <p class="muted">Tout reste sur l'appareil, même sans Internet.</p>
+    </div>
+  </main>
+
+  <input id="filePhoto" type="file" accept="image/*" capture="environment" hidden>
+  <input id="fileImport" type="file" multiple hidden
+         accept="image/*,.jpg,.jpeg,.png,.heic,.pdf,application/pdf,.txt,text/plain,.csv,text/csv,.xlsx,.inventaire,.zip,application/zip">
+  <input id="fileFolder" type="file" multiple webkitdirectory hidden>
+
+  <!-- Recadrage -->
+  <section id="crop" class="modal dark" hidden>
+    <div class="crop-area"><div id="cropStage"><svg id="cropSvg"><polygon id="cropPoly"/></svg></div></div>
+    <div class="dialog-buttons">
+      <button id="cropRotate">Pivoter ↻</button>
+      <button id="cropAuto">Détection auto</button>
+      <button id="cropFull">Page entière</button>
+      <button id="cropCancel">Annuler</button>
+      <button id="cropApply" class="accent">Valider</button>
+    </div>
+  </section>
+
+  <!-- Fenêtre générique (feuille en bas sur téléphone) -->
+  <section id="dialog" class="modal sheet" hidden>
+    <div class="card">
+      <h2 id="dialogTitle"></h2>
+      <div id="dialogBody"></div>
+      <div class="dialog-buttons" id="dialogButtons"></div>
+    </div>
+  </section>
+</body>
+</html>
