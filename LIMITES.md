@@ -36,7 +36,10 @@
 ## Numéros de lot
 
 - **Un objet = la ligne d'article qui porte les valeurs** (ou la première ligne de la rangée) : les lignes de suite (« CD3+ +/- 14130 heures ») n'ont pas de numéro. Si une rangée imprimée contient en réalité deux objets, l'un des deux n'aura pas de numéro : corriger le type de ligne ou taper le numéro voulu.
-- **Sur le JPEG**, le numéro est écrit dans la marge gauche, à la hauteur de l'objet. Si la marge est très étroite (tableau collé au bord de la photo), le numéro est réduit et peut devenir petit.
+- **La colonne tient dans la marge gauche** : le tableau n'est jamais déplacé. Marge étroite (photo recadrée au ras de la feuille, tableau près du bord) → colonne étroite et numéros réduits. Sous 8 pixels de marge, pas de colonne tracée.
+- **Fond des cases** : recopié depuis une partie sans texte de la même rangée. Si la rangée est pleine de texte jusqu'à la colonne suivante, la case reste au fond de la marge. Le hachuré est très proche de l'original mais pas identique au pixel près.
+- **Traits** : tracés droits, de la couleur moyenne des filets du scan ; sur une photo de travers, ils suivent la même perspective que le reste (tracés sur la page redressée puis remis dans la photo).
+- **Tableaux sans filets** : pas de colonne tracée, numéros seuls.
 - Un numéro non numérique (« 12 bis ») est gardé tel quel ; la suite reprend après le dernier numéro de la colonne.
 
 ## Export texte

@@ -16,7 +16,12 @@ L'écran est le même sur la Surface et sur iPhone/iPad : le projet et les pages
 3. Si une photo est mal cadrée : **Recadrer** (4 poignées) — agit sur la page affichée.
 4. **Toucher une case** : elle s'ouvre avec ce qui a été lu, et l'original s'affiche en loupe juste au-dessus. Taper la correction. **Entrée** passe à la case suivante de la colonne. La barre qui apparaît en bas montre le texte d'origine, le **type de ligne** (Article, Titre, Total, En-tête, Non exportée) et **Rétablir**.
 5. Badges à gauche des lignes : **T** titre, **Σ** total, **E** en-tête, **×** non exportée.
-6. **Lots** : **Numéroter** donne un numéro à chaque objet (1, 2, 3… à partir du nombre choisi), à la suite d'une page à l'autre ; les titres, totaux et en-têtes n'en ont pas. Les numéros s'affichent dans une colonne à gauche de la page (la page elle-même ne bouge pas). Taper un autre numéro (80 → 81) recale tous les suivants (82, 83…). **Enlever les numéros** les retire tous. Ils sortent dans le .txt (1re colonne « Lot ») et sur le JPEG (dans la marge gauche, à la hauteur de l'objet).
+6. **Lots** : **Numéroter** donne un numéro à chaque objet (1, 2, 3… à partir du nombre choisi), à la suite d'une page à l'autre ; les titres, totaux et en-têtes n'en ont pas.
+   - Les numéros sont écrits **sur la page**, dans une **colonne ajoutée à gauche du tableau** et tracée comme lui : trait à gauche, filets prolongés, même fond que chaque rangée (gris hachuré des en-têtes et totaux). Rien d'autre ne bouge. Option « Tracer la colonne dans le tableau » dans le menu Lots (sinon, numéros seuls).
+   - Toucher un numéro pour le changer (80 → 81) : les suivants se recalent pendant la frappe (82, 83…).
+   - **Poubelle** à gauche d'une ligne : ce n'est pas un objet, son numéro disparaît et les suivants se décalent. **+** : ajouter un numéro sur une ligne oubliée.
+   - **Synchroniser les lots** (au-dessus de la page, ou menu Lots) : recalcule tout ; les numéros tapés à la main sont gardés. **Enlever les numéros** les retire tous.
+   - Ils sortent dans le .txt (1re colonne « Lot ») et sur le JPEG (la colonne tracée, identique à l'écran).
 7. **Verrouiller** : tracer un rectangle au doigt sur une signature ou un tampon (le texte hors tableau est déjà verrouillé). Toucher une zone orange la retire.
 8. **Exporter** → **images JPEG** (toutes, ou seulement la page affichée) : pour chaque photo ou page de PDF, « nom - modifié.jpg » identique à l'original, sauf les cases modifiées et les numéros de lot. → **Fichier texte (.txt)** : le texte en tableau (lignes, tabulations), construit à partir de ce que la reconnaissance a lu : vérifier les lignes non corrigées.
 9. Tout est enregistré en continu. Sur la Surface, menu du projet (en haut à gauche) → **Enregistrer sous…** une fois pour choisir le fichier projet.
@@ -81,11 +86,11 @@ Add-WindowsCapability -Online -Name "Language.OCR~~~fr-FR~0.0.1.0"
 dotnet run --project tests/RetoucheInventaire.Core.Tests -c Release
 ```
 
-27 tests sur tes 3 pages, dont les cas demandés :
+29 tests sur tes 3 pages, dont les cas demandés :
 - le .txt est en UTF-8 avec BOM, fins de ligne Windows, tabulations, sans caractère parasite, et se relit comme un tableau ;
 - modifier une ligne de titre (« SALLE LAVAGE : » → « SALLE DE BAIN : »), un chiffre (10 → 30) et un texte ne change la position ni la taille d'aucun champ ;
 - titres seuls, valeurs rattachées à l'article, une ligne par ligne imprimée, totaux, nombres sans espace, numéro de page non exporté ;
-- numéros de lot : un par objet, continus d'une page à l'autre, recalés après une saisie, présents dans le .txt ;
+- numéros de lot : un par objet, continus d'une page à l'autre, recalés après une saisie, poubelle et « + », présents dans le .txt ; colonne tracée uniquement dans la marge, identique pixel pour pixel entre Windows et iPhone/iPad ;
 - redressement d'une photo simulée prise de travers, sauvegarde/reprise, imports CSV/XLSX, verrouillage, tableau sans filets.
 
 Hors Windows, l'OCR est simulé avec Tesseract : les mots reconnus sont enregistrés dans `tests/fixtures/*.words.tsv` (régénérables avec `tools/generer_fixtures.py`). Les erreurs de lecture visibles dans `docs/export-exemple.txt` (« souffiants », « S 500 »…) viennent de cet OCR de test, pas de la structure.
