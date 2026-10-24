@@ -25,7 +25,9 @@
 ## Rendu à l'écran
 
 - Le texte modifié est écrit en **Times New Roman**, taille calée sur la largeur du texte d'origine. Si le document utilise une autre police, la différence se voit.
-- Le texte modifié est en noir, comme l'original : pour retrouver une correction, toucher la case (la barre du bas affiche le texte d'origine) ou ouvrir la liste des pages (« 3 / 10 ») qui indique le nombre de cases modifiées par page.
+- Le texte modifié est en noir, comme l'original : pour retrouver une correction, toucher la case (la barre du haut affiche le texte d'origine) ou ouvrir la liste des pages (« 3 / 10 ») qui indique le nombre de cases modifiées par page.
+- **Gras** : le texte retapé est en gras sur les lignes de total et d'en-tête (c'est le cas sur tes documents), normal ailleurs. Un document qui met en gras d'autres lignes ne sera pas reproduit à l'identique.
+- **Fond gris tramé** (totaux, en-têtes) : sous le texte retapé, un morceau propre de la même rangée est répété ; très proche de l'original, pas identique au pixel près.
 - **Une page à la fois** : passer d'une page à l'autre recalcule l'image redressée (environ une seconde par page) ; seules les dernières pages vues restent en mémoire, ce qui permet de longs inventaires sur iPhone.
 
 ## Export JPEG
@@ -37,11 +39,15 @@
 
 - **Un objet = la ligne d'article qui porte les valeurs** (ou la première ligne de la rangée) : les lignes de suite (« CD3+ +/- 14130 heures ») n'ont pas de numéro. Si une rangée imprimée contient en réalité deux objets, l'un des deux n'aura pas de numéro : corriger le type de ligne ou taper le numéro voulu.
 - **La colonne tient dans la marge gauche** : le tableau n'est jamais déplacé. Marge étroite (photo recadrée au ras de la feuille, tableau près du bord) → colonne étroite et numéros réduits. Sous 8 pixels de marge, pas de colonne tracée.
-- **Fond des cases** : recopié depuis une partie sans texte de la même rangée. Si la rangée est pleine de texte jusqu'à la colonne suivante, la case reste au fond de la marge. Le hachuré est très proche de l'original mais pas identique au pixel près.
+- **Où est la colonne** : de l'en-tête au dernier objet de chaque tableau ; rien sur les totaux, le récapitulatif (« I - … », « II - … », TOTAL GENERAL) ni sous le dernier objet. Une ligne de récapitulatif est reconnue à son numéro romain suivi d'un tiret.
+- **Fond des cases** : recopié depuis le morceau le plus clair de la même rangée (jamais du texte, même si la lecture ne l'a pas trouvé). Le hachuré est très proche de l'original mais pas identique au pixel près.
 - **Traits** : tracés droits, de la couleur moyenne des filets du scan ; sur une photo de travers, ils suivent la même perspective que le reste (tracés sur la page redressée puis remis dans la photo).
 - **Tableaux sans filets** : pas de colonne tracée, numéros seuls.
-- Un numéro non numérique (« 12 bis ») est gardé tel quel ; la suite reprend après le dernier numéro de la colonne.
-- **Lot 0** (absent, barré) : la **rangée entière** (entre deux filets) part à la fin de la dernière page, sur le JPEG, et à la fin du .txt. Si une rangée contient aussi un objet numéroté normalement, elle reste en place (seul le .txt déplace la ligne au lot 0). Les colonnes de la rangée déplacée gardent leurs traits d'origine : si le dernier tableau n'a pas exactement les mêmes colonnes, les traits verticaux peuvent être décalés de quelques pixels. À l'écran, la rangée reste à sa place (voilée) pour pouvoir la corriger.
+- **Rien ne se renumérote tout seul** : un numéro tapé, une case retirée ou ajoutée, une rangée déplacée ne changent aucun autre numéro. « Synchroniser automatiquement » (ou « Renuméroter tout ») le fait d'un coup, dans l'ordre affiché. Un numéro non numérique (« 12 bis ») est gardé tel quel.
+- **Lot 0** : l'objet part **juste après la rangée du dernier lot numéroté** (pas forcément sur la dernière page : avant un récapitulatif ou des totaux qui suivent). Les rangées arrivées sont refaites aux colonnes du tableau d'arrivée (fond et filets de ce tableau, contenu de chaque case recopié et recalé sur sa colonne) : si les deux tableaux n'ont pas le même nombre de colonnes, tout est simplement décalé sur le bord gauche. Un objet sous un titre dans la même rangée part seul, avec les valeurs du titre ; le titre reste, sans valeurs. Les numéros des autres lots ne changent pas (« Synchroniser » pour renuméroter). Une page qui perd ou reçoit des rangées est exportée redressée (page droite), comme une page agrandie.
+- **Afficher la page où arrivent les lots 0** demande de lire un morceau des pages d'où ils viennent : la première fois, un peu plus lent (gardé ensuite en mémoire).
+- **Déplacer une rangée (⋮⋮)** : seulement dans son tableau (pas d'une page à l'autre). L'en-tête ne se déplace pas.
+- **Tableau sans filets** : les lots 0 n'y bougent pas (seul le .txt les place après le dernier lot).
 - **Retour en arrière** : 30 actions, pendant la session (pas après avoir fermé l'app). Le texte tapé dans une case compte pour une seule action jusqu'à ce qu'on change de case.
 - **Orthographe** : correcteur de l'appareil (iPhone/iPad, Windows), en français si le clavier est en français. Il n'est actif que dans la désignation.
 
@@ -51,6 +57,20 @@
 - La rangée s'agrandit en insérant une bande sous la ligne modifiée : les filets verticaux du tableau y sont prolongés, le reste est mis à la couleur du papier. Une page agrandie ne se superpose plus à la photo d'origine : son JPEG est la page **redressée** (droite, recadrée), plus longue de la hauteur ajoutée.
 - L'écran (champ de saisie) et l'export coupent les lignes avec la même règle ; un mot peut exceptionnellement passer à la ligne à un endroit légèrement différent.
 - Recadrer une page relit le texte : les agrandissements de cette page sont perdus.
+
+## Totaux
+
+- **Calcul** : total = montant imprimé + écarts de sa rubrique (valeurs changées, lots 0 retirés). Une erreur de lecture sur une ligne qu'on ne touche pas ne fausse donc pas le total. Mais si l'on corrige une valeur que la lecture avait mal lue (« S 500 » au lieu de « 5 500 »), l'écart compté est celui entre les deux lectures : « S » est lu comme 5, « O » comme 0, « l » comme 1 pour limiter ce cas.
+- **Rubrique d'un total** : de l'en-tête (ou du total précédent) jusqu'à lui, même sur plusieurs pages. « mémoire » compte pour 0.
+- **Récapitulatif** (« II - STOCK  44 550 ») : relié à sa rubrique par le nom (« STOCK »), pas par le numéro romain (ils diffèrent parfois entre le récapitulatif et les pages). Si le nom a été mal lu, la ligne ne suit pas : la corriger, ou taper le montant.
+- Un total tapé à la main ne bouge plus (le montant calculé s'affiche en haut) ; « Recalculer » le remet en automatique. « Rétablir » sur un total remet le montant imprimé et le garde.
+- Le montant écrit utilise l'espace des milliers (« 198 310 ») ; le .txt l'écrit sans espace.
+
+## Couleur du texte
+
+- Sur l'écriture d'origine, l'encre du morceau choisi prend la couleur (le papier reste tel quel) : la position des lettres est estimée comme pour le trait (à une demi-lettre près).
+- Pendant qu'on tape dans une case, son texte s'affiche en noir ; les couleurs réapparaissent en quittant la case.
+- Le .txt ne garde pas les couleurs.
 
 ## Texte barré
 

@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.Graphics.Canvas;
 using Microsoft.Graphics.Canvas.Text;
 using Microsoft.UI;
+using RetoucheInventaire.Core;
 using RetoucheInventaire.Core.Export;
 using RetoucheInventaire.Core.Imaging;
 using RetoucheInventaire.Core.Model;

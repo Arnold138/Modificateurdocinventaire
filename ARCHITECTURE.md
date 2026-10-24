@@ -23,19 +23,19 @@ src/RetoucheInventaire.Core    Logique métier, sans Windows : testable partout
   Import/     TXT, CSV, XLSX → page tableau
   Storage/    fichier projet .inventaire
 src/RetoucheInventaire.App     WinUI 3 : l'écran, OCR Windows, PDF Windows, décodage d'images
-tests/                         27 tests sur les pages fournies
+tests/                         42 tests sur les pages fournies (+ 29 côté iPad, dont la comparaison avec Windows)
 ```
 
 ## L'écran (unique)
 
-- **Barre d'outils** (boutons de 64 px) : Importer · Recadrer · Verrouiller · Type de ligne · Rétablir · Exporter .txt · Enregistrer · Ouvrir · Nouveau.
-- **Pages** l'une sous l'autre, zoom au pincement. Chaque case de chaque ligne est un champ posé à sa position exacte.
-- **Barre d'état** : ce qui se passe, la ligne sélectionnée et son type, le texte d'origine d'une case modifiée.
+Tout est en haut, rien en bas (Surface, iPad, iPhone) :
+
+- **Barre du haut** : projet (nouveau, ouvrir, enregistrer, renommer) · ↶ · ◀ 3 / 10 ▶ · zoom − ⟷ + · enregistrement.
+- **Outils** (gros boutons) : Photo · Importer · Lots · Modifier (renommer, pages, synchroniser, retirer la page) · Recadrer · Verrouiller · Exporter.
+- **Case touchée** : texte d'origine ou montant calculé · Barrer · couleur du trait · Couleur du texte · Type de ligne · Rétablir · Recalculer (totaux).
+- **Ligne d'état** fine et progression.
+- **La page**, une seule à la fois, zoom au pincement ; à sa gauche, hors de la page : poignées ⋮⋮, badges (**T**, **Σ**, **E**, **×**), poubelle / « + » des lots.
 - **Recadrage** (par-dessus l'écran, à la demande) : 4 poignées, Pivoter, Détection auto, Page entière, Valider.
-
-Une seule page affichée à la fois (navigation ◀ 3 / 10 ▶, liste des pages), avec à sa gauche la colonne des numéros de lot, hors de la page.
-
-Repères sur la page : badge à gauche de la ligne (**T** titre, **Σ** total, **E** en-tête, **×** non exportée), zones verrouillées en orange.
 
 ## Modèle de données
 
@@ -43,10 +43,12 @@ Repères sur la page : badge à gauche de la ligne (**T** titre, **Σ** total, *
 InventoryProject
 └─ Page                 source (image ou données), recadrage (4 coins), inclinaison, quarts de tour, zones verrouillées
    ├─ Table             bords de colonnes et de rangées (pixels de page)
+   │  │                 RowOrder : ordre d'affichage des rangées (rangées déplacées à la main)
    │  └─ Row            entre deux filets horizontaux
    │     └─ PrintedLine type : Article | Titre | Total | EnTete | Ignoree
    │        └─ Field    une case de la ligne : Text, OriginalText, Ink (encre d'origine),
-   │                    Box (zone d'édition, jamais hors de la case), alignement, retrait, taille de police, Locked
+   │                    Box (zone d'édition, jamais hors de la case), alignement, retrait, taille de police, Locked,
+   │                    Strikes (traits), Colors (couleurs), Manual (total tapé à la main)
    └─ LooseLines        texte hors tableau (n° de page, signature, tampon) : verrouillé, non exporté
 ```
 
@@ -89,9 +91,29 @@ Application web installable (« Sur l'écran d'accueil »), sans étape de compi
 
 ## Numéros de lot (`Model/Lots.cs`, `web/core/lots.js`)
 
-- Objet = première ligne d'article de chaque rangée (celle qui porte des valeurs si plusieurs). Titres, totaux, en-têtes, lignes ignorées : pas de numéro.
-- `Lot` et `LotManual` sont enregistrés sur la ligne. Un numéro tapé est « manuel » ; `Resync` garde les manuels et numérote les autres à la suite, toutes pages confondues. Appelé après chaque saisie de lot, changement de type, ajout/retrait/recadrage de page, et quand une saisie fait apparaître ou disparaître un objet.
-- Lot 0 → objet absent/barré : ne consomme pas de numéro ; le .txt le regroupe (avec sa suite) en fin d'inventaire.
-- Poubelle → `NoLot` (la ligne n'est plus un objet) ; « + » → `ForceLot` (objet en plus, même sur une ligne de suite). `Resync` (bouton « Synchroniser ») garde les numéros tapés à la main.
+- Objet = première ligne d'article de chaque rangée (celle qui porte des valeurs si plusieurs). Titres, totaux, en-têtes, récapitulatif (« II - STOCK »), lignes ignorées : pas de numéro. Ordre = ordre d'affichage (`RowOrder`).
+- `Lot`, `LotManual`, `LotSlot` (case affichée) sur la ligne. `CreateEmpty` (bouton Lots) : une case vide par objet. `Set` ne change que la case tapée ; `Resync` ne fait que placer les cases. `FillAutomatically` (« Synchroniser ») garde les numéros tapés et numérote les autres à la suite ; `Number` renumérote tout (sauf les 0).
+- Lot 0 → objet absent : ne consomme pas de numéro ; voir « Mise en page » ci-dessous ; le .txt le place après la dernière ligne d'objet numéroté.
+- Poubelle → `NoLot` (la ligne n'est plus un objet) ; « + » → `ForceLot` (objet en plus, même sur une ligne de suite).
 - Export .txt : 1re colonne « Lot » sur toutes les lignes quand des lots existent (« Lot » sur l'en-tête, vide sur titres/totaux).
-- Colonne tracée (`Export/LotColumn.cs`, `web/core/lotcolumn.js`) : pour chaque tableau à grille qui porte des lots, une colonne de largeur `ColumnWidth` (3 chiffres dans la taille du texte, limitée par la marge) collée à son filet gauche. Épaisseur et couleur des filets mesurées sur l'image (cœur des traits), fond de chaque case recopié depuis une partie sans texte de sa rangée. Calcul en entiers : même image à l'octet près sur les deux versions (vérifié à chaque compilation). Affichée à l'écran et à l'export ; numéros écrits par-dessus, centrés, en Times noir. La zone de la colonne est recopiée dans la photo d'origine comme une case modifiée. Réglage `LotFrame` du projet.
+- Colonne tracée (`Export/LotColumn.cs`, `web/core/lotcolumn.js`) : pour chaque tableau à grille qui porte des lots, une colonne de largeur `ColumnWidth` (3 chiffres dans la taille du texte, limitée par la marge) collée à son filet gauche, sur les rangées `FramedRows` (de l'en-tête au dernier objet). Chaque rangée porte ses traits (elle peut être déplacée avec eux). Épaisseur et couleur des filets mesurées sur l'image (cœur des traits), fond de chaque case recopié depuis le morceau le plus clair de sa rangée. Calcul en entiers : même image à l'octet près sur les deux versions (vérifié à chaque compilation). Affichée à l'écran et à l'export ; numéros écrits par-dessus, centrés, en Times noir. La zone de la colonne est recopiée dans la photo d'origine comme une case modifiée. Réglage `LotFrame` du projet.
+
+## Mise en page : lots 0 et rangées déplacées (`Export/Arrangement.cs`, `web/core/arrange.js`)
+
+- Rien n'est modifié dans le projet : chaque page affichée est recomposée (`Build` → plan de morceaux). Une page = suite de morceaux recopiés de l'image d'origine (`[Y0, Y1[` → `Dst`) et de rangées refaites.
+- Rangées : bandes `[R(RowYs[r]) − 2, R(RowYs[r+1]) − 2[` (filet du haut compris) recopiées dans l'ordre `RowOrder`.
+- Lot 0 : l'objet, ses lignes de suite et, s'il les reprend (comme dans le .txt), les valeurs de son titre. Rangée entière si elle ne contient que lui ; sinon bande entre les interlignes. Retiré de sa page, recollé après la rangée du dernier objet numéroté : filet du haut et fond (interligne le plus propre, filets verticaux prolongés) pris dans cette rangée, contenu de chaque case recopié et recalé sur sa colonne (décalage selon l'alignement), case du lot comprise ; valeurs du titre posées à la hauteur de l'objet et effacées (papier) sous le titre.
+- `ViewOf` : où afficher chaque case (décalage par case, découpe à sa colonne), cases de lot, rangées à l'écran (poignées). L'écran pose les champs à ces places ; l'export dessine les corrections sur chaque page d'origine puis recompose.
+- Calcul en entiers : pages recomposées identiques à l'octet près sur Windows et iPhone/iPad (vérifié à chaque compilation, avec le .txt et les totaux).
+
+## Totaux (`Model/Totals.cs`, `web/core/totals.js`)
+
+- Case calculée : montants d'une ligne Total ou d'une ligne de récapitulatif. `Field.Manual` : tapée à la main, n'est plus recalculée.
+- Total = montant imprimé + Σ (valeur actuelle − valeur lue) des lignes de sa rubrique (de l'en-tête ou du total précédent jusqu'à lui, toutes pages) ; lots 0 (et valeurs de titre qu'ils emportent) retirés. Montant imprimé illisible : somme des valeurs.
+- Récapitulatif : relié à la rubrique de même nom (sans numéro romain ni accents) ; suit l'écart de son total (ou de ses lignes). TOTAL GENERAL : total des lignes de récapitulatif au-dessus de lui.
+- « 15 000 » ↔ 1500000 centimes ; « mémoire » = 0 ; « S/O/l » lus comme 5/0/1 dans un montant.
+
+## Couleur du texte (`Model/Strikes.cs`, `web/core/strikes.js`)
+
+- `Field.Colors` : morceaux [Start, Start+Length[ en rouge, bleu ou vert ; suivent la saisie comme les traits.
+- Texte non retouché : l'encre du morceau prend la couleur sur l'image (chaque canal garde le plus clair de l'encre et de la couleur). Texte retapé : écrit morceau par morceau en couleur (écran : texte par-dessus le champ quand on n'y tape pas ; export : Win2D / canvas).
