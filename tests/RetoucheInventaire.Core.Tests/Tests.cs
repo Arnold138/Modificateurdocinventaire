@@ -414,6 +414,18 @@ public static class Tests
         Equal(0, Lots.ObjectLines(p).Count(), "aucun objet");
     }
 
+    public static void T_Projet_ancien_rangee_de_total_vide_modifiable()
+    {
+        var page = Fixtures.Analyze("page5");
+        page.Tables[0].Rows[5].Lines.Clear();
+        PageAnalyzer.Upgrade(page);
+        var lines = page.Tables[0].Rows[5].Lines;
+        Equal(1, lines.Count, "une ligne ajoutée");
+        Check(lines[0].Cells.Count == 3 && lines[0].Cells.All(c => c.Box.Width > 10 && c.Id.Length > 0), "cases modifiables");
+        PageAnalyzer.Upgrade(page);
+        Equal(1, page.Tables[0].Rows[5].Lines.Count, "pas en double");
+    }
+
     public static void T_Rangee_sans_texte_lu_cases_modifiables()
     {
         var (image, words) = Fixtures.Load("page5");

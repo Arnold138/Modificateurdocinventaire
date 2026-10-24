@@ -5,7 +5,7 @@ import { Quad } from './core/geometry.js';
 import { normalize, render, rotate90 } from './core/imaging.js';
 import { detectGrids } from './core/rules.js';
 import { prepare, mapBack, emptyFieldsWithInk, prepareCell, applyCellWords } from './core/ocrprep.js';
-import { newPage, newProject, analyze, reclassify, allFields, isModified, cycleKind, kindLabel, findLine, firstText } from './core/model.js';
+import { newPage, newProject, analyze, reclassify, allFields, isModified, cycleKind, kindLabel, findLine, firstText, upgradePage } from './core/model.js';
 import { buildTxt, txtBlob, composeIntoSource, outputName } from './core/exports.js';
 import { decodeText, parseDelimited, readXlsx, buildDataPage } from './core/importers.js';
 import { packProject, unpackProject, EXTENSION } from './core/store.js';
@@ -673,7 +673,8 @@ async function loadProjectById(id) {
   state.projectId = id;
   state.sources = rec.sources;
   state.project.Name = repairName(state.project.Name);
-  for (const p of pages()) p.SourceName = repairName(p.SourceName);
+  for (const p of pages()) { p.SourceName = repairName(p.SourceName); upgradePage(p); }
+  resyncLots(state.project);
   await db.setMeta('last', id);
   await showPage(0);
   return true;

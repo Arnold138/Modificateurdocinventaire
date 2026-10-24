@@ -1060,7 +1060,9 @@ public sealed partial class MainWindow : Window
         ClearAll();
         _project = project;
         _project.Name = Names.Repair(_project.Name);
-        foreach (var p in _project.Pages) p.SourceName = Names.Repair(p.SourceName);
+        foreach (var p in _project.Pages) { p.SourceName = Names.Repair(p.SourceName); RetoucheInventaire.Core.Analysis.PageAnalyzer.Upgrade(p); }
+        Lots.Resync(_project);
+        _crops.Clear();
         foreach (var (k, v) in sources) _sources[k] = v;
         _projectPath = rememberPath ? path : null;
         await ShowPageAsync(0);

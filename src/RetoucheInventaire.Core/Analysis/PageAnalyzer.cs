@@ -53,6 +53,47 @@ public static class PageAnalyzer
         foreach (var t in page.Tables) LineClassifier.Classify(t);
     }
 
+    /// <summary>
+    /// Projet enregistré avec une version précédente : rangées sans texte lu (total sur fond gris) → cases vides modifiables ;
+    /// rangée de libellés sans désignation (« exploitation réalisation » d'un récapitulatif) → en-tête. Rien d'autre ne change.
+    /// Même règle que upgradePage (version iPhone/iPad).
+    /// </summary>
+    public static void Upgrade(Page page)
+    {
+        int n = 0;
+        foreach (var t in page.Tables)
+        {
+            if (!t.HasGrid || t.ColumnXs.Count < 2 || t.RowYs.Count < 2) continue;
+            var sizes = t.Rows.SelectMany(r => r.Lines).Select(l => l.Cells.FirstOrDefault()?.FontSize ?? 0).Where(v => v > 0).OrderBy(v => v).ToList();
+            double em = sizes.Count > 0 ? sizes[sizes.Count / 2] : 12;
+            for (int r = 0; r < t.Rows.Count && r + 1 < t.RowYs.Count; r++)
+            {
+                var row = t.Rows[r];
+                if (row.Lines.Count > 0) continue;
+                double rowTop = t.RowYs[r], rowBottom = t.RowYs[r + 1];
+                double top = rowTop + Pad, bottom = Math.Max(rowTop + Pad + 1, rowBottom - Pad);
+                var line = new PrintedLine();
+                for (int c = 0; c + 1 < t.ColumnXs.Count; c++)
+                {
+                    var box = CellBox(t.ColumnXs[c], t.ColumnXs[c + 1], rowTop, rowBottom, top, bottom, RectD.Empty);
+                    line.Cells.Add(new Field
+                    {
+                        Id = $"{page.Id}-v{n++}", Column = c, Box = box, Align = c == 0 ? TextAlign.Left : TextAlign.Right, Indent = 4,
+                        FontSize = Math.Min(em, Math.Max(6, box.Height / 1.05)),
+                    });
+                }
+                row.Lines.Add(line);
+            }
+            for (int r = 1; r < t.Rows.Count; r++)
+            {
+                var lines = t.Rows[r].Lines;
+                if (!LineClassifier.IsHeaderRow(lines)) continue;
+                if (!lines.All(l => string.IsNullOrWhiteSpace(l.Cells.FirstOrDefault()?.Text) || LineClassifier.IsRomanHeading(l.Cells[0].Text))) continue;
+                foreach (var l in lines.Where(l => !l.KindChosenByUser && !l.OutsideTable)) l.Kind = LineKind.EnTete;
+            }
+        }
+    }
+
     public static void AssignIds(Page page)
     {
         int n = 0;

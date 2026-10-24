@@ -59,6 +59,35 @@ export function analyze(page, image, rawWords, grids = null) {
 
 export function reclassify(page) { for (const t of page.Tables) classify(t); }
 
+/**
+ * Projet enregistré avec une version précédente : rangées sans texte lu (total sur fond gris) → cases vides modifiables ;
+ * rangée de libellés sans désignation (« exploitation réalisation » d'un récapitulatif) → en-tête. Rien d'autre ne change.
+ */
+export function upgradePage(page) {
+  let n = 0;
+  for (const t of page.Tables) {
+    if (t.HasGrid === false || !(t.ColumnXs?.length >= 2) || !(t.RowYs?.length >= 2)) continue;
+    const sizes = t.Rows.flatMap((r) => r.Lines).map((l) => l.Cells[0]?.FontSize ?? 0).filter((v) => v > 0).sort((a, b) => a - b);
+    const em = sizes.length > 0 ? sizes[Math.trunc(sizes.length / 2)] : 12;
+    t.Rows.forEach((row, r) => {
+      if (row.Lines.length > 0 || r + 1 >= t.RowYs.length) return;
+      const rowTop = t.RowYs[r], rowBottom = t.RowYs[r + 1];
+      const top = rowTop + PAD, bottom = Math.max(rowTop + PAD + 1, rowBottom - PAD);
+      const line = { Kind: 'Article', KindChosenByUser: false, OutsideTable: false, Cells: [], Lot: '', LotManual: false, NoLot: false, ForceLot: false, Extra: 0, ExtraAt: 0 };
+      for (let c = 0; c + 1 < t.ColumnXs.length; c++) {
+        const box = cellBox(t.ColumnXs[c], t.ColumnXs[c + 1], rowTop, rowBottom, top, bottom, Rect.empty());
+        line.Cells.push(newField({ Id: `${page.Id}-v${n++}`, Column: c, Box: box, Align: c === 0 ? 'Left' : 'Right', Indent: 4, FontSize: Math.min(em, Math.max(6, box.Height / 1.05)) }));
+      }
+      row.Lines.push(line);
+    });
+    t.Rows.forEach((row, r) => {
+      if (r === 0 || !isHeaderRow(row.Lines)) return;
+      if (!row.Lines.every((l) => blank(l.Cells[0]?.Text ?? '') || isRomanHeading(l.Cells[0].Text))) return;
+      for (const l of row.Lines) if (!l.KindChosenByUser && !l.OutsideTable) l.Kind = 'EnTete';
+    });
+  }
+}
+
 export function assignIds(page) {
   let n = 0;
   for (const f of allFields(page)) f.Id = `${page.Id}-${n++}`;

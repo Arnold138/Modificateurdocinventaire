@@ -51,7 +51,7 @@ public static partial class LineClassifier
     }
 
     /// <summary>Première rangée dont les colonnes de valeurs contiennent des libellés (« exploitation »).</summary>
-    private static bool IsHeaderRow(List<PrintedLine> lines)
+    public static bool IsHeaderRow(List<PrintedLine> lines)
     {
         var values = lines.SelectMany(l => l.Cells.Skip(1)).Select(c => c.Text.Trim()).Where(t => t.Length > 0).ToList();
         return values.Count > 0

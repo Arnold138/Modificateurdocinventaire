@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { normalize, raster } from '../core/imaging.js';
 import { detectGrids } from '../core/rules.js';
 import { emptyFieldsWithInk, prepareCell, applyCellWords } from '../core/ocrprep.js';
-import { newPage, newProject, analyze, reclassify, allFields, cycleKind, addLockZone } from '../core/model.js';
+import { newPage, newProject, analyze, reclassify, allFields, cycleKind, addLockZone, upgradePage } from '../core/model.js';
 import { buildTxt, composeIntoSource, paperColor } from '../core/exports.js';
 import { parseDelimited, buildDataPage } from '../core/importers.js';
 import { packProject, unpackProject } from '../core/store.js';
@@ -303,6 +303,17 @@ test('Texte barré : suit la saisie, se retire, .txt inchangé', () => {
   eq('+ 1 papier', f.Text.substr(f.Strikes[0].Start, f.Strikes[0].Length), 'raccourci');
   toggleStrike(f, f.Strikes[0].Start, f.Strikes[0].Start + f.Strikes[0].Length, 'red');
   eq(0, f.Strikes.length, 'retiré');
+});
+
+test('Projet d\'une version précédente : rangée de total vide rendue modifiable', () => {
+  const page = analyzePage('page5');
+  page.Tables[0].Rows[5].Lines = [];
+  upgradePage(page);
+  const l = page.Tables[0].Rows[5].Lines;
+  eq(1, l.length, 'une ligne ajoutée');
+  check(l[0].Cells.length === 3 && l[0].Cells.every((c) => c.Box.Width > 10 && c.Id), 'cases modifiables');
+  upgradePage(page);
+  eq(1, page.Tables[0].Rows[5].Lines.length, 'pas en double');
 });
 
 // ---------- Mise en page : lots 0 en fin, rangées déplacées ----------
