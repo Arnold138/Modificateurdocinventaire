@@ -9,10 +9,11 @@ import { newPage, newProject, analyze, reclassify, allFields, isModified, cycleK
 import { buildTxt, txtBlob, composeIntoSource, outputName } from './core/exports.js';
 import { decodeText, parseDelimited, readXlsx, buildDataPage } from './core/importers.js';
 import { packProject, unpackProject, EXTENSION } from './core/store.js';
-import { objectLines, lotsActive, numberLots, clearLots, setLot, resyncLots, removeLot, addLot, lotLabels, repairName, naturalCompare } from './core/lots.js';
+import { objectLines, lotsActive, numberLots, clearLots, setLot, resyncLots, removeLot, addLot, lotLabels, repairName, naturalCompare, createEmptyLots, fillLotsAutomatically } from './core/lots.js';
 import { unzipSync } from './vendor/fflate.js';
 import { stretch, setExtra, baseHeight, totalExtra } from './core/layout.js';
 import { toggleStrike, isStruck, RED, BLACK } from './core/strikes.js';
+import { zeroRows, cutZeroRows, appendStrips } from './core/zerorows.js';
 import { drawLotColumns, framedTables, frameSignature, lotFrameEnabled } from './core/lotcolumn.js';
 import { decodeImage, pdfPages, isImageName, mimeOf } from './services/decode.js';
 import { recognize, warmUp } from './services/ocr.js';
@@ -38,6 +39,8 @@ const state = {
   view: null,           // PageView de la page affichée
   field: null,          // case sélectionnée
   busy: false,
+  undo: [],             // états précédents du projet (bouton ↶)
+  editSession: null,    // case en cours de frappe (un seul retour en arrière pour toute la saisie)
   lock: false,
   zoom: 1,
 };
@@ -72,6 +75,7 @@ function updateButtons() {
   $('btnCrop').disabled = b || page?.Source !== 'Image';
   $('btnLock').disabled = b || !page;
   $('btnLots').disabled = b || n === 0;
+  $('btnUndo').disabled = b || state.undo.length === 0;
   $('btnExport').disabled = b || n === 0;
   $('pager').hidden = n === 0;
   $('pageLabel').textContent = n ? `${state.index + 1} / ${n}` : '';
@@ -177,6 +181,41 @@ function initZoom() {
   window.addEventListener('resize', () => applyZoom(state.zoom));
 }
 
+// ---------- Retour en arrière ----------
+
+/** Mémorise l'état du projet avant une action (30 derniers états). */
+function pushUndo() {
+  state.undo.push(JSON.stringify(state.project));
+  if (state.undo.length > 30) state.undo.shift();
+  updateButtons();
+}
+
+/** Clé de l'image d'une page : si elle n'a pas changé, l'image en mémoire reste valable. */
+const imageKey = (p) => JSON.stringify([p.Crop, p.Skew, p.QuarterTurns, p.Width, baseHeight(p), p.SourceEntry]);
+
+/** Bouton ↶ : revient à l'état d'avant la dernière action. */
+async function undo() {
+  const snap = state.undo.pop();
+  if (!snap) return;
+  const old = new Map(pages().map((p) => [p.Id, p]));
+  const flats = new Map([...state.flats].map(([p, f]) => [p.Id, { key: imageKey(p), f }]));
+  const oriented = new Map([...state.oriented].map(([p, f]) => [p.Id, { key: JSON.stringify([p.QuarterTurns, p.SourceEntry]), f }]));
+  state.project = JSON.parse(snap);
+  state.flats.clear(); state.oriented.clear();
+  for (const p of pages()) {
+    const f = flats.get(p.Id);
+    if (f && f.key === imageKey(p)) state.flats.set(p, f.f);
+    const o = oriented.get(p.Id);
+    if (o && o.key === JSON.stringify([p.QuarterTurns, p.SourceEntry])) state.oriented.set(p, o.f);
+  }
+  const currentId = old.size ? [...old.values()][state.index]?.Id : null;
+  const index = Math.max(0, pages().findIndex((p) => p.Id === currentId));
+  state.editSession = null;
+  await showPage(Math.min(index, pages().length - 1), { fit: false });
+  status('Dernière action annulée.');
+  scheduleSave();
+}
+
 // ---------- Affichage d'une page ----------
 
 function disposeView() {
@@ -219,8 +258,8 @@ async function showPage(n, { flat = null, fit = true } = {}) {
   remove.onclick = () => removePage(page);
   const sync = document.createElement('button');
   sync.className = 'sync';
-  sync.innerHTML = '<svg><use href="#i-sync"/></svg>Synchroniser les lots';
-  sync.onclick = syncLots;
+  sync.innerHTML = '<svg><use href="#i-sync"/></svg>Synchroniser automatiquement';
+  sync.onclick = () => { pushUndo(); syncLots(); };
   head.append(title, sync, remove);
 
   const view = new PageView(page, image, {
@@ -228,17 +267,21 @@ async function showPage(n, { flat = null, fit = true } = {}) {
     lotsActive: () => lotsActive(state.project),
     lotFrame: () => lotFrameEnabled(state.project),
     zoom: () => state.zoom,
-    onFocus: (v, f) => { state.field = f; updateEditBar(); },
+    onFocus: (v, f) => { state.field = f; state.editSession = null; updateEditBar(); },
+    beforeEdit: (v, f) => { if (state.editSession !== f) { pushUndo(); state.editSession = f; } },
+    beforeChange: () => pushUndo(),
     onEdited: (v, f) => { afterEdit(v, f); updateEditBar(); scheduleSave(); },
     onTouch: () => {},
     onLocks: () => { status('Zones verrouillées mises à jour.'); scheduleSave(); },
     onLot: (v, line, value) => {
+      pushUndo();
       setLot(state.project, line, value);
       lotsChanged(v, true);
       status(`Lot ${line.Lot || '(automatique)'} : les numéros suivants ont été recalés.`);
       scheduleSave();
     },
     onLotRemove: (v, line) => {
+      pushUndo();
       const old = line.Lot;
       removeLot(state.project, line);
       lotsChanged(v);
@@ -246,6 +289,7 @@ async function showPage(n, { flat = null, fit = true } = {}) {
       scheduleSave();
     },
     onLotAdd: (v, line) => {
+      pushUndo();
       addLot(state.project, line);
       lotsChanged(v);
       status(`Lot ${line.Lot} ajouté : les numéros suivants ont été décalés.`);
@@ -286,8 +330,9 @@ function lotsChanged(view, typing = false) {
 }
 
 /** Bouton « Synchroniser » : recalcule tous les numéros (ceux tapés à la main sont gardés). */
+/** « Synchroniser automatiquement » : le logiciel remplit toutes les cases (les numéros tapés restent des repères). */
 function syncLots() {
-  resyncLots(state.project);
+  fillLotsAutomatically(state.project);
   lotsChanged(state.view);
   const objs = [...objectLines(state.project)];
   status(objs.length ? `Lots synchronisés : ${objs.length} objets, de ${objs[0].line.Lot} à ${objs[objs.length - 1].line.Lot}.` : 'Aucun objet à numéroter.');
@@ -321,6 +366,7 @@ async function removePage(page) {
   if (state.busy || !(await confirmDialog('Retirer cette page ?', `« ${page.SourceName} » sera retirée du projet et des exports.`, 'Retirer'))) return;
   const i = pages().indexOf(page);
   if (i < 0) return;
+  pushUndo();
   pages().splice(i, 1);
   state.flats.delete(page); state.oriented.delete(page);
   resyncLots(state.project);
@@ -618,19 +664,30 @@ async function exportTxt() {
 }
 
 async function exportJpeg(only = null) {
-  const list = only ? [only] : pages().filter((p) => p.Source === 'Image');
+  const all = pages().filter((p) => p.Source === 'Image');
+  const lastPage = all[all.length - 1];
+  const targets = only ? [only] : all;
+  // Lots 0 : leurs rangées quittent leur page et sont recollées sous le dernier tableau de la dernière page.
+  const needStrips = targets.includes(lastPage) && all.some((p) => zeroRows(p).length > 0);
+  const work = all.filter((p) => targets.includes(p) || (needStrips && zeroRows(p).length > 0));
+  const strips = [];
+  let moved = 0;
   const files = [];
-  for (let i = 0; i < list.length; i++) {
-    const page = list[i];
-    progress(i / list.length);
-    status(`Création de l'image ${i + 1} sur ${list.length}…`); await tick();
+  for (let i = 0; i < work.length; i++) {
+    const page = work[i];
+    progress(i / work.length);
+    status(`Création de l'image ${i + 1} sur ${work.length}…`); await tick();
     const base = state.flats.get(page) ?? (await restoreFlat(page));
     if (!base) continue;
     const frame = lotFrameEnabled(state.project);
     const edited = renderEdits(page, stretch(base, page), frame);
-    // Page agrandie : on exporte la page scannée bien droite (on ne peut plus la reposer sur la photo d'origine).
-    let final = edited;
-    if (totalExtra(page) === 0) {
+    let final = edited, changed = totalExtra(page) > 0;
+    const cut = cutZeroRows(edited, page);
+    if (cut.strips.length > 0) { strips.push(...cut.strips); final = cut.image; changed = true; moved += zeroRows(page).length; }
+    if (page === lastPage && strips.length > 0) { final = appendStrips(final, cut.insertAt, cut.tableLeft, strips); changed = true; }
+    if (!targets.includes(page)) continue;
+    // Page changée de forme (rangée agrandie, lots 0 déplacés) : on exporte la page scannée bien droite.
+    if (!changed) {
       const src = await orientedSource(page);
       if (!src) continue;
       final = composeIntoSource(src, page, edited, frame);
@@ -642,7 +699,8 @@ async function exportJpeg(only = null) {
   }
   progress(null);
   status(`${files.length} image(s) prête(s).`);
-  await deliver(files, files.length > 1 ? 'Images prêtes' : 'Image prête', "<p>Chaque photo d'origine, inchangée sauf dans les cases modifiées" + (lotsActive(state.project) ? ' et la colonne des numéros de lot' : '') + '.</p>');
+  const zero = moved > 0 ? ` ${moved} rangée(s) au lot 0 déplacée(s) à la fin de la dernière page.` : '';
+  await deliver(files, files.length > 1 ? 'Images prêtes' : 'Image prête', "<p>Chaque photo d'origine, inchangée sauf dans les cases modifiées" + (lotsActive(state.project) ? ' et la colonne des numéros de lot' : '') + '.' + zero + '</p>');
 }
 
 async function exportDialog() {
@@ -665,36 +723,50 @@ async function exportDialog() {
 async function lotsDialog() {
   const objects = [...objectLines(state.project)].map((o) => o.line);
   const active = lotsActive(state.project);
-  const first = objects[0]?.Lot, last = objects[objects.length - 1]?.Lot;
+  const byHand = !!state.project.LotsByHand;
+  const filled = objects.filter((l) => l.Lot).length;
+  const first = objects.find((l) => l.Lot)?.Lot ?? '', last = [...objects].reverse().find((l) => l.Lot)?.Lot ?? '';
   const html = `
     <p>Un numéro de lot par objet, dans une colonne à gauche du tableau. Il apparaît dans le <b>.txt</b> (1re colonne) et sur le <b>JPEG</b>. Les titres, totaux et en-têtes n'en ont pas.</p>
-    ${active ? `<p><b>${objects.length} objets</b> numérotés de <b>${escapeHtml(first ?? '')}</b> à <b>${escapeHtml(last ?? '')}</b>, toutes pages confondues.</p>
-      <p class="muted">Touchez un numéro sur la page pour le changer : les suivants se recalent. 🗑 à gauche d'une ligne : ce n'est pas un objet. « + » : ajouter un numéro.</p>`
-    : `<p><b>${objects.length} objets</b> trouvés sur ${pages().length} page(s).</p>`}
+    ${!active ? `<p><b>${objects.length} objets</b> trouvés sur ${pages().length} page(s).</p>
+      <p><b>Colonne vide</b> : toutes les cases vides, vous tapez les numéros vous-même, rien ne se remplit tout seul.<br><b>Numéroter automatiquement</b> : 1, 2, 3… à partir du nombre choisi.</p>`
+    : `<p><b>${objects.length} objets</b>, ${filled} numéroté(s)${filled ? ` (de <b>${escapeHtml(first)}</b> à <b>${escapeHtml(last)}</b>)` : ''}. ${byHand ? 'Remplissage <b>à la main</b> : rien ne change tout seul.' : 'Numérotation <b>automatique</b> : un numéro tapé recale les suivants.'}</p>
+      <p class="muted">Touchez une case sur la page pour taper un numéro. 0 = absent ou barré (mis en fin d'inventaire). 🗑 : ce n'est pas un objet. « + » : ajouter une case.</p>`}
     <label class="switch"><input id="lotFrame" type="checkbox" ${lotFrameEnabled(state.project) ? 'checked' : ''}> Tracer la colonne dans le tableau (traits et fond comme le tableau imprimé)</label>
-    <label>Commencer à <input id="lotStart" type="number" inputmode="numeric" min="0" value="${active && /^\d+$/.test(first ?? '') ? first : 1}"></label>`;
+    <label>Commencer à <input id="lotStart" type="number" inputmode="numeric" min="0" value="${/^\d+$/.test(first) ? first : 1}"></label>`;
   const shown = dialog('Numéros de lot', html, [
-    { label: active ? 'Renuméroter' : 'Numéroter', value: 'number', className: 'accent' },
-    ...(active ? [{ label: 'Synchroniser', value: 'sync' }, { label: 'Enlever les numéros', value: 'clear', className: 'danger' }] : []),
+    ...(active ? [{ label: 'Synchroniser automatiquement', value: 'sync', className: 'accent' }] : []),
+    { label: active ? 'Vider les cases (remplir moi-même)' : 'Colonne vide (remplir moi-même)', value: 'empty', className: active ? '' : 'accent' },
+    { label: active ? 'Renuméroter automatiquement' : 'Numéroter automatiquement', value: 'number' },
+    ...(active ? [{ label: 'Enlever la colonne', value: 'clear', className: 'danger' }] : []),
     { label: 'Fermer', value: null },
   ]);
   $('lotFrame').onchange = (e) => {
+    pushUndo();
     state.project.LotFrame = e.target.checked;
     lotsChanged(state.view);
     scheduleSave();
   };
   const choice = await shown;
   if (choice === 'number') {
+    pushUndo();
     const start = parseInt($('lotStart')?.value ?? '1', 10);
     numberLots(state.project, Number.isFinite(start) ? start : 1);
     const objs = [...objectLines(state.project)];
     status(`Lots numérotés de ${objs[0]?.line.Lot ?? ''} à ${objs[objs.length - 1]?.line.Lot ?? ''}.`);
+  } else if (choice === 'empty') {
+    if (filled > 0 && !(await confirmDialog('Vider les cases ?', 'Tous les numéros seront effacés ; vous les taperez vous-même (bouton ↶ pour revenir en arrière).', 'Vider'))) return;
+    pushUndo();
+    createEmptyLots(state.project);
+    status(`Colonne de lots créée : ${objects.length} cases vides. Touchez une case pour taper un numéro.`);
   } else if (choice === 'sync') {
+    pushUndo();
     return syncLots();
   } else if (choice === 'clear') {
-    if (!(await confirmDialog('Enlever les numéros de lot ?', 'Tous les numéros seront retirés (texte et images).', 'Enlever'))) return;
+    if (!(await confirmDialog('Enlever la colonne des lots ?', 'Tous les numéros seront retirés (texte et images).', 'Enlever'))) return;
+    pushUndo();
     clearLots(state.project);
-    status('Numéros de lot enlevés.');
+    status('Colonne des lots enlevée.');
   } else return;
   lotsChanged(state.view);
   scheduleSave();
@@ -722,8 +794,10 @@ function initButtons() {
   $('pagePrev').onclick = () => goTo(state.index - 1);
   $('pageNext').onclick = () => goTo(state.index + 1);
   $('pageLabel').onclick = () => { if (!state.busy) pagesDialog(); };
+  $('btnUndo').onclick = () => run(undo);
   document.addEventListener('keydown', (e) => {
     if (e.target.closest?.('input, textarea') || !$('dialog').hidden || !$('crop').hidden) return;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); run(undo); return; }
     if (e.key === 'ArrowLeft' || e.key === 'PageUp') goTo(state.index - 1);
     if (e.key === 'ArrowRight' || e.key === 'PageDown') goTo(state.index + 1);
   });
@@ -741,6 +815,7 @@ function initButtons() {
     const f = state.field, view = state.view;
     const hit = f ? findLine(state.project, f) : null;
     if (!hit || !view) return;
+    pushUndo();
     cycleKind(hit.line);
     resyncLots(state.project);
     view.refresh();
@@ -770,6 +845,7 @@ function initButtons() {
     const sel = view.selectionFor(f);
     const [a, b] = sel.end > sel.start ? [sel.start, sel.end] : [0, f.Text.length];
     const was = isStruck(f, a, b);
+    pushUndo();
     toggleStrike(f, a, b, state.strikeColor);
     view.refreshStrikes();
     const part = f.Text.slice(a, b).trim();
@@ -780,6 +856,7 @@ function initButtons() {
   $('btnRevert').onclick = () => {
     const f = state.field;
     if (!f || !state.view) return;
+    pushUndo();
     state.view.revert(f);
     afterEdit(state.view, f);
     updateEditBar();
@@ -798,6 +875,7 @@ function initButtons() {
     const { flat } = await processImage(fresh, result.source, result.quad, (f, text) => { progress(f); status(`Recadrage : ${text}`); });
     const i = pages().indexOf(page);
     if (i < 0) return;
+    pushUndo();
     pages()[i] = fresh;
     state.flats.delete(page); state.oriented.delete(page);
     remember(state.oriented, fresh, result.source, 1);

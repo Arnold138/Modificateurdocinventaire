@@ -41,7 +41,9 @@
 - **Traits** : tracés droits, de la couleur moyenne des filets du scan ; sur une photo de travers, ils suivent la même perspective que le reste (tracés sur la page redressée puis remis dans la photo).
 - **Tableaux sans filets** : pas de colonne tracée, numéros seuls.
 - Un numéro non numérique (« 12 bis ») est gardé tel quel ; la suite reprend après le dernier numéro de la colonne.
-- **Lot 0** (absent, barré) : sur l'image, le 0 reste à sa place ; dans le .txt, l'objet (et ses lignes de suite) part à la fin.
+- **Lot 0** (absent, barré) : la **rangée entière** (entre deux filets) part à la fin de la dernière page, sur le JPEG, et à la fin du .txt. Si une rangée contient aussi un objet numéroté normalement, elle reste en place (seul le .txt déplace la ligne au lot 0). Les colonnes de la rangée déplacée gardent leurs traits d'origine : si le dernier tableau n'a pas exactement les mêmes colonnes, les traits verticaux peuvent être décalés de quelques pixels. À l'écran, la rangée reste à sa place (voilée) pour pouvoir la corriger.
+- **Retour en arrière** : 30 actions, pendant la session (pas après avoir fermé l'app). Le texte tapé dans une case compte pour une seule action jusqu'à ce qu'on change de case.
+- **Orthographe** : correcteur de l'appareil (iPhone/iPad, Windows), en français si le clavier est en français. Il n'est actif que dans la désignation.
 
 ## Texte sur plusieurs lignes
 

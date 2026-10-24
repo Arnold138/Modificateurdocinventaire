@@ -307,9 +307,9 @@ public sealed partial class MainWindow : Window
         };
         var syncContent = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
         syncContent.Children.Add(new FontIcon { Glyph = "\uE895", FontSize = 15 });
-        syncContent.Children.Add(new TextBlock { Text = "Synchroniser les lots" });
+        syncContent.Children.Add(new TextBlock { Text = "Synchroniser automatiquement" });
         sync.Content = syncContent;
-        sync.Click += (_, _) => SyncLots();
+        sync.Click += (_, _) => { PushUndo(); SyncLots(); };
         _syncButton = sync;
         var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Margin = new Thickness(PageView.GutterWidth, 0, 0, 0) };
         header.Children.Add(title);
@@ -318,11 +318,14 @@ public sealed partial class MainWindow : Window
 
         var view = new PageView(page, image, DisplayFor(page, image), () => Lots.IsActive(_project), () => _project.LotFrame);
         _frameSignature = LotColumn.Signature(page, _project.LotFrame);
-        view.FieldFocused += (_, f) => { _currentField = f; UpdateEditBar(); };
+        view.FieldFocused += (_, f) => { _currentField = f; _editSession = null; UpdateEditBar(); };
+        view.BeforeEdit += (_, f) => { if (_editSession != f) { PushUndo(); _editSession = f; } };
+        view.BeforeChange += _ => PushUndo();
         view.Edited += (v, f) => { AfterEdit(v, f); UpdateEditBar(); ScheduleAutosave(); };
         view.LocksChanged += _ => { ScheduleAutosave(); SetStatus("Zones verrouillées mises à jour."); };
         view.LotChanged += (v, line, value) =>
         {
+            PushUndo();
             Lots.Set(_project, line, value);
             LotsChanged(v, typing: true);
             SetStatus($"Lot {(line.Lot.Length > 0 ? line.Lot : "(automatique)")} : les numéros suivants ont été recalés.");
@@ -331,6 +334,7 @@ public sealed partial class MainWindow : Window
         view.LotRemoved += (v, line) =>
         {
             string old = line.Lot;
+            PushUndo();
             Lots.Remove(_project, line);
             LotsChanged(v);
             SetStatus($"Lot {old} retiré : les numéros suivants ont été décalés.");
@@ -338,6 +342,7 @@ public sealed partial class MainWindow : Window
         };
         view.LotAdded += (v, line) =>
         {
+            PushUndo();
             Lots.Add(_project, line);
             LotsChanged(v);
             SetStatus($"Lot {line.Lot} ajouté : les numéros suivants ont été décalés.");
@@ -402,10 +407,10 @@ public sealed partial class MainWindow : Window
         UpdateCommands();
     }
 
-    /// <summary>Bouton « Synchroniser » : recalcule tous les numéros (ceux tapés à la main sont gardés).</summary>
+    /// <summary>« Synchroniser automatiquement » : le logiciel remplit toutes les cases (les numéros tapés restent des repères).</summary>
     private void SyncLots()
     {
-        Lots.Resync(_project);
+        Lots.FillAutomatically(_project);
         LotsChanged(_view);
         var objects = Lots.ObjectLines(_project).ToList();
         SetStatus(objects.Count > 0
@@ -483,6 +488,7 @@ public sealed partial class MainWindow : Window
         if (_busy || !await ConfirmAsync("Retirer cette page ?", $"« {page.SourceName} » sera retirée du projet et des exports.", "Retirer")) return;
         int i = _project.Pages.IndexOf(page);
         if (i < 0) return;
+        PushUndo();
         _project.Pages.RemoveAt(i);
         Forget(page);
         if (page.SourceEntry != null && _project.Pages.All(p => p.SourceEntry != page.SourceEntry)) _sources.Remove(page.SourceEntry);
@@ -513,6 +519,7 @@ public sealed partial class MainWindow : Window
     {
         if (_currentField is null || _view is null) return;
         if (PageEdits.FindLine(_project, _currentField) is not { } hit) return;
+        PushUndo();
         PageEdits.CycleKind(hit.Line);
         Lots.Resync(_project);
         var field = _currentField;
@@ -528,6 +535,7 @@ public sealed partial class MainWindow : Window
     private void Revert_Click(object sender, RoutedEventArgs e)
     {
         if (_currentField is null || _view is null) return;
+        PushUndo();
         _view.Revert(_currentField);
         AfterEdit(_view, _currentField);
         UpdateEditBar();
@@ -569,6 +577,7 @@ public sealed partial class MainWindow : Window
         var (start, end) = _view.SelectionFor(f);
         if (end <= start) (start, end) = (0, f.Text.Length);
         bool was = Strikes.IsStruck(f, start, end);
+        PushUndo();
         Strikes.Toggle(f, start, end, StrikeColor);
         _view.RefreshStrikes();
         string part = f.Text[start..end].Trim();
@@ -596,7 +605,8 @@ public sealed partial class MainWindow : Window
         if (_busy || _project.Pages.Count == 0) return;
         var objects = Lots.ObjectLines(_project).Select(o => o.Line).ToList();
         bool active = Lots.IsActive(_project);
-        string first = objects.FirstOrDefault()?.Lot ?? "", last = objects.LastOrDefault()?.Lot ?? "";
+        int filled = objects.Count(l => l.Lot.Length > 0);
+        string first = objects.FirstOrDefault(l => l.Lot.Length > 0)?.Lot ?? "", last = objects.LastOrDefault(l => l.Lot.Length > 0)?.Lot ?? "";
 
         var panel = new StackPanel { Spacing = 12, MaxWidth = 480 };
         panel.Children.Add(new TextBlock
@@ -608,16 +618,17 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(new TextBlock
         {
             TextWrapping = TextWrapping.Wrap, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Text = active
-                ? $"{objects.Count} objets numérotés de {first} à {last}, toutes pages confondues."
-                : $"{objects.Count} objets trouvés sur {_project.Pages.Count} page(s).",
+            Text = !active
+                ? $"{objects.Count} objets trouvés sur {_project.Pages.Count} page(s). « Colonne vide » : vous tapez les numéros vous-même, rien ne se remplit tout seul. « Numéroter automatiquement » : 1, 2, 3…"
+                : $"{objects.Count} objets, {filled} numéroté(s){(filled > 0 ? $" (de {first} à {last})" : "")}. "
+                  + (_project.LotsByHand ? "Remplissage à la main : rien ne change tout seul." : "Numérotation automatique : un numéro tapé recale les suivants."),
         });
         if (active)
             panel.Children.Add(new TextBlock
             {
                 TextWrapping = TextWrapping.Wrap, Opacity = 0.7,
-                Text = "Touchez un numéro sur la page pour le changer : les suivants se recalent. "
-                     + "Poubelle à gauche d'une ligne : ce n'est pas un objet. « + » : ajouter un numéro.",
+                Text = "Touchez une case sur la page pour taper un numéro. 0 = absent ou barré (mis en fin d'inventaire). "
+                     + "Poubelle : ce n'est pas un objet. « + » : ajouter une case.",
             });
         var frame = new ToggleSwitch
         {
@@ -626,6 +637,7 @@ public sealed partial class MainWindow : Window
         };
         frame.Toggled += (_, _) =>
         {
+            PushUndo();
             _project.LotFrame = frame.IsOn;
             LotsChanged(_view);
             ScheduleAutosave();
@@ -635,47 +647,114 @@ public sealed partial class MainWindow : Window
         {
             Header = "Commencer à", Minimum = 0, SmallChange = 1, Width = 180, HorizontalAlignment = HorizontalAlignment.Left,
             SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline,
-            Value = active && int.TryParse(first, out var f0) ? f0 : 1,
+            Value = int.TryParse(first, out var f0) ? f0 : 1,
         };
         panel.Children.Add(start);
 
         ContentDialog? dialog = null;
-        bool clear = false;
+        string choice = "";
         if (active)
         {
-            var clearButton = new Button { Content = "Enlever les numéros", MinHeight = 44, Foreground = new SolidColorBrush(ColorHelper.FromArgb(255, 180, 40, 40)) };
-            clearButton.Click += (_, _) => { clear = true; dialog?.Hide(); };
-            panel.Children.Add(clearButton);
+            var extra = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            var renumber = new Button { Content = "Renuméroter automatiquement", MinHeight = 44 };
+            renumber.Click += (_, _) => { choice = "number"; dialog?.Hide(); };
+            var clear = new Button { Content = "Enlever la colonne", MinHeight = 44, Foreground = new SolidColorBrush(ColorHelper.FromArgb(255, 180, 40, 40)) };
+            clear.Click += (_, _) => { choice = "clear"; dialog?.Hide(); };
+            extra.Children.Add(renumber);
+            extra.Children.Add(clear);
+            panel.Children.Add(extra);
         }
 
         dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot, Title = "Numéros de lot", Content = new ScrollViewer { Content = panel },
-            PrimaryButtonText = active ? "Renuméroter" : "Numéroter",
-            SecondaryButtonText = active ? "Synchroniser" : "",
+            PrimaryButtonText = active ? "Synchroniser automatiquement" : "Colonne vide (remplir moi-même)",
+            SecondaryButtonText = active ? "Vider les cases (remplir moi-même)" : "Numéroter automatiquement",
             CloseButtonText = "Fermer", DefaultButton = ContentDialogButton.Primary,
         };
         var result = await dialog.ShowAsync();
-        if (clear)
+        if (choice == "" && result == ContentDialogResult.Primary) choice = active ? "sync" : "empty";
+        if (choice == "" && result == ContentDialogResult.Secondary) choice = active ? "empty" : "number";
+        switch (choice)
         {
-            if (!await ConfirmAsync("Enlever les numéros de lot ?", "Tous les numéros seront retirés (texte et images).", "Enlever")) return;
-            Lots.Clear(_project);
-            SetStatus("Numéros de lot enlevés.");
+            case "sync":
+                PushUndo();
+                SyncLots();
+                return;
+            case "empty":
+                if (filled > 0 && !await ConfirmAsync("Vider les cases ?", "Tous les numéros seront effacés ; vous les taperez vous-même (bouton ↶ pour revenir en arrière).", "Vider")) return;
+                PushUndo();
+                Lots.CreateEmpty(_project);
+                SetStatus($"Colonne de lots créée : {objects.Count} cases vides. Touchez une case pour taper un numéro.");
+                break;
+            case "number":
+                PushUndo();
+                Lots.Number(_project, double.IsNaN(start.Value) ? 1 : (int)Math.Round(start.Value));
+                var numbered = Lots.ObjectLines(_project).ToList();
+                SetStatus($"Lots numérotés de {numbered.FirstOrDefault().Line?.Lot} à {numbered.LastOrDefault().Line?.Lot}.");
+                break;
+            case "clear":
+                if (!await ConfirmAsync("Enlever la colonne des lots ?", "Tous les numéros seront retirés (texte et images).", "Enlever")) return;
+                PushUndo();
+                Lots.Clear(_project);
+                SetStatus("Colonne des lots enlevée.");
+                break;
+            default:
+                return;
         }
-        else if (result == ContentDialogResult.Primary)
-        {
-            Lots.Number(_project, double.IsNaN(start.Value) ? 1 : (int)Math.Round(start.Value));
-            var numbered = Lots.ObjectLines(_project).ToList();
-            SetStatus($"Lots numérotés de {numbered.FirstOrDefault().Line?.Lot} à {numbered.LastOrDefault().Line?.Lot}.");
-        }
-        else if (result == ContentDialogResult.Secondary)
-        {
-            SyncLots();
-            return;
-        }
-        else return;
         LotsChanged(_view);
         ScheduleAutosave();
+    }
+
+    // ---------- Retour en arrière ----------
+
+    private readonly List<string> _undo = [];
+    private Field? _editSession;
+
+    /// <summary>Mémorise l'état du projet avant une action (30 derniers états).</summary>
+    private void PushUndo()
+    {
+        _undo.Add(System.Text.Json.JsonSerializer.Serialize(_project, ProjectStore.Json));
+        if (_undo.Count > 30) _undo.RemoveAt(0);
+        UpdateCommands();
+    }
+
+    private static string ImageKey(ModelPage p) =>
+        System.Text.Json.JsonSerializer.Serialize(new object?[] { p.Crop, p.Skew, p.QuarterTurns, p.Width, PageLayout.BaseHeight(p), p.SourceEntry });
+
+    private void Undo_Click(object sender, RoutedEventArgs e) => _ = UndoAsync();
+
+    private void UndoAccelerator_Invoked(Microsoft.UI.Xaml.Input.KeyboardAccelerator sender, Microsoft.UI.Xaml.Input.KeyboardAcceleratorInvokedEventArgs args)
+    {
+        if (args.Element is TextBox || Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(Content.XamlRoot) is TextBox) return; // dans une case : Ctrl+Z du texte
+        args.Handled = true;
+        _ = UndoAsync();
+    }
+
+    /// <summary>Bouton ↶ : revient à l'état d'avant la dernière action.</summary>
+    private async Task UndoAsync()
+    {
+        if (_busy || _undo.Count == 0) return;
+        string snap = _undo[^1];
+        _undo.RemoveAt(_undo.Count - 1);
+        await RunBusyAsync(async () =>
+        {
+            string? currentId = CurrentPage?.Id;
+            var flats = _flats.ToDictionary(kv => kv.Key.Id, kv => (Key: ImageKey(kv.Key), Image: kv.Value));
+            var oriented = _oriented.ToDictionary(kv => kv.Key.Id, kv => (Key: kv.Key.QuarterTurns + "|" + kv.Key.SourceEntry, Image: kv.Value));
+            _project = System.Text.Json.JsonSerializer.Deserialize<InventoryProject>(snap, ProjectStore.Json) ?? _project;
+            _flats.Clear(); _oriented.Clear(); _recent.Clear();
+            foreach (var p in _project.Pages)
+            {
+                if (flats.TryGetValue(p.Id, out var f) && f.Key == ImageKey(p)) Remember(_flats, p, f.Image, 3);
+                if (oriented.TryGetValue(p.Id, out var o) && o.Key == p.QuarterTurns + "|" + p.SourceEntry) Remember(_oriented, p, o.Image, 2);
+            }
+            _editSession = null;
+            int index = Math.Max(0, _project.Pages.FindIndex(p => p.Id == currentId));
+            await ShowPageAsync(index, fit: false);
+            SetStatus("Dernière action annulée.");
+            ScheduleAutosave();
+        });
     }
 
     // ---------- Exports ----------
@@ -715,9 +794,9 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>Une image JPEG par photo ou page de PDF : l'original, avec seulement les cases modifiées et les lots.</summary>
-    private async Task ExportJpegAsync(List<ModelPage> pages)
+    private async Task ExportJpegAsync(List<ModelPage> targets)
     {
-        if (pages.Count == 0) { SetStatus("Pas de photo ni de PDF à exporter en image (les TXT, CSV et XLSX s'exportent en .txt)."); return; }
+        if (targets.Count == 0) { SetStatus("Pas de photo ni de PDF à exporter en image (les TXT, CSV et XLSX s'exportent en .txt)."); return; }
         var picker = new FolderPicker { SuggestedStartLocation = PickerLocationId.PicturesLibrary };
         picker.FileTypeFilter.Add("*");
         InitPicker(picker);
@@ -726,19 +805,30 @@ public sealed partial class MainWindow : Window
 
         await RunBusyAsync(async () =>
         {
-            int done = 0;
-            for (int i = 0; i < pages.Count; i++)
+            var all = _project.Pages.Where(p => p.Source == PageSource.Image).ToList();
+            var lastPage = all.LastOrDefault();
+            // Lots 0 : leurs rangées quittent leur page et sont recollées sous le dernier tableau de la dernière page.
+            bool needStrips = lastPage != null && targets.Contains(lastPage) && all.Any(p => ZeroRows.Rows(p).Count > 0);
+            var work = all.Where(p => targets.Contains(p) || (needStrips && ZeroRows.Rows(p).Count > 0)).ToList();
+            var strips = new List<ZeroRows.Strip>();
+            int done = 0, moved = 0;
+            for (int i = 0; i < work.Count; i++)
             {
-                var page = pages[i];
-                Progress.Value = (double)i / pages.Count;
-                SetStatus($"Création de l'image {i + 1} sur {pages.Count}…");
+                var page = work[i];
+                Progress.Value = (double)i / work.Count;
+                SetStatus($"Création de l'image {i + 1} sur {work.Count}…");
                 var baseFlat = _flats.TryGetValue(page, out var cached) ? cached : await RestoreFlatAsync(page);
                 if (baseFlat is null) continue;
                 bool frame = _project.LotFrame;
                 var edited = ImageExportService.RenderEdits(page, PageLayout.Stretch(baseFlat, page), frame);
-                // Page agrandie : on exporte la page scannée bien droite (elle ne se repose plus sur la photo d'origine).
                 var final = edited;
-                if (PageLayout.TotalExtra(page) == 0)
+                bool changed = PageLayout.TotalExtra(page) > 0;
+                var cut = await Task.Run(() => ZeroRows.Cut(edited, page));
+                if (cut.Strips.Count > 0) { strips.AddRange(cut.Strips); final = cut.Image; changed = true; moved += ZeroRows.Rows(page).Count; }
+                if (page == lastPage && strips.Count > 0) { final = ZeroRows.Append(final, cut.InsertAt, cut.TableLeft, strips); changed = true; }
+                if (!targets.Contains(page)) continue;
+                // Page changée de forme (rangée agrandie, lots 0 déplacés) : on exporte la page scannée bien droite.
+                if (!changed)
                 {
                     var source = await GetOrientedSourceAsync(page);
                     if (source is null) continue;
@@ -747,7 +837,8 @@ public sealed partial class MainWindow : Window
                 await ImageExportService.SaveJpegAsync(final, System.IO.Path.Combine(folder.Path, ImageExportService.OutputName(page)));
                 done++;
             }
-            SetStatus($"{done} image(s) JPEG exportée(s) dans « {folder.Name} » (nom d'origine + « - modifié »).");
+            SetStatus($"{done} image(s) JPEG exportée(s) dans « {folder.Name} » (nom d'origine + « - modifié »)."
+                      + (moved > 0 ? $" {moved} rangée(s) au lot 0 déplacée(s) à la fin de la dernière page." : ""));
         });
     }
 
@@ -1040,6 +1131,7 @@ public sealed partial class MainWindow : Window
             var (image, _) = await _import.ProcessAsync(fresh, source, quad, (f, text) => { Progress.Value = f; SetStatus($"Recadrage : {text}"); });
             int index = _project.Pages.IndexOf(page);
             if (index < 0) return; // page retirée entre-temps
+            PushUndo();
             _project.Pages[index] = fresh;
             Forget(page);
             Remember(_oriented, fresh, source, 2);
@@ -1067,6 +1159,7 @@ public sealed partial class MainWindow : Window
         CropButton.IsEnabled = !_busy && page?.Source == PageSource.Image;
         LockToggle.IsEnabled = !_busy && page != null;
         LotsButton.IsEnabled = ExportButton.IsEnabled = !_busy && n > 0;
+        UndoButton.IsEnabled = !_busy && _undo.Count > 0;
         SaveItem.IsEnabled = RenameItem.IsEnabled = n > 0;
         Pager.Visibility = n > 0 ? Visibility.Visible : Visibility.Collapsed;
         PageLabel.Content = n > 0 ? $"{_index + 1} / {n}" : "";

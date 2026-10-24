@@ -75,6 +75,10 @@ public sealed class PageView
 
     public event Action<PageView, Field>? FieldFocused;
     public event Action<PageView, Field>? Edited;
+    /// <summary>Juste avant la première modification d'une case (pour le retour en arrière).</summary>
+    public event Action<PageView, Field>? BeforeEdit;
+    /// <summary>Juste avant un changement des zones verrouillées.</summary>
+    public event Action<PageView>? BeforeChange;
     public event Action<PageView>? Touched;
     public event Action<PageView>? LocksChanged;
     /// <summary>Numéro de lot tapé sur la page (ligne, valeur saisie).</summary>
@@ -135,6 +139,7 @@ public sealed class PageView
         _fieldLayer.Children.Clear();
         _overlayLayer.Children.Clear();
         _lockMarks.Clear();
+        _zeroMarks.Clear();
         _boxes.Clear();
         Build();
     }
@@ -220,7 +225,7 @@ public sealed class PageView
         foreach (var t in Page.Tables)
             foreach (var line in t.Rows.SelectMany(r => r.Lines))
             {
-                if (line.Lot.Length == 0) continue;
+                if (!Lots.HasCell(line)) continue;
                 var box = labels.First(l => l.Line == line).Box;
                 AddLotBox(line, box, framed.Contains(t) || _image is null);
             }
@@ -293,8 +298,43 @@ public sealed class PageView
         RefreshGutter();
     }
 
+    private readonly List<UIElement> _zeroMarks = [];
+
+    /// <summary>Rangées au lot 0 : voilées, avec la mention « déplacée en fin d'inventaire » (fait à l'export).</summary>
+    private void RefreshZeroRows()
+    {
+        foreach (var m in _zeroMarks) _overlayLayer.Children.Remove(m);
+        _zeroMarks.Clear();
+        foreach (var (t, r) in ZeroRows.Rows(Page))
+        {
+            double left = t.ColumnXs.Count > 0 ? t.ColumnXs[0] : t.Bounds.Left, right = t.ColumnXs.Count > 0 ? t.ColumnXs[^1] : t.Bounds.Right;
+            var veil = new Rectangle
+            {
+                Width = right - left, Height = t.RowYs[r + 1] - t.RowYs[r],
+                Fill = new SolidColorBrush(ColorHelper.FromArgb(140, 238, 240, 243)),
+                Stroke = new SolidColorBrush(ColorHelper.FromArgb(255, 154, 163, 173)), StrokeThickness = 2,
+                StrokeDashArray = new DoubleCollection { 4, 3 },
+            };
+            Canvas.SetLeft(veil, left);
+            Canvas.SetTop(veil, t.RowYs[r]);
+            var label = new Border
+            {
+                Background = new SolidColorBrush(ColorHelper.FromArgb(255, 101, 103, 107)), CornerRadius = new CornerRadius(10), Padding = new Thickness(8, 1, 8, 1),
+                Child = new TextBlock { Text = "Lot 0 → fin d'inventaire", FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Paper },
+            };
+            label.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            Canvas.SetLeft(label, right - 6 - label.DesiredSize.Width);
+            Canvas.SetTop(label, t.RowYs[r] + 2);
+            _overlayLayer.Children.Add(veil);
+            _overlayLayer.Children.Add(label);
+            _zeroMarks.Add(veil);
+            _zeroMarks.Add(label);
+        }
+    }
+
     public void RefreshGutter()
     {
+        RefreshZeroRows();
         _gutter.Children.Clear();
         bool active = _lotsActive();
         foreach (var table in Page.Tables)
@@ -303,7 +343,7 @@ public sealed class PageView
                 if (line.OutsideTable || line.Cells.Count == 0) continue;
                 AddBadge(line);
                 if (!active) continue;
-                bool has = line.Lot.Length > 0;
+                bool has = Lots.HasCell(line);
                 if (!has && !Lots.CanAdd(line)) continue;
                 double baseHeight = line.Bounds.Height - line.Extra, centerY = line.Bounds.Top + baseHeight / 2;
                 double h = Math.Max(26, Math.Min(40, baseHeight + 6));
@@ -349,6 +389,9 @@ public sealed class PageView
             // Désignation : passe à la ligne, même taille d'écriture ; Entrée = nouvelle ligne dans la case.
             tb.TextWrapping = TextWrapping.Wrap;
             tb.AcceptsReturn = true;
+            // Correcteur de Windows (fautes soulignées, propositions), sans correction automatique.
+            tb.IsSpellCheckEnabled = true;
+            tb.Language = "fr-FR";
         }
         if (f.Column > 0 && (f.OriginalText.Length == 0 || f.OriginalText.Any(char.IsDigit)))
         {
@@ -375,6 +418,7 @@ public sealed class PageView
         {
             string text = FromBox(tb.Text);
             if (f.Text == text) return;
+            BeforeEdit?.Invoke(this, f);
             Strikes.Adjust(f, f.Text, text);
             f.Text = text;
             Layout(tb, f);
@@ -651,6 +695,7 @@ public sealed class PageView
         var b = e.GetCurrentPoint(_inputLayer).Position;
         var zone = RectD.FromEdges(Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Max(a.X, b.X), Math.Max(a.Y, b.Y));
         bool changed;
+        BeforeChange?.Invoke(this);
         if (zone.Width < 8 && zone.Height < 8)
             changed = PageEdits.RemoveLockZoneAt(Page, b.X, b.Y);
         else

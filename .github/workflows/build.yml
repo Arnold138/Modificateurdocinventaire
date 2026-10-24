@@ -22,7 +22,8 @@ jobs:
           tests/RetoucheInventaire.Core.Tests/bin/Release/net10.0/RetoucheInventaire.Core.Tests export-file /tmp/windows.txt page1 page2 page5
           tests/RetoucheInventaire.Core.Tests/bin/Release/net10.0/RetoucheInventaire.Core.Tests export-file /tmp/windows-lots.txt --lots page1 page2 page5
           tests/RetoucheInventaire.Core.Tests/bin/Release/net10.0/RetoucheInventaire.Core.Tests export-frame /tmp/windows-colonne.pgm page1 page2 page5
-          node web/tests/test.mjs /tmp/windows.txt /tmp/windows-lots.txt /tmp/windows-colonne.pgm
+          mkdir -p /tmp/windows-zero && tests/RetoucheInventaire.Core.Tests/bin/Release/net10.0/RetoucheInventaire.Core.Tests export-zero /tmp/windows-zero
+          node web/tests/test.mjs /tmp/windows.txt /tmp/windows-lots.txt /tmp/windows-colonne.pgm /tmp/windows-zero
 
   # Version iPad : application web publiée sur GitHub Pages (branche gh-pages).
   site:

@@ -29,8 +29,9 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 .round { width: 44px; height: 44px; border-radius: 22px; display: grid; place-items: center; background: var(--surface); border: 1px solid var(--line); }
 .round.small { width: 38px; height: 38px; }
 .round.small svg { width: 20px; height: 20px; }
-.savestate { font-size: 13px; color: var(--muted); white-space: nowrap; margin-left: auto; }
-.pager:not([hidden]) + .savestate { margin-left: 0; }
+.savestate { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.topbar .undo { margin-left: 0; flex: none; }
+.pager[hidden] + .undo { margin-left: auto; }
 
 /* Zone des pages */
 #viewport { flex: 1; overflow: auto; position: relative; -webkit-overflow-scrolling: touch; }
@@ -162,3 +163,7 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 .strike-icon { font: 600 16px "Times New Roman", serif; text-decoration: line-through; text-decoration-color: #d40000; text-decoration-thickness: 2px; }
 .swatch #strikeDot { width: 18px; height: 18px; border-radius: 9px; display: block; background: #d40000; }
 .swatch.black #strikeDot { background: #000; }
+
+/* Rangée au lot 0 : voilée à l'écran, déplacée en fin d'inventaire à l'export. */
+.zerorow { position: absolute; background: rgba(238, 240, 243, .55); outline: 2px dashed #9aa3ad; outline-offset: -2px; }
+.zerorow span { position: absolute; right: 6px; top: 2px; font: 600 13px system-ui, sans-serif; color: #fff; background: #65676b; border-radius: 10px; padding: 1px 8px; }

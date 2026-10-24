@@ -203,6 +203,7 @@ export function renderEdits(page, flat, lotFrame = true) {
       }
   // Numéros de lot : centrés dans la colonne, à la hauteur de l'objet, même taille que son texte, en noir.
   for (const { line, table, box } of lotLabels(page)) {
+    if (!line.Lot) continue; // case vide (lots remplis à la main) : rien à écrire
     if (!framed.includes(table)) {
       const [r, g, b] = paperColor(flat, box);
       ctx.fillStyle = `rgb(${r},${g},${b})`;

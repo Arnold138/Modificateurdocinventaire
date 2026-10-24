@@ -20,7 +20,7 @@ public static class LotColumn
     /// <summary>Tableaux à grille qui portent au moins un numéro de lot.</summary>
     public static List<Table> FramedTables(Page page) =>
         page.Tables.Where(t => t.HasGrid && t.ColumnXs.Count >= 2 && t.RowYs.Count >= 2
-                               && t.Rows.SelectMany(r => r.Lines).Any(l => l.Lot.Length > 0)).ToList();
+                               && t.Rows.SelectMany(r => r.Lines).Any(Lots.HasCell)).ToList();
 
     /// <summary>Signature de ce qui est tracé (pour savoir s'il faut redessiner l'écran).</summary>
     public static string Signature(Page page, bool enabled) =>

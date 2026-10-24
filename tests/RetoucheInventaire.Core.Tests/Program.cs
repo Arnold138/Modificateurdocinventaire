@@ -96,6 +96,27 @@ if (args.Length > 0 && args[0] == "export-frame")
         Console.WriteLine($"x {f.Left}-{f.Right} y {f.Top}-{f.Bottom} traits {f.VThick}/{f.HThick} gris {f.Color[3]}");
     return 0;
 }
+if (args.Length > 0 && args[0] == "export-zero")
+{
+    // Lots 0 : rangées retirées de leur page et recollées sous le dernier tableau de la dernière page.
+    var project = new InventoryProject();
+    foreach (var name in new[] { "page1", "page5" }) project.Pages.Add(Fixtures.Analyze(name));
+    Lots.Number(project, 1);
+    Lots.Set(project, project.Pages[0].AllLines().First(l => l.Cells[0].Text == "2 rolls en métal"), "0");
+    Lots.Set(project, project.Pages[1].AllLines().First(l => l.Cells[0].Text == "CARTONNAGE"), "0");
+    var strips = new List<RetoucheInventaire.Core.Export.ZeroRows.Strip>();
+    for (int i = 0; i < project.Pages.Count; i++)
+    {
+        var page = project.Pages[i];
+        var img = RetoucheInventaire.Core.Export.LotColumn.Draw(Fixtures.Load(page.Id).Image, page);
+        var cut = RetoucheInventaire.Core.Export.ZeroRows.Cut(img, page);
+        strips.AddRange(cut.Strips);
+        var final = i == project.Pages.Count - 1 ? RetoucheInventaire.Core.Export.ZeroRows.Append(cut.Image, cut.InsertAt, cut.TableLeft, strips) : cut.Image;
+        Pgm.Write(Path.Combine(args[1], page.Id + "-zero.pgm"), final);
+        Console.WriteLine($"{page.Id}: {img.Height} -> {final.Height}");
+    }
+    return 0;
+}
 if (args.Length > 0 && args[0] == "export")
 {
     var project = new InventoryProject();

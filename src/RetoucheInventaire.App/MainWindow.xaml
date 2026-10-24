@@ -7,6 +7,9 @@
 
     <!-- Même écran que sur iPhone/iPad : projet et pages en haut, la page au milieu, les outils en bas. -->
     <Grid x:Name="Root" Background="#FFEEF0F3">
+        <Grid.KeyboardAccelerators>
+            <KeyboardAccelerator Modifiers="Control" Key="Z" Invoked="UndoAccelerator_Invoked" />
+        </Grid.KeyboardAccelerators>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -55,8 +58,14 @@
                     <FontIcon Glyph="&#xE76C;" FontSize="16" />
                 </Button>
             </StackPanel>
-            <TextBlock x:Name="SaveState" Grid.Column="2" FontSize="13" Opacity="0.7" HorizontalAlignment="Right" VerticalAlignment="Center"
-                       TextTrimming="CharacterEllipsis" />
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="10" HorizontalAlignment="Right">
+                <!-- Retour en arrière : annule la dernière action (Ctrl+Z hors d'une case). -->
+                <Button x:Name="UndoButton" Style="{StaticResource RoundButton}" Click="Undo_Click" IsEnabled="False"
+                        ToolTipService.ToolTip="Annuler la dernière action (Ctrl+Z)">
+                    <FontIcon Glyph="&#xE7A7;" FontSize="16" />
+                </Button>
+                <TextBlock x:Name="SaveState" FontSize="13" Opacity="0.7" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
         </Grid>
 
         <!-- Une seule page à la fois. Pincer pour zoomer. -->

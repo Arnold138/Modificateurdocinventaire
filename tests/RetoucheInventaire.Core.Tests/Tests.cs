@@ -509,6 +509,46 @@ public static class Tests
         Equal(Strikes.Black, f.Strikes[0].Color, "trait noir");
     }
 
+    public static void T_Lots_colonne_vide_remplie_a_la_main()
+    {
+        var p = ThreePages();
+        Lots.CreateEmpty(p);
+        var objects = Lots.ObjectLines(p).Select(o => o.Line).ToList();
+        Check(Lots.IsActive(p) && objects.All(l => l.Lot == "" && l.LotSlot), "toutes les cases vides");
+        Equal(objects.Count, p.Pages.Sum(pg => Lots.Labels(pg).Count), "une case par objet à l'écran");
+        Lots.Set(p, objects[0], "12");
+        Lots.Set(p, objects[1], "0");
+        Equal("", objects[2].Lot, "rien ne se remplit tout seul");
+        var lines = ExportLines(p);
+        Equal("Lot\tI - MOBILIER ET MATERIEL\texploitation\tréalisation", lines[0], "colonne Lot dans le .txt");
+        Lots.FillAutomatically(p);
+        Equal("12", objects[0].Lot, "numéro tapé gardé");
+        Equal("0", objects[1].Lot, "lot 0 gardé");
+        Equal("13", objects[2].Lot, "le reste rempli à la suite");
+        Check(!p.LotsByHand, "numérotation automatique ensuite");
+    }
+
+    public static void T_Lots_zero_rangee_deplacee_en_fin()
+    {
+        var p = new InventoryProject();
+        foreach (var n in new[] { "page1", "page5" }) p.Pages.Add(Fixtures.Analyze(n));
+        Lots.Number(p, 1);
+        var rolls = p.Pages[0].AllLines().First(l => l.Cells[0].Text == "2 rolls en métal");
+        Lots.Set(p, rolls, "0");
+        var row = p.Pages[0].Tables[0].Rows.First(r => r.Lines.Contains(rolls));
+        var img1 = Fixtures.Load("page1").Image;
+        var cut = ZeroRows.Cut(img1, p.Pages[0]);
+        Equal(1, cut.Strips.Count, "une rangée découpée");
+        int h = cut.Strips[0].Image.Height;
+        Check(Math.Abs(h - row.Bounds.Height) <= 3, $"hauteur de la rangée : {h}");
+        Equal(img1.Height - h, cut.Image.Height, "la page raccourcit d'autant");
+        var img5 = Fixtures.Load("page5").Image;
+        var last = ZeroRows.Cut(img5, p.Pages[1]);
+        var final = ZeroRows.Append(last.Image, last.InsertAt, last.TableLeft, cut.Strips);
+        Equal(img5.Height + h, final.Height, "la dernière page s'allonge d'autant");
+        Check(img5.Data.AsSpan(0, last.InsertAt * img5.Width).SequenceEqual(final.Data.AsSpan(0, last.InsertAt * img5.Width)), "haut de la dernière page intact");
+    }
+
     public static void T_Nom_decompose_iphone_repare()
     {
         var nfd = "BEENDHI prisÃ©.pdf".Normalize(System.Text.NormalizationForm.FormD);

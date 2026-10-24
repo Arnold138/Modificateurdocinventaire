@@ -26,16 +26,33 @@ export function* objectLines(project) {
 
 /** Ligne sans numéro à laquelle on peut en ajouter un (« + »). */
 export const canAddLot = (line) =>
-  (line.Lot ?? '') === '' && !line.OutsideTable && line.Kind !== 'EnTete' && line.Kind !== 'Ignoree' && firstText(line).length > 0;
+  !hasLotCell(line) && !line.OutsideTable && line.Kind !== 'EnTete' && line.Kind !== 'Ignoree' && firstText(line).length > 0;
 
 const everyLine = (project) => project.Pages.flatMap((p) => [...allLines(p)]);
 
 /** Lot 0 : objet absent ou barré (regroupé à la fin du .txt). */
 export const isZeroLot = (line) => /^[+-]?\d+$/.test((line.Lot ?? '').trim()) && parseInt(line.Lot, 10) === 0;
 
-export const lotsActive = (project) => everyLine(project).some((l) => (l.Lot ?? '').length > 0);
+/** Case de lot à afficher sur cette ligne (numérotée ou vide). */
+export const hasLotCell = (l) => (l.Lot ?? '').length > 0 || !!l.LotSlot;
+
+/** « Colonne vide » : une case par objet, toutes vides ; rien ne se remplit tout seul. */
+export function createEmptyLots(project) {
+  clearLots(project);
+  project.LotsByHand = true;
+  for (const { line } of [...objectLines(project)]) line.LotSlot = true;
+}
+
+/** « Synchroniser automatiquement » : le logiciel remplit toutes les cases (numéros tapés gardés comme repères). */
+export function fillLotsAutomatically(project) {
+  project.LotsByHand = false;
+  resyncLots(project);
+}
+
+export const lotsActive = (project) => everyLine(project).some(hasLotCell);
 
 export function numberLots(project, start = 1) {
+  project.LotsByHand = false;
   for (const l of everyLine(project)) { l.Lot = ''; l.LotManual = false; }
   const first = objectLines(project).next().value;
   if (!first) return;
@@ -45,7 +62,8 @@ export function numberLots(project, start = 1) {
 }
 
 export function clearLots(project) {
-  for (const l of everyLine(project)) { l.Lot = ''; l.LotManual = false; }
+  for (const l of everyLine(project)) { l.Lot = ''; l.LotManual = false; l.LotSlot = false; }
+  project.LotsByHand = false;
 }
 
 /** Numéro tapé à la main : la suite se recale automatiquement. */
@@ -70,14 +88,18 @@ export function addLot(project, line) {
   line.ForceLot = true;
   line.Lot = '';
   line.LotManual = false;
-  if (!lotsActive(project)) line.Lot = '1';
+  if (!lotsActive(project)) line.LotSlot = true;
   resyncLots(project);
 }
 
 export function resyncLots(project) {
   if (!lotsActive(project)) return;
   const objects = new Set([...objectLines(project)].map((o) => o.line));
-  for (const l of everyLine(project)) if (!objects.has(l)) { l.Lot = ''; l.LotManual = false; }
+  for (const l of everyLine(project)) {
+    l.LotSlot = objects.has(l);
+    if (!l.LotSlot) { l.Lot = ''; l.LotManual = false; }
+  }
+  if (project.LotsByHand) return; // remplis à la main : on ne touche à aucun numéro
   let next = 1;
   for (const { line } of objectLines(project)) {
     const v = /^[+-]?\d+$/.test(line.Lot ?? '') ? parseInt(line.Lot, 10) : NaN;
@@ -99,7 +121,7 @@ export function columnWidth(page) {
   const fs = sizes.length > 0 ? sizes[Math.trunc(sizes.length / 2)] : 16;
   const digits = Math.max(3, ...[...allLines(page)].map((l) => (l.Lot ?? '').length));
   const desired = Math.floor(fs * (0.55 * digits + 0.9) + 0.5);
-  const lefts = page.Tables.filter((t) => t.Rows.some((r) => r.Lines.some((l) => (l.Lot ?? '').length > 0))).map(tableLeft);
+  const lefts = page.Tables.filter((t) => t.Rows.some((r) => r.Lines.some(hasLotCell))).map(tableLeft);
   const avail = lefts.length > 0 ? Math.min(...lefts) - 6 : desired;
   return Math.max(8, Math.min(desired, avail));
 }
@@ -115,7 +137,7 @@ export function numberBox(table, line, width) {
 
 export function lotLabels(page) {
   const w = columnWidth(page);
-  return page.Tables.flatMap((t) => t.Rows.flatMap((r) => r.Lines).filter((l) => (l.Lot ?? '').length > 0).map((line) => ({ line, table: t, box: numberBox(t, line, w) })));
+  return page.Tables.flatMap((t) => t.Rows.flatMap((r) => r.Lines).filter(hasLotCell).map((line) => ({ line, table: t, box: numberBox(t, line, w) })));
 }
 
 /** Tri « naturel » des noms : « page 2 » avant « page 10 ». */

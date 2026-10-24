@@ -15,6 +15,7 @@ import { numberLots, setLot, resyncLots, clearLots, lotsActive, objectLines, rep
 import { drawLotColumns, frames } from '../core/lotcolumn.js';
 import { setExtra, stretch, extraFor } from '../core/layout.js';
 import { toggleStrike, isStruck, adjustStrikes } from '../core/strikes.js';
+import { cutZeroRows, appendStrips } from '../core/zerorows.js';
 import { isZeroLot } from '../core/lots.js';
 
 const FIX = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tests', 'fixtures');
@@ -309,6 +310,29 @@ if (windowsFrame) {
     eq(`${win.w}x${win.h}`, `${js.w}x${js.h}`, 'taille');
     const k = win.data.findIndex((v, i) => v !== js.data[i]);
     eq(-1, k, `premier pixel différent (${k % win.w}, ${Math.trunc(k / win.w)})`);
+  });
+}
+
+const windowsZero = process.argv[5];
+if (windowsZero) {
+  test('Lots 0 déplacés en fin d\'inventaire : identique à Windows', () => {
+    const p = newProject();
+    for (const n of ['page1', 'page5']) p.Pages.push(analyzePage(n));
+    numberLots(p, 1);
+    const find = (pg, t) => pg.Tables.flatMap((x) => x.Rows).flatMap((r) => r.Lines).find((l) => l.Cells[0].Text === t);
+    setLot(p, find(p.Pages[0], '2 rolls en métal'), '0');
+    setLot(p, find(p.Pages[1], 'CARTONNAGE'), '0');
+    const strips = [];
+    p.Pages.forEach((page, i) => {
+      const img = drawLotColumns(load(page.Id).n.image, page);
+      const cut = cutZeroRows(img, page);
+      strips.push(...cut.strips);
+      const final = i === p.Pages.length - 1 ? appendStrips(cut.image, cut.insertAt, cut.tableLeft, strips) : cut.image;
+      const win = readPgm(join(windowsZero, page.Id + '-zero.pgm'));
+      eq(`${win.w}x${win.h}`, `${final.w}x${final.h}`, `taille ${page.Id}`);
+      const k = win.data.findIndex((v, j) => v !== final.data[j]);
+      eq(-1, k, `${page.Id} : premier pixel différent`);
+    });
   });
 }
 

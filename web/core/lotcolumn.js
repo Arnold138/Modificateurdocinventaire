@@ -2,11 +2,11 @@
 // trait vertical à gauche, filets horizontaux prolongés, chaque case au même fond que sa rangée.
 // Portage de LotColumn.cs, en entiers : résultat identique, pixel pour pixel, à la version Windows.
 import { Rect } from './geometry.js';
-import { columnWidth, numberBox } from './lots.js';
+import { columnWidth, numberBox, hasLotCell } from './lots.js';
 
 const R = (v) => Math.floor(v + 0.5);
 const half = (n) => Math.trunc(n / 2);
-const hasLot = (t) => t.Rows.some((r) => r.Lines.some((l) => (l.Lot ?? '').length > 0));
+const hasLot = (t) => t.Rows.some((r) => r.Lines.some(hasLotCell));
 const intersects = (a, b) => a.X < b.X + b.Width && b.X < a.X + a.Width && a.Y < b.Y + b.Height && b.Y < a.Y + a.Height;
 
 /** Le réglage « colonne tracée » du projet (vrai par défaut). */

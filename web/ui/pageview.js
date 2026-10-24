@@ -4,15 +4,16 @@
 import { Rect } from '../core/geometry.js';
 import { isModified, addLockZone, removeLockZoneAt } from '../core/model.js';
 import { paperColor } from '../core/exports.js';
-import { lotLabels, canAddLot } from '../core/lots.js';
+import { lotLabels, canAddLot, hasLotCell } from '../core/lots.js';
 import { framedTables } from '../core/lotcolumn.js';
+import { zeroRows } from '../core/zerorows.js';
 import { rasterToCanvas, freeCanvas, font, lotSize, textLayout, isMultiline, LINE_HEIGHT, strikeSegments } from '../services/canvas.js';
 import { adjustStrikes } from '../core/strikes.js';
 import { baseBox } from '../core/layout.js';
 
 const BADGES = { Titre: ['T', '#0067c0'], Total: ['Σ', '#107c10'], EnTete: ['E', '#606060'], Ignoree: ['×', '#b42828'] };
 const el = (tag, cls, parent) => { const e = document.createElement(tag); if (cls) e.className = cls; parent?.appendChild(e); return e; };
-const px = (e, r) => Object.assign(e.style, { left: r.X + 'px', top: r.Y + 'px', width: r.Width + 'px', height: r.Height + 'px' });
+const px = (e, r) => { Object.assign(e.style, { left: r.X + 'px', top: r.Y + 'px', width: r.Width + 'px', height: r.Height + 'px' }); return e; };
 
 export class PageView {
   /**
@@ -20,10 +21,10 @@ export class PageView {
    * display : image affichée (avec la colonne des lots tracée) ; zoom : fonction qui renvoie le zoom courant ;
    * lotFrame : vrai si la colonne des lots est tracée.
    */
-  constructor(page, image, { display, onFocus, onEdited, onTouch, onLocks, onLot, onLotRemove, onLotAdd, lotsActive, lotFrame, zoom }) {
+  constructor(page, image, { display, onFocus, onEdited, onTouch, onLocks, onLot, onLotRemove, onLotAdd, lotsActive, lotFrame, zoom, beforeEdit, beforeChange }) {
     this.page = page;
     this.image = image;
-    this.cb = { onFocus, onEdited, onTouch, onLocks, onLot, onLotRemove, onLotAdd, lotsActive, lotFrame, zoom };
+    this.cb = { onFocus, onEdited, onTouch, onLocks, onLot, onLotRemove, onLotAdd, lotsActive, lotFrame, zoom, beforeEdit, beforeChange };
     this.lotInputs = new Map();
     this.lineOf = new Map();
     this.inputs = new Map();
@@ -101,6 +102,16 @@ export class PageView {
     this.refreshGutter();
   }
 
+  /** Rangées au lot 0 : voilées, avec la mention « déplacée en fin d'inventaire » (fait à l'export). */
+  refreshZeroRows() {
+    for (const z of this.overlay.querySelectorAll('.zerorow')) z.remove();
+    for (const { table: t, row: r } of zeroRows(this.page)) {
+      const left = t.ColumnXs?.length ? t.ColumnXs[0] : t.Bounds.X, right = t.ColumnXs?.length ? t.ColumnXs[t.ColumnXs.length - 1] : Rect.right(t.Bounds);
+      const d = px(el('div', 'zerorow', this.overlay), Rect.fromEdges(left, t.RowYs[r], right, t.RowYs[r + 1]));
+      el('span', '', d).textContent = 'Lot 0 → fin d\'inventaire';
+    }
+  }
+
   /** Après un recalcul : met les nouveaux numéros en place sans fermer le clavier si on est en train de taper. */
   updateLots() {
     const labels = lotLabels(this.page);
@@ -120,6 +131,7 @@ export class PageView {
   }
 
   refreshGutter() {
+    this.refreshZeroRows();
     this.gutter.replaceChildren();
     const active = this.cb.lotsActive?.() ?? false;
     for (const t of this.page.Tables)
@@ -135,7 +147,7 @@ export class PageView {
           d.style.top = Rect.cy(b) - 12 + 'px';
         }
         if (!active) continue;
-        const has = (line.Lot ?? '').length > 0;
+        const has = hasLotCell(line);
         if (!has && !canAddLot(line)) continue;
         const btn = el('button', has ? 'gbtn trash' : 'gbtn add', this.gutter);
         btn.innerHTML = `<svg><use href="#${has ? 'i-trash' : 'i-plus'}"/></svg>`;
@@ -212,7 +224,9 @@ export class PageView {
     input.autocomplete = 'off';
     input.setAttribute('autocorrect', 'off');
     input.setAttribute('autocapitalize', 'off');
-    input.spellcheck = false;
+    // Désignation : correcteur de l'appareil (fautes soulignées, propositions, outils d'écriture), sans correction automatique.
+    input.spellcheck = multi;
+    input.lang = 'fr';
     if (f.Column > 0 && (f.OriginalText.length === 0 || /\d/.test(f.OriginalText))) input.inputMode = 'decimal';
     input.style.textAlign = f.Align === 'Right' ? 'right' : f.Align === 'Center' ? 'center' : 'left';
     this.layout(input, f);
@@ -223,6 +237,7 @@ export class PageView {
     const remember = () => { this.selection = { f, start: input.selectionStart ?? 0, end: input.selectionEnd ?? 0 }; };
     for (const ev of ['select', 'keyup', 'pointerup', 'focus']) input.addEventListener(ev, remember);
     input.addEventListener('input', () => {
+      this.cb.beforeEdit?.(this, f);
       adjustStrikes(f, f.Text, input.value);
       f.Text = input.value;
       remember();
@@ -357,6 +372,7 @@ export class PageView {
       start = null;
       rubber?.remove();
       const zone = Rect.fromEdges(Math.min(a.x, p.x), Math.min(a.y, p.y), Math.max(a.x, p.x), Math.max(a.y, p.y));
+      this.cb.beforeChange?.();
       const changed = zone.Width < 8 && zone.Height < 8 ? removeLockZoneAt(this.page, p.x, p.y) : addLockZone(this.page, zone);
       if (changed) { this.refresh(); this.cb.onLocks?.(this); }
     };

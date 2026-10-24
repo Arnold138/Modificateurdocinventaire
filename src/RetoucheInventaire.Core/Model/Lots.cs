@@ -37,17 +37,39 @@ public static class Lots
 
     /// <summary>Ligne sans numéro à laquelle on peut en ajouter un (« + »).</summary>
     public static bool CanAdd(PrintedLine line) =>
-        line.Lot.Length == 0 && !line.OutsideTable && line.Kind is not (LineKind.EnTete or LineKind.Ignoree) && line.FirstText.Length > 0;
+        !HasCell(line) && !line.OutsideTable && line.Kind is not (LineKind.EnTete or LineKind.Ignoree) && line.FirstText.Length > 0;
 
     /// <summary>Lot 0 : objet absent ou barré (regroupé à la fin du .txt).</summary>
     public static bool IsZero(PrintedLine line) => int.TryParse(line.Lot.Trim(), out var v) && v == 0;
 
+    /// <summary>La colonne des lots existe (au moins une case, même vide).</summary>
     public static bool IsActive(InventoryProject project) =>
-        project.Pages.SelectMany(p => p.AllLines()).Any(l => l.Lot.Length > 0);
+        project.Pages.SelectMany(p => p.AllLines()).Any(l => l.Lot.Length > 0 || l.LotSlot);
+
+    /// <summary>Case de lot à afficher sur cette ligne (numérotée ou vide).</summary>
+    public static bool HasCell(PrintedLine l) => l.Lot.Length > 0 || l.LotSlot;
+
+    /// <summary>
+    /// « Colonne vide » : une case par objet, toutes vides ; on les remplit soi-même, rien ne se remplit tout seul.
+    /// </summary>
+    public static void CreateEmpty(InventoryProject project)
+    {
+        Clear(project);
+        project.LotsByHand = true;
+        foreach (var (_, _, line) in ObjectLines(project).ToList()) line.LotSlot = true;
+    }
+
+    /// <summary>« Synchroniser automatiquement » : le logiciel remplit toutes les cases (les numéros tapés restent des repères).</summary>
+    public static void FillAutomatically(InventoryProject project)
+    {
+        project.LotsByHand = false;
+        Resync(project);
+    }
 
     /// <summary>Numérote tous les objets à partir de <paramref name="start"/> (les lignes retirées à la poubelle le restent).</summary>
     public static void Number(InventoryProject project, int start = 1)
     {
+        project.LotsByHand = false;
         foreach (var l in project.Pages.SelectMany(p => p.AllLines())) { l.Lot = ""; l.LotManual = false; }
         var first = ObjectLines(project).FirstOrDefault();
         if (first.Line is null) return;
@@ -58,7 +80,8 @@ public static class Lots
 
     public static void Clear(InventoryProject project)
     {
-        foreach (var l in project.Pages.SelectMany(p => p.AllLines())) { l.Lot = ""; l.LotManual = false; }
+        foreach (var l in project.Pages.SelectMany(p => p.AllLines())) { l.Lot = ""; l.LotManual = false; l.LotSlot = false; }
+        project.LotsByHand = false;
     }
 
     /// <summary>Numéro tapé à la main sur une ligne : la suite se recale automatiquement.</summary>
@@ -86,8 +109,7 @@ public static class Lots
         line.ForceLot = true;
         line.Lot = "";
         line.LotManual = false;
-        bool active = IsActive(project);
-        if (!active) { line.Lot = "1"; }
+        if (!IsActive(project)) line.LotSlot = true;
         Resync(project);
     }
 
@@ -99,7 +121,12 @@ public static class Lots
     {
         if (!IsActive(project)) return;
         var objects = ObjectLines(project).Select(o => o.Line).ToHashSet();
-        foreach (var l in project.Pages.SelectMany(p => p.AllLines()).Where(l => !objects.Contains(l))) { l.Lot = ""; l.LotManual = false; }
+        foreach (var l in project.Pages.SelectMany(p => p.AllLines()))
+        {
+            l.LotSlot = objects.Contains(l);
+            if (!l.LotSlot) { l.Lot = ""; l.LotManual = false; }
+        }
+        if (project.LotsByHand) return; // remplis à la main : on ne touche à aucun numéro
         int next = 1;
         foreach (var (_, _, line) in ObjectLines(project))
         {
@@ -129,7 +156,7 @@ public static class Lots
         double fs = sizes.Count > 0 ? sizes[sizes.Count / 2] : 16;
         int digits = Math.Max(3, page.AllLines().Select(l => l.Lot.Length).DefaultIfEmpty(0).Max());
         double desired = Math.Floor(fs * (0.55 * digits + 0.9) + 0.5);
-        var lefts = page.Tables.Where(t => t.Rows.SelectMany(r => r.Lines).Any(l => l.Lot.Length > 0)).Select(TableLeft).ToList();
+        var lefts = page.Tables.Where(t => t.Rows.SelectMany(r => r.Lines).Any(HasCell)).Select(TableLeft).ToList();
         double avail = lefts.Count > 0 ? lefts.Min() - 6 : desired;
         return Math.Max(8, Math.Min(desired, avail));
     }
@@ -149,7 +176,7 @@ public static class Lots
     {
         double w = ColumnWidth(page);
         return page.Tables.SelectMany(t => t.Rows.SelectMany(r => r.Lines)
-                .Where(l => l.Lot.Length > 0)
+                .Where(HasCell)
                 .Select(l => (l, NumberBox(t, l, w))))
             .ToList();
     }

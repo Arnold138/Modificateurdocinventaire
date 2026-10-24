@@ -70,6 +70,8 @@ public sealed class PrintedLine
     public string Lot { get; set; } = "";
     /// <summary>Numéro saisi à la main : la numérotation automatique repart de lui.</summary>
     public bool LotManual { get; set; }
+    /// <summary>Case de lot affichée sur cette ligne (objet), même vide : la colonne existe.</summary>
+    public bool LotSlot { get; set; }
     /// <summary>Numéro retiré par l'utilisateur (poubelle) : cette ligne n'est pas un objet.</summary>
     public bool NoLot { get; set; }
     /// <summary>Numéro ajouté par l'utilisateur (« + ») sur une ligne que la règle n'avait pas retenue.</summary>
@@ -138,6 +140,8 @@ public sealed class InventoryProject
     public string Name { get; set; } = "Inventaire";
     /// <summary>Numéros de lot dans une colonne tracée comme le tableau (traits prolongés), sinon numéros seuls.</summary>
     public bool LotFrame { get; set; } = true;
+    /// <summary>Lots remplis à la main : rien ne se remplit tout seul (sauf « Synchroniser automatiquement »).</summary>
+    public bool LotsByHand { get; set; }
     public List<Page> Pages { get; set; } = [];
 
     public IEnumerable<Field> AllFields() => Pages.SelectMany(p => p.AllFields());
