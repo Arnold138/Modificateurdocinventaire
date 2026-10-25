@@ -75,6 +75,9 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 .grip svg { width: 22px; height: 22px; fill: currentColor; stroke: none; }
 .grip:hover, .grip:active { background: var(--accent-soft); color: var(--accent); }
 .grip.line { background: #fff; border-style: dashed; }
+/* Mode « Modifier » : la poubelle est masquée, la poignée prend sa place, plus large (facile à prendre au doigt). */
+.gutter.moving .grip { right: 6px; width: 72px; }
+.gutter.moving .grip.line { width: 56px; }
 .dragghost { position: absolute; background: rgba(10,102,194,.10); outline: 2px solid var(--accent); pointer-events: none; z-index: 4; }
 .dropline { position: absolute; height: 4px; background: var(--accent); border-radius: 2px; pointer-events: none; z-index: 4; }
 .gbtn { position: absolute; right: 6px; width: 42px; border-radius: 10px; display: grid; place-items: center; }
@@ -220,3 +223,5 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 .choice select { font-size: 14px; padding: 4px 6px; border-radius: 8px; border: 1px solid var(--line); margin: 2px 0; max-width: 100%; }
 .help { padding-left: 20px; }
 .help li { margin: 0 0 10px; line-height: 1.4; }
+#btnMove svg { fill: currentColor; stroke: none; }
+#btnMove[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: transparent; }

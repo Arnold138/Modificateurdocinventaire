@@ -115,7 +115,7 @@ Application web installable (« Sur l'écran d'accueil »), sans étape de compi
 ## Numéros de lot (`Model/Lots.cs`, `web/core/lots.js`)
 
 - Objet = première ligne d'article de chaque rangée (celle qui porte des valeurs si plusieurs). Titres, totaux, en-têtes, récapitulatif (« II - STOCK »), lignes ignorées : pas de numéro. Ordre = ordre d'affichage (`RowOrder`).
-- `Lot`, `LotManual`, `LotSlot` (case affichée) sur la ligne. `CreateEmpty` (bouton Lots) : une case vide par objet. `Set` ne change que la case tapée ; `Resync` ne fait que placer les cases. `FillAutomatically` (« Synchroniser ») garde les numéros tapés et numérote les autres à la suite ; `Number` renumérote tout (sauf les 0).
+- `Lot`, `LotManual`, `LotSlot` (case affichée) sur la ligne. `CreateEmpty` (bouton Lots) : une case vide par objet. `Set` ne change que la case tapée ; `Resync` ne fait que placer les cases. `FillAutomatically` (« Synchroniser », toutes les pages ou les pages données) ne remplit que les cases vides : numéro du lot précédent + 1, et décale d'un cran la suite contiguë qui commençait à ce numéro ; rien d'autre ne change ; `Number` renumérote tout (sauf les 0).
 - Lot 0 → objet absent : ne consomme pas de numéro ; voir « Mise en page » ci-dessous ; le .txt le place après la dernière ligne d'objet numéroté.
 - Poubelle → `NoLot` (la ligne n'est plus un objet) ; « + » → `ForceLot` (objet en plus, même sur une ligne de suite).
 - Export .txt : 1re colonne « Lot » sur toutes les lignes quand des lots existent (« Lot » sur l'en-tête, vide sur titres/totaux).
@@ -130,6 +130,10 @@ Application web installable (« Sur l'écran d'accueil »), sans étape de compi
 - Lot 0 : l'objet, ses lignes de suite et, s'il les reprend (comme dans le .txt), les valeurs de son titre. Rangée entière si elle ne contient que lui ; sinon bande entre les interlignes. Retiré de sa page, recollé après la rangée du dernier objet numéroté : filet du haut et fond (interligne le plus propre, filets verticaux prolongés) pris dans cette rangée, contenu de chaque case recopié et recalé sur sa colonne (décalage selon l'alignement), case du lot comprise ; valeurs du titre posées à la hauteur de l'objet et effacées (papier) sous le titre.
 - `ViewOf` : où afficher chaque case (décalage par case, découpe à sa colonne), cases de lot, rangées à l'écran (poignées). L'écran pose les champs à ces places ; l'export dessine les corrections sur chaque page d'origine puis recompose.
 - Calcul en entiers : pages recomposées identiques à l'octet près sur Windows et iPhone/iPad (vérifié à chaque compilation, avec le .txt et les totaux).
+
+## Export PDF (`Export/PdfWriter.cs`, `web/core/pdf.js`)
+
+- Une page PDF par page exportée : le JPEG de l'export JPEG mis tel quel (DCTDecode), largeur A4 (595 pt), hauteur au prorata. Sans bibliothèque ; même fichier à l'octet près sur Windows et iPad (vérifié à chaque compilation).
 
 ## Totaux (`Model/Totals.cs`, `web/core/totals.js`)
 

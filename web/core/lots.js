@@ -124,17 +124,33 @@ export function createEmptyLots(project) {
 }
 
 /**
- * « Synchroniser automatiquement » : le logiciel remplit toutes les cases d'un coup, dans l'ordre d'affichage.
- * Les numéros tapés à la main restent et la suite repart d'eux (80 → 81, 82…) ; 0 ne prend pas de numéro.
+ * « Synchroniser » : remplit les cases vides, sans toucher aux numéros déjà là (tapés ou remplis avant), dans l'ordre affiché.
+ * Une case vide prend le numéro qui suit le lot précédent (1 au début). Si les lots suivants se suivaient à partir de ce numéro
+ * (6, 7, 8…), ils sont décalés d'un cran (7, 8, 9…) pour éviter un doublon ; un ordre fait à la main (30, 29, 6…) n'est pas touché.
+ * `pages` : seulement les cases vides de ces pages (les numéros des autres pages servent de repère).
  */
-export function fillLotsAutomatically(project) {
+export function fillLotsAutomatically(project, pages = null) {
   resyncLots(project);
-  let next = 1;
-  for (const { line } of objectLines(project)) {
-    const v = /^[+-]?\d+$/.test(line.Lot ?? '') ? parseInt(line.Lot, 10) : NaN;
-    if (line.LotManual && !Number.isNaN(v)) { if (v !== 0) next = v + 1; }
-    else if (line.LotManual && (line.Lot ?? '').length > 0) { /* « 12 bis » : gardé tel quel */ }
-    else { line.Lot = String(next); line.LotManual = false; next++; }
+  const list = [...objectLines(project)];
+  const num = (l) => (/^[+-]?\d+$/.test((l.Lot ?? '').trim()) ? parseInt(l.Lot, 10) : NaN);
+  let prev = 0;
+  for (let i = 0; i < list.length; i++) {
+    const { line, page } = list[i];
+    if ((line.Lot ?? '').length > 0) { const v = num(line); if (!Number.isNaN(v) && v !== 0) prev = v; continue; }
+    if (pages && !pages.includes(page)) continue;
+    const v = prev + 1;
+    line.Lot = String(v);
+    line.LotManual = false;
+    // Décaler la suite : les lots qui se suivaient à partir de v prennent un cran de plus (les 0 et les cases vides sont passés).
+    let k = v;
+    for (let j = i + 1; j < list.length; j++) {
+      const o = list[j].line;
+      if ((o.Lot ?? '').length === 0 || isZeroLot(o)) continue;
+      if (num(o) !== k) break;
+      o.Lot = String(k + 1);
+      k++;
+    }
+    prev = v;
   }
 }
 

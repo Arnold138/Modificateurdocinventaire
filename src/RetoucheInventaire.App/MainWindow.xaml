@@ -89,6 +89,7 @@
                 <ColumnDefinition Width="*" MaxWidth="170" />
                 <ColumnDefinition Width="*" MaxWidth="170" />
                 <ColumnDefinition Width="*" MaxWidth="170" />
+                <ColumnDefinition Width="*" MaxWidth="170" />
             </Grid.ColumnDefinitions>
             <Button x:Name="PhotoButton" Grid.Column="0" Style="{StaticResource AccentTabButton}" Click="Photo_Click"
                     ToolTipService.ToolTip="Photographier un inventaire avec la caméra de la tablette">
@@ -135,7 +136,7 @@
                         <MenuFlyoutItem Text="Liste des pages" Click="PageLabel_Click">
                             <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8FD;" /></MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
-                        <MenuFlyoutItem x:Name="SyncItem" Text="Synchroniser les lots" Click="SyncLots_Click">
+                        <MenuFlyoutItem x:Name="SyncItem" Text="Synchroniser les lots…" Click="SyncLots_Click">
                             <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE895;" /></MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
                         <MenuFlyoutItem x:Name="RemovePageItem" Text="Retirer cette page" Click="RemovePage_Click">
@@ -148,22 +149,29 @@
                     </MenuFlyout>
                 </Button.Flyout>
             </Button>
-            <Button x:Name="CropButton" Grid.Column="4" Style="{StaticResource TabButton}" Click="Crop_Click"
+            <ToggleButton x:Name="MoveToggle" Grid.Column="4" Style="{StaticResource TabToggle}" Checked="MoveToggle_Changed" Unchecked="MoveToggle_Changed"
+                          ToolTipService.ToolTip="Modifier : poignées ⋮⋮ sur toutes les lignes pour les déplacer en les glissant">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon Glyph="&#xE76F;" FontSize="20" />
+                    <TextBlock Text="Modifier" VerticalAlignment="Center" />
+                </StackPanel>
+            </ToggleButton>
+            <Button x:Name="CropButton" Grid.Column="5" Style="{StaticResource TabButton}" Click="Crop_Click"
                     ToolTipService.ToolTip="Recadrer la page affichée">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <FontIcon Glyph="&#xE7A8;" FontSize="20" />
                     <TextBlock Text="Recadrer" VerticalAlignment="Center" />
                 </StackPanel>
             </Button>
-            <ToggleButton x:Name="LockToggle" Grid.Column="5" Style="{StaticResource TabToggle}" Checked="LockToggle_Changed" Unchecked="LockToggle_Changed"
+            <ToggleButton x:Name="LockToggle" Grid.Column="6" Style="{StaticResource TabToggle}" Checked="LockToggle_Changed" Unchecked="LockToggle_Changed"
                           ToolTipService.ToolTip="Tracer une zone (signature, tampon) qui ne pourra pas être modifiée">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <FontIcon Glyph="&#xE72E;" FontSize="20" />
                     <TextBlock Text="Verrouiller" VerticalAlignment="Center" />
                 </StackPanel>
             </ToggleButton>
-            <Button x:Name="ExportButton" Grid.Column="6" Style="{StaticResource AccentTabButton}"
-                    ToolTipService.ToolTip="Images JPEG ou fichier texte">
+            <Button x:Name="ExportButton" Grid.Column="7" Style="{StaticResource AccentTabButton}"
+                    ToolTipService.ToolTip="Images JPEG, document PDF ou fichier texte">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <FontIcon Glyph="&#xE72D;" FontSize="20" />
                     <TextBlock Text="Exporter" VerticalAlignment="Center" />
@@ -175,6 +183,12 @@
                         </MenuFlyoutItem>
                         <MenuFlyoutItem x:Name="ExportOneJpegItem" Text="Image de cette page seulement" Click="ExportOneJpeg_Click">
                             <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE91B;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem x:Name="ExportPdfItem" Text="Document PDF" Click="ExportPdf_Click">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEA90;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem x:Name="ExportOnePdfItem" Text="PDF de cette page seulement" Click="ExportOnePdf_Click">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEA90;" /></MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
                         <MenuFlyoutItem x:Name="ExportTxtItem" Text="Fichier texte (.txt)" Click="ExportTxt_Click">
                             <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>

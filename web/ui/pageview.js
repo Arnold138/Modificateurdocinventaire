@@ -141,6 +141,13 @@ export class PageView {
 
   setLockMode(on) { this.lockpad.classList.toggle('active', on); }
 
+  /** Mode « Modifier » : poignées ⋮⋮ affichées tout de suite ; la poubelle et le « + » des lots sont masqués pendant ce temps. */
+  setMoveMode(on) {
+    this.moveMode = !!on;
+    this.gutter.classList.toggle('moving', this.moveMode);
+    this.refreshGutter();
+  }
+
   /** Textes changés ailleurs (totaux recalculés) : les cases affichées suivent. */
   syncFields(fields) {
     for (const f of fields) {
@@ -236,7 +243,7 @@ export class PageView {
 
   refreshGutter() {
     this.gutter.replaceChildren();
-    const active = this.cb.lotsActive?.() ?? false;
+    const active = (this.cb.lotsActive?.() ?? false) && !this.moveMode;
     for (const entry of this.view.lines) {
       const { line } = entry;
       if (line.OutsideTable || entry.carriedOnly || line.Cells.length === 0) continue;
@@ -266,7 +273,7 @@ export class PageView {
   // ---------- Déplacer une rangée (poignée ⋮⋮ à gauche) ----------
 
   drawHandles() {
-    if (!this.cb.onMoveRow) return;
+    if (!this.moveMode || !this.cb.onMoveRow) return;
     for (const vt of this.view.tables) {
       if (vt.strips.length < 2) continue;
       for (const s of vt.strips) {

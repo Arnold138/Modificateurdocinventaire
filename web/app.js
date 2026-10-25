@@ -6,6 +6,7 @@ import { normalize, render, rotate90 } from './core/imaging.js';
 import { detectGrids } from './core/rules.js';
 import { prepare, mapBack, emptyFieldsWithInk, prepareCell, applyCellWords } from './core/ocrprep.js';
 import { newPage, newProject, analyze, reclassify, allFields, isModified, cycleKind, kindLabel, findLine, firstText, upgradePage, carryOver, allLines } from './core/model.js';
+import { buildPdf } from './core/pdf.js';
 import { buildTxt, txtBlob, composeIntoSource, outputName } from './core/exports.js';
 import { decodeText, parseDelimited, readXlsx, buildDataPage } from './core/importers.js';
 import { packProject, unpackProject, EXTENSION } from './core/store.js';
@@ -47,6 +48,7 @@ const state = {
   undo: [],             // états précédents du projet (bouton ↶)
   editSession: null,    // case en cours de frappe (un seul retour en arrière pour toute la saisie)
   lock: false,
+  move: false, // « Modifier » : poignées de déplacement affichées
   zoom: 1,
 };
 
@@ -79,6 +81,7 @@ function updateButtons() {
   $('btnPhoto').disabled = $('btnImport').disabled = $('btnProjects').disabled = b;
   $('btnCrop').disabled = b || page?.Source !== 'Image' || !!page?.EndLots;
   $('btnLock').disabled = b || !page || !!page?.EndLots;
+  $('btnMove').disabled = b || !page || !!page?.EndLots;
   $('btnLots').disabled = b || n === 0;
   $('btnEdit').disabled = b || n === 0;
   $('btnUndo').disabled = b || state.undo.length === 0;
@@ -348,8 +351,9 @@ async function showPage(n, { flat = null, fit = true, keepScroll = false } = {})
   totals.onclick = () => run(() => totalsMenu(page));
   const sync = document.createElement('button');
   sync.className = 'sync';
-  sync.innerHTML = '<svg><use href="#i-sync"/></svg>Synchroniser automatiquement';
-  sync.onclick = () => { pushUndo(); syncLots(); };
+  sync.innerHTML = '<svg><use href="#i-sync"/></svg>Synchroniser…';
+  sync.title = 'Remplir les cases vides de cette page ou de toutes les pages (les numéros déjà là ne bougent pas)';
+  sync.onclick = () => run(syncDialog);
   if (page.EndLots) head.append(title, sync);
   else head.append(title, sync, totals, remove);
 
@@ -400,6 +404,7 @@ async function showPage(n, { flat = null, fit = true, keepScroll = false } = {})
   });
   view.baseFlat = state.flats.get(page) ?? null;
   view.setLockMode(state.lock);
+  view.setMoveMode(state.move);
   state.view = view;
   $('pages').append(head, view.row);
   if (scroll) { applyZoom(state.zoom); vp.scrollLeft = scroll.x; vp.scrollTop = scroll.y; }
@@ -467,6 +472,9 @@ function lineChoices(f) {
     items.push({ act: 'splitBelow', icon: 'i-split', label: 'Séparer en dessous (tracer un trait)', hint: 'Un trait sous cette ligne : ce qui suit devient une rangée à part.' });
   if (hasLotCell(line) && !isZeroLot(line))
     items.push({ act: 'end', icon: 'i-addbelow', label: 'Mettre à la fin (lot 0)', hint: 'Objet absent : sa ligne part à la fin, ce qui suit remonte.' });
+  const at0 = locate(page, line);
+  if (lotsActive(state.project) && at0 && !at0.table.LotsOff && !hasLotCell(line) && firstText(line))
+    items.push({ act: 'addLot', icon: 'i-plus', label: 'Ajouter une case de lot', hint: 'La case manque sur cet objet : elle apparaît vide (tapez le numéro ou « Synchroniser »).' });
   if (rowTrimOf(page, line))
     items.push({ act: 'trim', icon: 'i-merge', label: 'Réduire la rangée (enlever l\'espace vide)', hint: 'La rangée prend la hauteur des autres ; ce qui suit remonte.' });
   else if (trimsOf(page, line).length)
@@ -517,6 +525,14 @@ async function lineAction(item, f) {
   const { page, line } = hit;
   const name = short(firstText(line));
   if (item.act === 'end') return applyLot(state.view, line, '0');
+  if (item.act === 'addLot') {
+    pushUndo();
+    addLot(state.project, line);
+    replan(); recomputeAll();
+    await refreshView();
+    status(`Case de lot ajoutée sur « ${name} » : tapez le numéro, ou « Synchroniser… » (les autres numéros ne bougent pas).`);
+    return scheduleSave();
+  }
   if (item.act === 'trim' || item.act === 'untrim') {
     pushUndo();
     if (item.act === 'trim') trimRow(page, line); else untrimRow(page, line);
@@ -802,13 +818,38 @@ async function totalsMenu(page) {
   scheduleSave();
 }
 
-/** « Synchroniser automatiquement » : le logiciel remplit toutes les cases (les numéros tapés restent des repères). */
-function syncLots() {
-  fillLotsAutomatically(state.project);
-  recomputeAll();
+/** « Synchroniser » : cette page ou toutes les pages. */
+async function syncDialog() {
+  const page = currentPage();
+  const choice = await dialog('Synchroniser les lots', `<p>Remplit les <b>cases vides</b>. Les numéros déjà là <b>ne bougent pas</b> : une case vide prend le numéro qui suit et décale seulement les lots qui la suivent directement (6, 7, 8 → 7, 8, 9). Un ordre fait à la main (30, 29, 6…) est gardé.</p>
+    <p class="muted">Pour tout renuméroter dans l'ordre affiché : Lots › Renuméroter tout.</p>`, [
+    ...(page && !page.EndLots ? [{ label: `Cette page (page ${state.index + 1})`, value: 'page', className: 'accent' }] : []),
+    { label: 'Toutes les pages', value: 'all' },
+    { label: 'Annuler', value: null },
+  ]);
+  if (!choice) return;
+  pushUndo();
+  syncLots(choice === 'page' ? [page] : null);
+}
+
+/** Remplit les cases vides (pages choisies, ou toutes) sans toucher aux numéros déjà là ; dit ce qui a changé. */
+function syncLots(only = null) {
+  const before = new Map([...objectLines(state.project)].map((o) => [o.line, o.line.Lot ?? '']));
+  fillLotsAutomatically(state.project, only);
+  replan(); recomputeAll();
   refreshView();
-  const objs = [...objectLines(state.project)].filter((o) => !isZeroLot(o.line));
-  status(objs.length ? `Lots synchronisés : ${objs.length} objets, de ${objs[0].line.Lot} à ${objs[objs.length - 1].line.Lot}.` : 'Aucun objet à numéroter.');
+  const objs = [...objectLines(state.project)];
+  const filled = objs.filter((o) => !(before.get(o.line) ?? '') && o.line.Lot).length;
+  const shifted = objs.filter((o) => (before.get(o.line) ?? '') && before.get(o.line) !== o.line.Lot).length;
+  const where = only ? ` sur la page ${only.map((p) => pages().indexOf(p) + 1).join(', ')}` : '';
+  // Numéros en double (ex. après un ordre fait à la main 30, 29 puis une case vide → 30) : signalés, pas corrigés en douce.
+  const seen = new Map();
+  for (const o of objs) if (o.line.Lot && !isZeroLot(o.line)) seen.set(o.line.Lot, (seen.get(o.line.Lot) ?? 0) + 1);
+  const dup = [...seen].filter(([, n]) => n > 1).map(([v]) => v);
+  const warn = dup.length ? ` Attention, numéro(s) en double : ${dup.slice(0, 6).join(', ')}${dup.length > 6 ? '…' : ''} (touchez la case pour corriger).` : '';
+  status((!objs.length ? 'Aucun objet à numéroter.'
+    : filled === 0 ? `Rien à remplir${where} : toutes les cases ont un numéro (rien n'a bougé).`
+      : `${filled} case(s) remplie(s)${where}${shifted ? `, ${shifted} lot(s) suivant(s) décalé(s) d'un cran` : ''} ; les autres numéros n'ont pas bougé. ↶ pour annuler.`) + warn);
   scheduleSave();
 }
 
@@ -1144,7 +1185,11 @@ async function editedOf(page) {
   return base ? renderEdits(page, stretch(base, page), lotFrameEnabled(state.project)) : null;
 }
 
-async function exportJpeg(only = null) {
+/**
+ * Pages exportées en JPEG (photos et PDF), totaux recalculés avant : chaque page telle qu'à l'écran (corrections, lots,
+ * lots 0 recollés, pages « lots de fin », lignes ajoutées). Sert à l'export JPEG et à l'export PDF.
+ */
+async function renderPages(only = null) {
   const plan = replan();
   recomputeAll();
   const all = pages().map((page, k) => ({ page, k })).filter((x) => x.page.Source === 'Image');
@@ -1173,7 +1218,7 @@ async function exportJpeg(only = null) {
     const arranged = pageArranged(state.project, plan, k);
     if (arranged) final = composePage(state.project, plan, k, edited, crops);
     // Page qui garde sa forme : la photo d'origine, inchangée sauf dans les cases modifiées.
-    if (!arranged && totalExtra(page) === 0) {
+    if (!arranged && totalExtra(page) === 0 && !(page.Inserts ?? []).length) {
       const src = await orientedSource(page);
       if (!src) continue;
       final = composeIntoSource(src, page, edited, frame);
@@ -1184,8 +1229,29 @@ async function exportJpeg(only = null) {
     files.push(new File([blob], outputName(page), { type: 'image/jpeg' }));
   }
   progress(null);
+  return { plan, files };
+}
+
+/** Phrase sur les lots 0 recollés (pour les messages d'export). */
+const zeroNote = (plan) => (plan.moving.length > 0 ? ` ${plan.moving.length} lot(s) 0 placé(s) à la fin (page ${(plan.moving[0].endPage ?? plan.dest.p) + 1}).` : '');
+
+/** Export PDF : tout le document (ou la page affichée) en un fichier, une page PDF par page. */
+async function exportPdf(only = null) {
+  const { plan, files } = await renderPages(only);
+  if (!files.length) return status('Pas de photo ni de PDF à exporter (les TXT, CSV et XLSX s\'exportent en .txt).');
+  status('Création du PDF…'); await tick();
+  const jpegs = await Promise.all(files.map(async (f) => new Uint8Array(await f.arrayBuffer())));
+  const name = `${state.project.Name}${only ? ` - page ${pages().indexOf(only) + 1}` : ''} - modifié.pdf`;
+  const pdf = new File([buildPdf(jpegs, state.project.Name)], name.replace(/[\\/:*?"<>|]/g, '_'), { type: 'application/pdf' });
+  const skipped = only ? 0 : pages().filter((p) => p.Source !== 'Image').length;
+  status(`PDF prêt : ${files.length} page(s).`);
+  await deliver([pdf], 'PDF prêt', `<p>${files.length} page(s), chacune telle qu'à l'écran (corrections${lotsActive(state.project) ? ', numéros de lot' : ''}, totaux recalculés).${zeroNote(plan)}${skipped ? ` ${skipped} page(s) TXT/CSV/XLSX non comprise(s) (elles s'exportent en .txt).` : ''}</p>`);
+}
+
+async function exportJpeg(only = null) {
+  const { plan, files } = await renderPages(only);
   status(`${files.length} image(s) prête(s).`);
-  const zero = plan.moving.length > 0 ? ` ${plan.moving.length} lot(s) 0 placé(s) à la fin (page ${(plan.moving[0].endPage ?? plan.dest.p) + 1}).` : '';
+  const zero = zeroNote(plan);
   await deliver(files, files.length > 1 ? 'Images prêtes' : 'Image prête', "<p>Chaque photo d'origine, inchangée sauf dans les cases modifiées" + (lotsActive(state.project) ? ' et la colonne des numéros de lot' : '') + '.' + zero + '</p>');
 }
 
@@ -1196,11 +1262,15 @@ async function exportDialog() {
   const choice = await dialog('Exporter', '<p>Choisissez ce que vous voulez obtenir.</p>', [
     ...(images ? [{ label: images > 1 ? `Toutes les images JPEG (${images})` : 'Image JPEG', value: 'all', className: 'accent' }] : []),
     ...(images > 1 && page?.Source === 'Image' ? [{ label: `Image de la page ${state.index + 1} seulement`, value: 'one' }] : []),
+    ...(images ? [{ label: images > 1 ? `Document PDF (${images} pages)` : 'Document PDF', value: 'pdf', className: 'accent' }] : []),
+    ...(images > 1 && (page?.Source === 'Image' || page?.EndLots) ? [{ label: `PDF de la page ${state.index + 1} seulement`, value: 'pdfone' }] : []),
     { label: 'Fichier texte (.txt)', value: 'txt', className: images ? '' : 'accent' },
     { label: 'Annuler', value: null },
   ]);
   if (choice === 'all') await exportJpeg();
   else if (choice === 'one') await exportJpeg(page);
+  else if (choice === 'pdf') await exportPdf();
+  else if (choice === 'pdfone') await exportPdf(page);
   else if (choice === 'txt') await exportTxt();
 }
 
@@ -1251,12 +1321,13 @@ function lotsHelp() {
   return dialog('Numéros de lot : comment ça marche ?', `
     <ol class="help">
       <li><b>Choisir les pages.</b> Bouton <b>Lots</b> : cochez les pages (et tableaux) qui reçoivent des numéros, puis <b>OK</b>. Une page de garde, un récapitulatif ou une signature restent sans numéro. Pour changer : <b>Lots › Pages et tableaux…</b></li>
-      <li><b>Numéroter.</b> Touchez une case à gauche d'un objet et tapez son numéro : rien d'autre ne change. Ou <b>Synchroniser automatiquement</b> : toutes les cases se remplissent dans l'ordre, en repartant des numéros déjà tapés.</li>
+      <li><b>Numéroter.</b> Touchez une case à gauche d'un objet et tapez son numéro : rien d'autre ne change. Ou <b>Synchroniser…</b> (cette page ou toutes les pages) : les <b>cases vides</b> se remplissent ; les numéros déjà là ne bougent pas, une case vide prend le numéro qui suit et décale seulement les lots qui la suivent directement. Case qui manque sur un objet : clic droit › <b>Ajouter une case de lot</b>. Pour tout refaire dans l'ordre affiché : <b>Renuméroter tout</b>.</li>
       <li><b>Objet absent : à la fin.</b> Tapez <b>0</b> (ou clic droit › <b>Mettre à la fin</b>). La 1re fois, l'app demande où : <b>après le dernier lot</b>, ou sur une <b>page « Lots de fin »</b> placée où vous voulez (les pages suivantes sont renumérotées, une nouvelle page s'ajoute quand elle est pleine). Le message en bas dit exactement où la ligne est partie. Pour la remettre : retapez son numéro (ou clic droit › <b>Remettre à sa place</b>).</li>
       <li><b>Objet retiré de la vente.</b> Clic droit › <b>Supprimer cette ligne</b> : elle disparaît (page, fichier texte, totaux), ce qui suit remonte. Pour la retrouver : ↶, ou <b>Retirer… › Remettre les lignes supprimées</b>.</li>
       <li><b>Ajouter ou séparer.</b> Clic droit (ou bouton <b>Ligne</b>) : <b>ligne vide</b> au-dessus ou en dessous, <b>dupliquer</b>, <b>tracer un trait</b> au-dessus ou en dessous pour séparer un gros bloc. Une rangée trop haute (espace vide imprimé) est réduite à la hauteur des autres ; aussi au clic droit : <b>Réduire la rangée</b>.</li>
-      <li><b>Déplacer.</b> Glissez la poignée <b>⋮⋮</b> (à gauche de la poubelle) vers le haut ou le bas : une rangée, ou une ligne seule d'un bloc (poignée en pointillés), qui devient alors une rangée.</li>
+      <li><b>Déplacer.</b> Touchez <b>Modifier</b> en haut : les poignées <b>⋮⋮</b> apparaissent à gauche de chaque ligne (la poubelle se cache). Glissez-en une vers le haut ou le bas : une rangée, ou une ligne seule d'un bloc (poignée en pointillés), qui devient alors une rangée. Retouchez <b>Modifier</b> pour terminer.</li>
       <li><b>Totaux.</b> Ils suivent tout seuls. Bouton <b>Totaux</b> de la page : recalculer, ou <b>ajouter une ligne TOTAL</b> (lignes au-dessus, la page, des pages au choix ou tout le document ; en gras ou non).</li>
+      <li><b>Exporter.</b> Images JPEG, <b>document PDF</b> (tout le document ou la page affichée) ou fichier texte ; les totaux sont recalculés juste avant.</li>
       <li><b>Mise en page.</b> Cochez ou non la <b>loupe « Original »</b> au-dessus de la case et le <b>zoom automatique de l'iPad</b>.</li>
     </ol>
     <p class="muted">Rien ne change sans votre action. ↶ annule la dernière action (jusqu'à 30).</p>`, [{ label: 'Compris', className: 'accent' }]);
@@ -1284,11 +1355,11 @@ async function lotsDialog() {
   const html = `
     <p><b>${objects.length} objets</b> : ${filled} numéroté(s)${filled ? ` (de <b>${escapeHtml(first)}</b> à <b>${escapeHtml(last)}</b>)` : ''}${zeros ? `, ${zeros} au lot 0` : ''}, ${objects.length - filled - zeros} case(s) vide(s).</p>
     <p class="muted">Touchez une case sur la page pour taper un numéro : rien d'autre ne change. <b>0</b> = objet absent : sa ligne passe après le dernier lot ; retapez un numéro pour la remettre à sa place. 🗑 : ce n'est pas un objet. « + » : ajouter une case. ⋮⋮ : glisser pour déplacer une rangée.</p>
-    <p class="muted"><b>Synchroniser automatiquement</b> remplit toutes les cases d'un coup (les numéros tapés restent, la suite repart d'eux).</p>
+    <p class="muted"><b>Synchroniser…</b> remplit les cases vides (cette page ou toutes) sans toucher aux numéros déjà là. <b>Renuméroter tout</b> refait toute la numérotation dans l'ordre affiché.</p>
     <label class="switch"><input id="lotFrame" type="checkbox" ${lotFrameEnabled(state.project) ? 'checked' : ''}> Tracer la colonne dans le tableau (traits et fond comme le tableau imprimé)</label>
     <label>Renuméroter à partir de <input id="lotStart" type="number" inputmode="numeric" min="0" value="${/^\d+$/.test(first) ? first : 1}"></label>`;
   const shown = dialog('Numéros de lot', html, [
-    { label: 'Synchroniser automatiquement', value: 'sync', className: 'accent' },
+    { label: 'Synchroniser…', value: 'sync', className: 'accent' },
     { label: 'Pages et tableaux…', value: 'pages' },
     { label: 'Lots de fin (lot 0)…', value: 'end' },
     { label: 'Comment ça marche ?', value: 'help' },
@@ -1328,8 +1399,9 @@ async function lotsDialog() {
     const pagesOn = new Set([...objectLines(state.project)].map((o) => pages().indexOf(o.page) + 1));
     status(pagesOn.size ? `Lots sur ${pagesOn.size > 1 ? 'les pages' : 'la page'} ${[...pagesOn].join(', ')} (les numéros déjà tapés restent).` : 'Plus aucune page avec des lots.');
   } else if (choice === 'number') {
-    pushUndo();
     const start = parseInt($('lotStart')?.value ?? '1', 10);
+    if (!(await confirmDialog('Renuméroter tout ?', 'Tous les numéros (tapés ou synchronisés) sont refaits dans l\'ordre affiché, sauf les 0. Pour seulement remplir les cases vides : Synchroniser… (↶ pour revenir en arrière).', 'Renuméroter'))) return frameChanged && refreshView();
+    pushUndo();
     numberLots(state.project, Number.isFinite(start) ? start : 1);
     const objs = [...objectLines(state.project)].filter((o) => !isZeroLot(o.line));
     status(`Lots renumérotés de ${objs[0]?.line.Lot ?? ''} à ${objs[objs.length - 1]?.line.Lot ?? ''}.`);
@@ -1339,8 +1411,7 @@ async function lotsDialog() {
     emptyLots(state.project);
     status(`Cases vidées : ${objects.length} cases à remplir.`);
   } else if (choice === 'sync') {
-    pushUndo();
-    return syncLots();
+    return syncDialog();
   } else if (choice === 'clear') {
     if (!(await confirmDialog('Enlever la colonne des lots ?', 'Tous les numéros seront retirés (texte et images).', 'Enlever'))) return frameChanged && refreshView();
     pushUndo();
@@ -1370,7 +1441,7 @@ async function editDialog() {
   const choice = await shown;
   if (choice === 'rename') await renameProject();
   else if (choice === 'pages') await pagesDialog();
-  else if (choice === 'sync') { pushUndo(); syncLots(); }
+  else if (choice === 'sync') await syncDialog();
   else if (choice === 'remove') await removePage(page);
 }
 
@@ -1427,6 +1498,14 @@ function initButtons() {
     if (e.key === 'ArrowRight' || e.key === 'PageDown') goTo(state.index + 1);
   });
 
+  $('btnMove').onclick = () => {
+    state.move = !state.move;
+    $('btnMove').setAttribute('aria-pressed', String(state.move));
+    state.view?.setMoveMode(state.move);
+    status(state.move
+      ? 'Modifier : glissez une poignée ⋮⋮ vers le haut ou le bas pour déplacer la rangée (poignée en pointillés : une ligne seule d\'un bloc). Retouchez « Modifier » pour terminer.'
+      : 'Modifier terminé.');
+  };
   $('btnLock').onclick = () => {
     state.lock = !state.lock;
     $('btnLock').setAttribute('aria-pressed', String(state.lock));

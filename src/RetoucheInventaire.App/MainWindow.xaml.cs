@@ -385,9 +385,10 @@ public sealed partial class MainWindow : Window
         };
         var syncContent = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
         syncContent.Children.Add(new FontIcon { Glyph = "", FontSize = 15 });
-        syncContent.Children.Add(new TextBlock { Text = "Synchroniser automatiquement" });
+        syncContent.Children.Add(new TextBlock { Text = "Synchroniser…" });
+        ToolTipService.SetToolTip(sync, "Remplir les cases vides de cette page ou de toutes les pages (les numéros déjà là ne bougent pas)");
         sync.Content = syncContent;
-        sync.Click += (_, _) => { PushUndo(); SyncLots(); };
+        sync.Click += async (_, _) => await SyncDialogAsync();
         _syncButton = sync;
         var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Margin = new Thickness(PageView.GutterWidth, 0, 0, 0) };
         header.Children.Add(title);
@@ -443,6 +444,7 @@ public sealed partial class MainWindow : Window
         view.LineMoved += async (v, table, line, before) => await MoveLineAsync(v.Page, table, line, before);
         view.LineCommands = LineCommandsFor;
         view.SetLockMode(LockToggle.IsChecked == true);
+        view.SetMoveMode(MoveToggle.IsChecked == true);
         _view = view;
         PagesPanel.Children.Add(header);
         PagesPanel.Children.Add(view.Host);
@@ -492,26 +494,44 @@ public sealed partial class MainWindow : Window
 
     private Button? _syncButton;
 
-    /// <summary>« Synchroniser automatiquement » : le logiciel remplit toutes les cases (les numéros tapés restent des repères).</summary>
-    private void SyncLots()
+    /// <summary>« Synchroniser… » : cette page ou toutes les pages.</summary>
+    private async Task SyncDialogAsync()
     {
-        Lots.FillAutomatically(_project);
+        if (_busy || !Lots.IsActive(_project)) return;
+        var page = CurrentPage;
+        var options = new List<(string, string, bool)>();
+        if (page is { EndLots: false }) options.Add(($"Cette page (page {_index + 1})", "page", false));
+        options.Add(("Toutes les pages", "all", false));
+        var choice = await ChooseAsync("Synchroniser les lots",
+            "Remplit les cases vides. Les numéros déjà là ne bougent pas : une case vide prend le numéro qui suit et décale seulement les lots qui la suivent directement (6, 7, 8 → 7, 8, 9). Un ordre fait à la main (30, 29, 6…) est gardé. Pour tout renuméroter dans l'ordre affiché : Lots › Renuméroter tout.",
+            [.. options]);
+        if (choice is null) return;
+        PushUndo();
+        SyncLots(choice == "page" && page != null ? new List<ModelPage> { page } : null);
+    }
+
+    /// <summary>Remplit les cases vides (pages choisies, ou toutes) sans toucher aux numéros déjà là ; dit ce qui a changé.</summary>
+    private void SyncLots(List<ModelPage>? only = null)
+    {
+        var before = Lots.ObjectLines(_project).ToDictionary(o => o.Line, o => o.Line.Lot);
+        Lots.FillAutomatically(_project, only);
         Replan();
         RecomputeTotals();
         _ = RefreshViewAsync();
-        var objects = Lots.ObjectLines(_project).Where(o => !Lots.IsZero(o.Line)).ToList();
-        SetStatus(objects.Count > 0
-            ? $"Lots synchronisés : {objects.Count} objets, de {objects[0].Line.Lot} à {objects[^1].Line.Lot}."
-            : "Aucun objet à numéroter.");
+        var objs = Lots.ObjectLines(_project).ToList();
+        int filled = objs.Count(o => (before.GetValueOrDefault(o.Line) ?? "").Length == 0 && o.Line.Lot.Length > 0);
+        int shifted = objs.Count(o => (before.GetValueOrDefault(o.Line) ?? "").Length > 0 && before[o.Line] != o.Line.Lot);
+        string where = only != null ? $" sur la page {string.Join(", ", only.Select(p => _project.Pages.IndexOf(p) + 1))}" : "";
+        // Numéros en double (ex. après un ordre fait à la main 30, 29 puis une case vide → 30) : signalés, pas corrigés en douce.
+        var dup = objs.Where(o => o.Line.Lot.Length > 0 && !Lots.IsZero(o.Line)).GroupBy(o => o.Line.Lot).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+        string warn = dup.Count > 0 ? $" Attention, numéro(s) en double : {string.Join(", ", dup.Take(6))}{(dup.Count > 6 ? "…" : "")} (touchez la case pour corriger)." : "";
+        SetStatus((objs.Count == 0 ? "Aucun objet à numéroter."
+            : filled == 0 ? $"Rien à remplir{where} : toutes les cases ont un numéro (rien n'a bougé)."
+            : $"{filled} case(s) remplie(s){where}{(shifted > 0 ? $", {shifted} lot(s) suivant(s) décalé(s) d'un cran" : "")} ; les autres numéros n'ont pas bougé. ↶ pour annuler.") + warn);
         ScheduleAutosave();
     }
 
-    private void SyncLots_Click(object sender, RoutedEventArgs e)
-    {
-        if (_busy || !Lots.IsActive(_project)) return;
-        PushUndo();
-        SyncLots();
-    }
+    private async void SyncLots_Click(object sender, RoutedEventArgs e) => await SyncDialogAsync();
 
     private async void RemovePage_Click(object sender, RoutedEventArgs e)
     {
@@ -675,6 +695,9 @@ public sealed partial class MainWindow : Window
         if (Lots.HasCell(line) && !Lots.IsZero(line))
             list.Add(new("Mettre à la fin (lot 0)", "Objet absent : sa ligne part à la fin, ce qui suit remonte.", "\uE74B",
                 () => _ = LineActionAsync("end", 0, f)));
+        if (Lots.IsActive(_project) && Rows.Locate(page, line) is { } at0 && !at0.Table.LotsOff && !Lots.HasCell(line) && line.FirstText.Length > 0)
+            list.Add(new("Ajouter une case de lot", "La case manque sur cet objet : elle apparaît vide (tapez le numéro ou « Synchroniser »).", "\uE710",
+                () => _ = LineActionAsync("addLot", 0, f)));
         if (Rows.RowTrimOf(page, line) != null)
             list.Add(new("Réduire la rangée (enlever l'espace vide)", "La rangée prend la hauteur des autres ; ce qui suit remonte.", "\uE73F",
                 () => _ = LineActionAsync("trim", 0, f)));
@@ -723,6 +746,17 @@ public sealed partial class MainWindow : Window
         var (page, line) = hit;
         string name = Short(line.FirstText);
         if (act == "end") { if (_view != null) await ApplyLotAsync(_view, line, "0"); return; }
+        if (act == "addLot")
+        {
+            PushUndo();
+            Lots.Add(_project, line);
+            Replan();
+            RecomputeTotals();
+            await RefreshViewAsync();
+            SetStatus($"Case de lot ajoutée sur « {name} » : tapez le numéro, ou « Synchroniser… » (les autres numéros ne bougent pas).");
+            ScheduleAutosave();
+            return;
+        }
         if (act is "trim" or "untrim")
         {
             PushUndo();
@@ -1195,11 +1229,12 @@ public sealed partial class MainWindow : Window
         var steps = new (string Title, string Text)[]
         {
             ("Choisir les pages.", "Bouton Lots : cochez les pages (et tableaux) qui reçoivent des numéros, puis OK. Une page de garde, un récapitulatif ou une signature restent sans numéro. Pour changer : Lots › Pages et tableaux…"),
-            ("Numéroter.", "Touchez une case à gauche d'un objet et tapez son numéro : rien d'autre ne change. Ou « Synchroniser automatiquement » : toutes les cases se remplissent dans l'ordre, en repartant des numéros déjà tapés."),
+            ("Numéroter.", "Touchez une case à gauche d'un objet et tapez son numéro : rien d'autre ne change. Ou « Synchroniser… » (cette page ou toutes les pages) : les cases vides se remplissent ; les numéros déjà là ne bougent pas, une case vide prend le numéro qui suit et décale seulement les lots qui la suivent directement. Case qui manque sur un objet : clic droit › Ajouter une case de lot. Pour tout refaire dans l'ordre affiché : Renuméroter tout."),
             ("Objet absent : à la fin.", "Tapez 0 (ou clic droit › Mettre à la fin). La 1re fois, l'app demande où : après le dernier lot, ou sur une page « Lots de fin » placée où vous voulez (les pages suivantes sont renumérotées, une nouvelle page s'ajoute quand elle est pleine). Le message en bas dit exactement où la ligne est partie. Pour la remettre : retapez son numéro (ou clic droit › Remettre à sa place)."),
             ("Objet retiré de la vente.", "Clic droit › Supprimer cette ligne : elle disparaît (page, fichier texte, totaux), ce qui suit remonte. Pour la retrouver : ↶, ou Retirer… › Remettre les lignes supprimées."),
             ("Ajouter ou séparer.", "Clic droit (ou bouton Ligne) : ligne vide au-dessus ou en dessous, dupliquer, tracer un trait au-dessus ou en dessous pour séparer un gros bloc. Une rangée trop haute (espace vide imprimé) est réduite à la hauteur des autres ; aussi au clic droit : Réduire la rangée."),
-            ("Déplacer.", "Glissez la poignée ⋮⋮ (à gauche de la poubelle) vers le haut ou le bas : une rangée, ou une ligne seule d'un bloc (poignée blanche), qui devient alors une rangée."),
+            ("Déplacer.", "Touchez Modifier en haut : les poignées ⋮⋮ apparaissent à gauche de chaque ligne (la poubelle se cache). Glissez-en une vers le haut ou le bas : une rangée, ou une ligne seule d'un bloc (poignée blanche), qui devient alors une rangée. Retouchez Modifier pour terminer."),
+            ("Exporter.", "Images JPEG, document PDF (tout le document ou la page affichée) ou fichier texte ; les totaux sont recalculés juste avant."),
             ("Totaux.", "Ils suivent tout seuls. Bouton Totaux de la page : recalculer, ou ajouter une ligne TOTAL (lignes au-dessus, la page, des pages au choix ou tout le document ; en gras ou non)."),
             ("Mise en page.", "Cochez ou non la loupe « Original » au-dessus de la case."),
         };
@@ -1328,6 +1363,16 @@ public sealed partial class MainWindow : Window
         ScheduleAutosave();
     }
 
+    /// <summary>« Modifier » : poignées ⋮⋮ sur toutes les rangées (et sur chaque ligne d'un bloc), tout de suite ; la poubelle et le « + » s'effacent.</summary>
+    private void MoveToggle_Changed(object sender, RoutedEventArgs e)
+    {
+        bool on = MoveToggle.IsChecked == true;
+        _view?.SetMoveMode(on);
+        SetStatus(on
+            ? "Modifier : glissez une poignée ⋮⋮ vers le haut ou le bas pour déplacer la rangée (poignée blanche : une ligne seule d'un bloc). Retouchez « Modifier » pour terminer."
+            : "Modifier terminé.");
+    }
+
     private void LockToggle_Changed(object sender, RoutedEventArgs e)
     {
         bool on = LockToggle.IsChecked == true;
@@ -1451,7 +1496,7 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(new TextBlock
         {
             TextWrapping = TextWrapping.Wrap, Opacity = 0.7,
-            Text = "« Synchroniser automatiquement » remplit toutes les cases d'un coup (les numéros tapés restent, la suite repart d'eux).",
+            Text = "« Synchroniser… » remplit les cases vides (cette page ou toutes) sans toucher aux numéros déjà là. « Renuméroter tout » refait toute la numérotation dans l'ordre affiché.",
         });
         var frame = new ToggleSwitch
         {
@@ -1500,7 +1545,7 @@ public sealed partial class MainWindow : Window
         dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot, Title = "Numéros de lot", Content = new ScrollViewer { Content = panel },
-            PrimaryButtonText = "Synchroniser automatiquement", SecondaryButtonText = "Renuméroter tout",
+            PrimaryButtonText = "Synchroniser…", SecondaryButtonText = "Renuméroter tout",
             CloseButtonText = "Fermer", DefaultButton = ContentDialogButton.Primary,
         };
         var result = await dialog.ShowAsync();
@@ -1509,8 +1554,7 @@ public sealed partial class MainWindow : Window
         switch (choice)
         {
             case "sync":
-                PushUndo();
-                SyncLots();
+                await SyncDialogAsync();
                 return;
             case "help":
                 await LotsHelpAsync();
@@ -1546,6 +1590,7 @@ public sealed partial class MainWindow : Window
                 frameChanged = true;
                 break;
             case "number":
+                if (!await ConfirmAsync("Renuméroter tout ?", "Tous les numéros (tapés ou synchronisés) sont refaits dans l'ordre affiché, sauf les 0. Pour seulement remplir les cases vides : Synchroniser… (↶ pour revenir en arrière).", "Renuméroter")) break;
                 PushUndo();
                 Lots.Number(_project, double.IsNaN(start.Value) ? 1 : (int)Math.Round(start.Value));
                 var renumbered = Lots.ObjectLines(_project).Where(o => !Lots.IsZero(o.Line)).ToList();
@@ -1629,6 +1674,18 @@ public sealed partial class MainWindow : Window
         ExportAllJpegItem.Text = images > 1 ? $"Toutes les images JPEG ({images})" : "Image JPEG";
         ExportOneJpegItem.Visibility = images > 1 && CurrentPage?.Source == PageSource.Image ? Visibility.Visible : Visibility.Collapsed;
         ExportOneJpegItem.Text = $"Image de la page {_index + 1} seulement";
+        ExportPdfItem.Visibility = images > 0 ? Visibility.Visible : Visibility.Collapsed;
+        ExportPdfItem.Text = images > 1 ? $"Document PDF ({images} pages)" : "Document PDF";
+        ExportOnePdfItem.Visibility = images > 1 && CurrentPage?.Source == PageSource.Image ? Visibility.Visible : Visibility.Collapsed;
+        ExportOnePdfItem.Text = $"PDF de la page {_index + 1} seulement";
+    }
+
+    private async void ExportPdf_Click(object sender, RoutedEventArgs e) =>
+        await ExportJpegAsync(_project.Pages.Where(p => p.Source == PageSource.Image).ToList(), pdf: true);
+
+    private async void ExportOnePdf_Click(object sender, RoutedEventArgs e)
+    {
+        if (CurrentPage is { Source: PageSource.Image } page) await ExportJpegAsync([page], pdf: true);
     }
 
     private async void ExportTxt_Click(object sender, RoutedEventArgs e)
@@ -1657,14 +1714,36 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>Une image JPEG par photo ou page de PDF : l'original, avec seulement les cases modifiées et les lots.</summary>
-    private async Task ExportJpegAsync(List<ModelPage> targets)
+    /// <summary>
+    /// Export des pages (photos et PDF), totaux recalculés avant : chaque page telle qu'à l'écran (corrections, lots, lots 0,
+    /// pages « lots de fin », lignes ajoutées). <paramref name="pdf"/> : un seul fichier PDF (une page par page), sinon un JPEG par page.
+    /// </summary>
+    private async Task ExportJpegAsync(List<ModelPage> targets, bool pdf = false)
     {
-        if (targets.Count == 0) { SetStatus("Pas de photo ni de PDF à exporter en image (les TXT, CSV et XLSX s'exportent en .txt)."); return; }
-        var picker = new FolderPicker { SuggestedStartLocation = PickerLocationId.PicturesLibrary };
-        picker.FileTypeFilter.Add("*");
-        InitPicker(picker);
-        var folder = await picker.PickSingleFolderAsync();
-        if (folder is null) return;
+        if (targets.Count == 0) { SetStatus("Pas de photo ni de PDF à exporter (les TXT, CSV et XLSX s'exportent en .txt)."); return; }
+        StorageFolder? folder = null;
+        StorageFile? pdfFile = null;
+        if (pdf)
+        {
+            var save = new FileSavePicker
+            {
+                SuggestedStartLocation = PickerLocationId.DocumentsLibrary,
+                SuggestedFileName = _project.Name + (targets.Count == 1 && _project.Pages.Count(p => p.Source == PageSource.Image) > 1 ? $" - page {_project.Pages.IndexOf(targets[0]) + 1}" : "") + " - modifié",
+            };
+            save.FileTypeChoices.Add("Document PDF", new List<string> { ".pdf" });
+            InitPicker(save);
+            pdfFile = await save.PickSaveFileAsync();
+            if (pdfFile is null) return;
+        }
+        else
+        {
+            var picker = new FolderPicker { SuggestedStartLocation = PickerLocationId.PicturesLibrary };
+            picker.FileTypeFilter.Add("*");
+            InitPicker(picker);
+            folder = await picker.PickSingleFolderAsync();
+            if (folder is null) return;
+        }
+        var jpegs = new List<byte[]>();
 
         await RunBusyAsync(async () =>
         {
@@ -1704,16 +1783,27 @@ public sealed partial class MainWindow : Window
                 bool arranged = Arrangement.PageArranged(_project, plan, k);
                 if (arranged) final = await Task.Run(() => Arrangement.ComposePage(plan, k, edited, crops));
                 // Page qui garde sa forme : la photo d'origine, inchangée sauf dans les cases modifiées.
-                if (!arranged && PageLayout.TotalExtra(page) == 0)
+                if (!arranged && PageLayout.TotalExtra(page) == 0 && page.Inserts.Count == 0)
                 {
                     var source = await GetOrientedSourceAsync(page);
                     if (source is null) continue;
                     final = await Task.Run(() => ImageExporter.ComposeIntoSource(source, page, edited, frame));
                 }
-                await ImageExportService.SaveJpegAsync(final, System.IO.Path.Combine(folder.Path, ImageExportService.OutputName(page)));
+                if (pdf) jpegs.Add(await ImageExportService.EncodeJpegAsync(final));
+                else await ImageExportService.SaveJpegAsync(final, System.IO.Path.Combine(folder!.Path, ImageExportService.OutputName(page)));
                 done++;
             }
-            SetStatus($"{done} image(s) JPEG exportée(s) dans « {folder.Name} » (nom d'origine + « - modifié »)."
+            if (pdf)
+            {
+                SetStatus("Création du PDF…");
+                var bytes = await Task.Run(() => PdfWriter.Build(jpegs, _project.Name));
+                await FileIO.WriteBytesAsync(pdfFile!, bytes);
+            }
+            int skipped = pdf && targets.Count > 1 ? _project.Pages.Count(p => p.Source != PageSource.Image) : 0;
+            SetStatus((pdf
+                          ? $"PDF exporté : « {pdfFile!.Name} », {done} page(s), chacune telle qu'à l'écran (totaux recalculés)."
+                            + (skipped > 0 ? $" {skipped} page(s) TXT/CSV/XLSX non comprise(s) (elles s'exportent en .txt)." : "")
+                          : $"{done} image(s) JPEG exportée(s) dans « {folder!.Name} » (nom d'origine + « - modifié »).")
                       + (plan.Moving.Count > 0 && plan.Dest != null
                           ? $" {plan.Moving.Count} lot(s) 0 placé(s) {(_project.Pages[plan.Dest.P].EndLots ? "sur la page « Lots de fin »" : "après le dernier lot")} (page {plan.Dest.P + 1})." : ""));
         });
@@ -2041,6 +2131,7 @@ public sealed partial class MainWindow : Window
         PhotoButton.IsEnabled = ImportButton.IsEnabled = ProjectButton.IsEnabled = !_busy;
         CropButton.IsEnabled = !_busy && page?.Source == PageSource.Image && !page.EndLots;
         LockToggle.IsEnabled = !_busy && page != null && !page.EndLots;
+        MoveToggle.IsEnabled = !_busy && page != null && !page.EndLots;
         LotsButton.IsEnabled = ExportButton.IsEnabled = EditButton.IsEnabled = !_busy && n > 0;
         SyncItem.IsEnabled = Lots.IsActive(_project);
         RemovePageItem.IsEnabled = page != null;

@@ -148,21 +148,36 @@ public static class Lots
     }
 
     /// <summary>
-    /// « Synchroniser automatiquement » : remplit toutes les cases d'un coup, dans l'ordre d'affichage.
-    /// Les numéros tapés à la main restent et la suite repart d'eux ; 0 ne prend pas de numéro.
+    /// « Synchroniser » : remplit les cases vides, sans toucher aux numéros déjà là (tapés ou remplis avant), dans l'ordre affiché.
+    /// Une case vide prend le numéro qui suit le lot précédent (1 au début). Si les lots suivants se suivaient à partir de ce numéro
+    /// (6, 7, 8…), ils sont décalés d'un cran (7, 8, 9…) pour éviter un doublon ; un ordre fait à la main (30, 29, 6…) n'est pas touché.
+    /// <paramref name="pages"/> : seulement les cases vides de ces pages (les numéros des autres pages servent de repère).
     /// </summary>
-    public static void FillAutomatically(InventoryProject project)
+    public static void FillAutomatically(InventoryProject project, ICollection<Page>? pages = null)
     {
         Resync(project);
-        int next = 1;
-        foreach (var (_, _, _, line) in ObjectLines(project))
+        var list = ObjectLines(project).ToList();
+        static int? Num(PrintedLine l) => System.Text.RegularExpressions.Regex.IsMatch(l.Lot.Trim(), @"^[+-]?\d+$") ? int.Parse(l.Lot.Trim()) : null;
+        int prev = 0;
+        for (int i = 0; i < list.Count; i++)
         {
-            if (line.LotManual && int.TryParse(line.Lot, out var v))
+            var (page, _, _, line) = list[i];
+            if (line.Lot.Length > 0) { if (Num(line) is int v0 && v0 != 0) prev = v0; continue; }
+            if (pages != null && !pages.Contains(page)) continue;
+            int v = prev + 1;
+            line.Lot = v.ToString();
+            line.LotManual = false;
+            // Décaler la suite : les lots qui se suivaient à partir de v prennent un cran de plus (les 0 et les cases vides sont passés).
+            int k = v;
+            for (int j = i + 1; j < list.Count; j++)
             {
-                if (v != 0) next = v + 1;
+                var o = list[j].Line;
+                if (o.Lot.Length == 0 || IsZero(o)) continue;
+                if (Num(o) != k) break;
+                o.Lot = (k + 1).ToString();
+                k++;
             }
-            else if (line.LotManual && line.Lot.Length > 0) { /* « 12 bis » : gardé tel quel */ }
-            else { line.Lot = next.ToString(); line.LotManual = false; next++; }
+            prev = v;
         }
     }
 

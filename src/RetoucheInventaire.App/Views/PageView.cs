@@ -405,11 +405,23 @@ public sealed class PageView
         return b with { X = b.X + c.Dx, Y = b.Y + c.Dy };
     }
 
-    /// <summary>Colonne de gauche : poignées, type de ligne (T, Σ…), poubelle sur les lignes numérotées, « + » sur les autres.</summary>
+    /// <summary>Mode « Modifier » : poignées ⋮⋮ affichées (la poubelle et le « + » des lots sont masqués pendant ce temps).</summary>
+    public bool MoveMode { get; private set; }
+
+    public void SetMoveMode(bool on)
+    {
+        MoveMode = on;
+        RefreshGutter();
+    }
+
+    /// <summary>
+    /// Colonne de gauche : type de ligne (T, Σ…) ; hors « Modifier » : poubelle sur les lignes numérotées, « + » sur les autres ;
+    /// en « Modifier » : les poignées ⋮⋮ seules (rien d'autre à toucher à côté).
+    /// </summary>
     public void RefreshGutter()
     {
         _gutter.Children.Clear();
-        bool active = _lotsActive();
+        bool active = _lotsActive() && !MoveMode;
         foreach (var entry in _view.Lines)
         {
             var line = entry.Line;
@@ -467,7 +479,7 @@ public sealed class PageView
 
     private void DrawGrips()
     {
-        if (RowMoved is null) return;
+        if (!MoveMode) return;
         foreach (var vt in _view.Tables)
         {
             if (vt.Strips.Count < 2) continue;
@@ -497,12 +509,13 @@ public sealed class PageView
     {
         var grip = new Border
         {
-            Width = 30, Height = h, CornerRadius = new CornerRadius(8), Background = line is null ? GripFill : Paper,
+            // Mode « Modifier » : la poubelle est masquée, la poignée prend sa place, plus large (facile à prendre au doigt).
+            Width = line is null ? 72 : 56, Height = h, CornerRadius = new CornerRadius(8), Background = line is null ? GripFill : Paper,
             BorderBrush = GripBorder, BorderThickness = new Thickness(1),
             Child = new FontIcon { Glyph = "", FontSize = line is null ? 20 : 17, Foreground = GripInk },
         };
         ToolTipService.SetToolTip(grip, tip);
-        Canvas.SetLeft(grip, GutterWidth - 52 - 30); // juste à gauche de la poubelle
+        Canvas.SetLeft(grip, GutterWidth - 6 - (line is null ? 72 : 56));
         Canvas.SetTop(grip, centerY - h / 2);
         InitDrag(grip, vt, strip, line);
         _gutter.Children.Add(grip);

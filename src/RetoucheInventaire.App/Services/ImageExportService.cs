@@ -168,6 +168,24 @@ public static class ImageExportService
     }
 
     /// <summary>Photo d'origine + cases modifiées → fichier JPEG.</summary>
+    /// <summary>Image encodée en JPEG (même réglage que les fichiers exportés), pour le PDF.</summary>
+    public static async Task<byte[]> EncodeJpegAsync(Raster image)
+    {
+        var bgra = image.ToBgra();
+        using var stream = new Windows.Storage.Streams.InMemoryRandomAccessStream();
+        var options = new BitmapPropertySet();
+        options.Add("ImageQuality", new BitmapTypedValue(0.93, PropertyType.Single));
+        var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.JpegEncoderId, stream, options);
+        encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore, (uint)bgra.Width, (uint)bgra.Height, 96, 96, bgra.Data);
+        await encoder.FlushAsync();
+        var bytes = new byte[stream.Size];
+        stream.Seek(0);
+        using var reader = new Windows.Storage.Streams.DataReader(stream);
+        await reader.LoadAsync((uint)stream.Size);
+        reader.ReadBytes(bytes);
+        return bytes;
+    }
+
     public static async Task SaveJpegAsync(Raster image, string path)
     {
         var bgra = image.ToBgra();

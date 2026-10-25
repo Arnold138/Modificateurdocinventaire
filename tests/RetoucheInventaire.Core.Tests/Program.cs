@@ -112,6 +112,13 @@ if (args.Length > 0 && args[0] == "export-arrange")
     }
     return 0;
 }
+if (args.Length > 0 && args[0] == "export-pdf")
+{
+    // PDF des trois pages de test (comparé au PDF de la version iPad).
+    var jpegs = new[] { "page1", "page2", "page5" }.Select(n => File.ReadAllBytes(Path.Combine(Fixtures.Dir, n + ".jpg"))).ToList();
+    File.WriteAllBytes(args[1], RetoucheInventaire.Core.Export.PdfWriter.Build(jpegs, "BEENDHI prisé – modifié"));
+    return 0;
+}
 if (args.Length > 0 && args[0] == "export-fin")
 {
     // Lots de fin sur une page dédiée, ligne supprimée, ligne TOTAL : .txt et pages composées, pour comparaison avec l'iPad.

@@ -363,16 +363,42 @@ public static class Tests
         Equal("81", objects[9].Lot, "lot saisi");
         Equal("11", objects[10].Lot, "le suivant ne bouge pas tout seul");
         Lots.FillAutomatically(p);
-        Equal("82", objects[10].Lot, "« Synchroniser » : la suite repart du numéro tapé");
-        Equal((81 + objects.Count - 10).ToString(), objects[^1].Lot, "toute la suite est recalée");
+        Equal("81|11", $"{objects[9].Lot}|{objects[10].Lot}", "« Synchroniser » : rien de rempli ne bouge");
         PageEdits.CycleKind(objects[11]); // Article → Titre
         Lots.Resync(p);
         Equal("", objects[11].Lot, "plus de lot sur un titre");
-        Equal("84", objects[12].Lot, "les autres ne bougent pas");
+        Equal("13", objects[12].Lot, "les autres ne bougent pas");
         Lots.FillAutomatically(p);
-        Equal("83", objects[12].Lot, "la suite reprend à la synchronisation");
+        Equal("13", objects[12].Lot, "toujours pas à la synchronisation");
         Lots.Clear(p);
         Check(!Lots.IsActive(p), "numérotation enlevée");
+    }
+
+    public static void T_Synchroniser_garde_la_progression()
+    {
+        var p = ThreePages();
+        Lots.Number(p, 1);
+        var objs = Lots.ObjectLines(p).Select(o => o.Line).ToList();
+        int n = objs.Count;
+        for (int i = n - 1; i > 5; i--) objs[i].Lot = i.ToString();
+        objs[5].Lot = ""; objs[5].LotManual = false;
+        Lots.FillAutomatically(p);
+        Equal($"5|6|7|8|{n}", string.Join("|", new[] { objs[4], objs[5], objs[6], objs[7], objs[^1] }.Select(l => l.Lot)), "case vide → 6, la suite décalée");
+        objs[2].Deleted = true;
+        Lots.FillAutomatically(p);
+        Equal("2|4", $"{objs[1].Lot}|{objs[3].Lot}", "trou gardé");
+        objs[2].Deleted = false;
+        Lots.Resync(p);
+        Lots.Set(p, objs[0], "30"); Lots.Set(p, objs[1], "29"); Lots.Set(p, objs[2], "6");
+        objs[3].Lot = "";
+        Lots.FillAutomatically(p);
+        Equal("30|29|6|7|5", string.Join("|", objs.Take(5).Select(l => l.Lot)), "ordre fait à la main respecté");
+        var last = p.Pages[2];
+        var o2 = Lots.ObjectLines(p).Where(o => o.Page == last).Select(o => o.Line).ToList();
+        var first = Lots.ObjectLines(p).First().Line;
+        o2[0].Lot = ""; first.Lot = "";
+        Lots.FillAutomatically(p, [last]);
+        Check(o2[0].Lot != "" && first.Lot == "", "page choisie remplie, les autres non");
     }
 
     public static void T_Lots_poubelle_et_ajout()
@@ -474,7 +500,9 @@ public static class Tests
         Lots.Set(p, objects[3], "0");
         Lots.FillAutomatically(p);
         Equal("0", objects[3].Lot, "lot 0 gardé");
-        Equal("4", objects[4].Lot, "le 0 ne prend pas de numéro");
+        Equal("5", objects[4].Lot, "synchroniser ne renumérote pas");
+        Lots.Number(p, 1);
+        Equal("4", objects[4].Lot, "Renuméroter tout : le 0 ne prend pas de numéro");
         Equal((objects.Count - 1).ToString(), objects[^1].Lot, "la suite continue");
         var lines = ExportLines(p);
         Equal("0\t2 rolls en métal\t60\t30", lines[^1], "objet à 0 regroupé à la fin");
@@ -640,7 +668,9 @@ public static class Tests
         var l = ExportLines(p).ToList();
         Check(l.FindIndex(x => x.Contains("aspirateur")) > l.FindIndex(x => x.Contains("distributeurs")), ".txt dans le nouvel ordre");
         Lots.FillAutomatically(p);
-        Equal("5", p.Pages[0].AllLines().First(x => x.Cells[0].Text.StartsWith("1 aspirateur")).Lot, "numéro selon l'ordre affiché");
+        Equal("2", p.Pages[0].AllLines().First(x => x.Cells[0].Text.StartsWith("1 aspirateur")).Lot, "synchroniser garde son numéro");
+        Lots.Number(p, 1);
+        Equal("5", p.Pages[0].AllLines().First(x => x.Cells[0].Text.StartsWith("1 aspirateur")).Lot, "Renuméroter tout : selon l'ordre affiché");
         var img = Fixtures.Load("page1").Image;
         var plan = Arrangement.Build(p);
         var outImg = ComposeAll(p, plan, _ => img)[0];

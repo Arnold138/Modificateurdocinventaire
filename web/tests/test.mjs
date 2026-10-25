@@ -9,6 +9,7 @@ import { detectGrids } from '../core/rules.js';
 import { emptyFieldsWithInk, prepareCell, applyCellWords } from '../core/ocrprep.js';
 import { newPage, newProject, analyze, reclassify, allFields, cycleKind, addLockZone, upgradePage } from '../core/model.js';
 import { buildTxt, composeIntoSource, paperColor } from '../core/exports.js';
+import { buildPdf, jpegInfo } from '../core/pdf.js';
 import { parseDelimited, buildDataPage } from '../core/importers.js';
 import { packProject, unpackProject } from '../core/store.js';
 import { numberLots, setLot, resyncLots, clearLots, lotsActive, objectLines, repairName, removeLot, addLot, canAddLot, createEmptyLots, fillLotsAutomatically } from '../core/lots.js';
@@ -167,15 +168,44 @@ test('Lots : un par objet, continus ; un numéro tapé ne change rien d\'autre, 
   eq('9', objs[8].Lot, 'avant inchangé');
   eq('11', objs[10].Lot, 'suivant inchangé (rien ne bouge tout seul)');
   fillLotsAutomatically(p);
-  eq('82', objs[10].Lot, 'synchronisé : la suite repart du numéro tapé');
+  eq('81|11', `${objs[9].Lot}|${objs[10].Lot}`, 'synchronisé : rien de rempli ne bouge');
   objs[11].Kind = 'Titre'; objs[11].KindChosenByUser = true;
   resyncLots(p);
   eq('', objs[11].Lot, 'titre sans lot');
-  eq('84', objs[12].Lot, 'les autres ne bougent pas');
+  eq('13', objs[12].Lot, 'les autres ne bougent pas');
   fillLotsAutomatically(p);
-  eq('83', objs[12].Lot, 'suite reprise à la synchronisation');
+  eq('13', objs[12].Lot, 'toujours pas à la synchronisation');
+  objs[11].Kind = 'Article'; objs[11].KindChosenByUser = false;
   clearLots(p);
   check(!lotsActive(p), 'enlevés');
+});
+
+test('Synchroniser garde la progression : case vide insérée, suite décalée ; ordre fait à la main gardé ; page par page', () => {
+  const p = threePages();
+  numberLots(p, 1);
+  const objs = [...objectLines(p)].map((o) => o.line), N = objs.length;
+  // Une ligne ajoutée entre le 5 et le 6 : sa case est vide, les suivants ont gardé 6, 7…
+  for (let i = objs.length - 1; i > 5; i--) objs[i].Lot = String(i);
+  objs[5].Lot = ''; objs[5].LotManual = false;
+  fillLotsAutomatically(p);
+  eq(`5|6|7|8|${N}`, [objs[4], objs[5], objs[6], objs[7], objs[N - 1]].map((l) => l.Lot).join('|'), 'case vide → 6, la suite décalée');
+  // Ligne supprimée : un trou, rien ne bouge à la synchronisation.
+  objs[2].Deleted = true;
+  fillLotsAutomatically(p);
+  eq('2|4', `${objs[1].Lot}|${objs[3].Lot}`, 'trou gardé');
+  objs[2].Deleted = false;
+  resyncLots(p);
+  // Ordre tapé à la main : 30, 29, 6 puis une case vide → 7 ; rien d'autre ne bouge.
+  setLot(p, objs[0], '30'); setLot(p, objs[1], '29'); setLot(p, objs[2], '6');
+  objs[3].Lot = '';
+  fillLotsAutomatically(p);
+  eq('30|29|6|7|5', objs.slice(0, 5).map((l) => l.Lot).join('|'), 'ordre fait à la main respecté');
+  // Seulement la page choisie.
+  const last = p.Pages[2], o2 = [...objectLines(p)].filter((o) => o.page === last).map((o) => o.line);
+  const first = [...objectLines(p)][0].line;
+  o2[0].Lot = ''; first.Lot = '';
+  fillLotsAutomatically(p, [last]);
+  check(o2[0].Lot !== '' && first.Lot === '', 'page choisie remplie, les autres non');
 });
 
 test('Lots : colonne vide, on remplit soi-même', () => {
@@ -259,7 +289,9 @@ test('Lots à 0 : pas de numéro, après le dernier lot dans le .txt', () => {
   setLot(p, objs[3], '0');
   fillLotsAutomatically(p);
   check(isZeroLot(objs[3]), 'zéro');
-  eq('4', objs[4].Lot, 'le 0 ne prend pas de numéro');
+  eq('5', objs[4].Lot, 'synchroniser ne renumérote pas');
+  numberLots(p, 1);
+  eq('4', objs[4].Lot, 'Renuméroter tout : le 0 ne prend pas de numéro');
   let l = lines(p);
   eq('0\t2 rolls en métal\t60\t30', l[l.length - 1], 'en fin');
   eq(1, l.filter((x) => x.includes('2 rolls en métal')).length, 'retiré de sa place');
@@ -392,7 +424,9 @@ test('Rangée déplacée à la main : ordre du .txt, des lots et de l\'image', (
   const l = lines(p);
   check(l.findIndex((x) => x.includes('aspirateur')) > l.findIndex((x) => x.includes('distributeurs')), '.txt dans le nouvel ordre');
   fillLotsAutomatically(p);
-  eq('5', findLine(p.Pages[0], '1 aspirateur KARSHER WDS cuve en inox').Lot, 'numéro selon l\'ordre affiché');
+  eq('2', findLine(p.Pages[0], '1 aspirateur KARSHER WDS cuve en inox').Lot, 'synchroniser garde son numéro');
+  numberLots(p, 1);
+  eq('5', findLine(p.Pages[0], '1 aspirateur KARSHER WDS cuve en inox').Lot, 'Renuméroter tout : selon l\'ordre affiché');
   const img = load('page1').n.image;
   const { plan, out } = composeAll(p, () => img);
   eq(img.h, out[0].h, 'même hauteur');
@@ -961,6 +995,28 @@ if (windowsFin) {
       const i = w.data.findIndex((v, j) => v !== img.data[j]);
       eq(-1, i, `page ${k + 1} : premier pixel différent (${i % w.w}, ${Math.trunc(i / w.w)})`);
     });
+  });
+}
+
+test('Export PDF : une page par image, JPEG gardé tel quel, largeur A4', () => {
+  const jpegs = ['page1', 'page2', 'page5'].map((n) => new Uint8Array(readFileSync(join(FIX, n + '.jpg'))));
+  const pdf = buildPdf(jpegs, 'BEENDHI prisé – modifié');
+  const text = new TextDecoder('latin1').decode(pdf);
+  eq(3, (text.match(/\/Type \/Page /g) ?? []).length, 'trois pages');
+  check(text.startsWith('%PDF-1.4') && text.trimEnd().endsWith('%%EOF'), 'en-tête et fin');
+  const { w, h } = jpegInfo(jpegs[0]);
+  check(text.includes(`/MediaBox [0 0 595 ${Math.round((595 * h / w) * 100) / 100}]`), 'largeur A4, hauteur au prorata');
+  const at = text.indexOf('stream\n', text.indexOf('/Subtype /Image')) + 7;
+  eq(jpegs[0].length, pdf.subarray(at, at + jpegs[0].length).findIndex((v, i) => v !== jpegs[0][i]) < 0 ? jpegs[0].length : -1, 'JPEG intact dans le PDF');
+});
+
+const windowsPdf = process.argv[8];
+if (windowsPdf) {
+  test('Export PDF identique à Windows (octet pour octet)', () => {
+    const jpegs = ['page1', 'page2', 'page5'].map((n) => new Uint8Array(readFileSync(join(FIX, n + '.jpg'))));
+    const js = buildPdf(jpegs, 'BEENDHI prisé – modifié'), win = new Uint8Array(readFileSync(windowsPdf));
+    eq(win.length, js.length, 'taille');
+    eq(-1, win.findIndex((v, i) => v !== js[i]), 'premier octet différent');
   });
 }
 
