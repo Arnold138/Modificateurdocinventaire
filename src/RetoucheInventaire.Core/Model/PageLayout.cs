@@ -133,6 +133,7 @@ public static class PageLayout
     {
         double a = line.Cells.Where(c => !c.Ink.IsEmpty).Select(c => c.Ink.Bottom).DefaultIfEmpty(line.Bounds.CenterY).Max();
         double b = line.Bounds.Bottom;
+        int hi = int.MaxValue;
         foreach (var t in page.Tables)
             for (int r = 0; r < t.Rows.Count; r++)
             {
@@ -140,8 +141,10 @@ public static class PageLayout
                 if (i < 0) continue;
                 var below = t.Rows[r].Lines.Skip(i + 1).SelectMany(l => l.Cells).Where(c => !c.Ink.IsEmpty).Select(c => c.Ink.Top).ToList();
                 b = below.Count > 0 ? below.Min() : (r + 1 < t.RowYs.Count ? t.RowYs[r + 1] - 4 : b);
+                if (r + 1 < t.RowYs.Count) hi = (int)Math.Floor(t.RowYs[r + 1]) - 3;
             }
-        return b > a ? (int)Math.Floor((a + b) / 2) : (int)Math.Floor(a);
+        // Toujours dans la rangée de la ligne (au-dessus de son filet du bas) : sinon c'est la rangée suivante qui grandirait.
+        return Math.Min(hi, b > a ? (int)Math.Floor((a + b) / 2) : (int)Math.Floor(a));
     }
 
     /// <summary>
@@ -213,6 +216,19 @@ public static class PageLayout
     }
 
     /// <summary>Rangée de l'image d'origine affichée à l'ordonnée <paramref name="y"/> de la page agrandie (null dans une bande d'interligne).</summary>
+    /// <summary>Rangées de l'image d'origine → ordonnée (la 1re) où chacune est affichée sur la page agrandie.</summary>
+    public static Dictionary<int, int> BaseToPage(Page page)
+    {
+        var map = new Dictionary<int, int>();
+        int pos = 0;
+        foreach (var x in Pieces(page))
+        {
+            if (!x.Extra && !x.Gap) for (int i = 0; i < x.N; i++) map.TryAdd(x.Y0 + i, pos + i);
+            pos += x.N;
+        }
+        return map;
+    }
+
     public static int? ToBase(Page page, int y)
     {
         int pos = 0;

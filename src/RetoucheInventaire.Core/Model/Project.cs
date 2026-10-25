@@ -180,6 +180,14 @@ public sealed class InsertedBand
     public List<BandPart> Parts { get; set; } = [];
 }
 
+/// <summary>Traits du tableau mesurés sur l'imprimé (épaisseurs, couleur 3 octets + gris) pour tracer la colonne des lots.</summary>
+public sealed class RuleStyle
+{
+    public int V { get; set; }
+    public int H { get; set; }
+    public List<int> Color { get; set; } = [];
+}
+
 public sealed class Table
 {
     public RectD Bounds { get; set; }
@@ -187,6 +195,8 @@ public sealed class Table
     public bool HasGrid { get; set; } = true;
     public List<double> ColumnXs { get; set; } = [];
     public List<double> RowYs { get; set; } = [];
+    /// <summary>Traits mesurés une fois sur l'imprimé (colonne des lots) ; null : pas encore mesurés.</summary>
+    public RuleStyle? Rules { get; set; }
     public List<Row> Rows { get; set; } = [];
     /// <summary>Ordre d'affichage des rangées (rangées déplacées à la main), null : l'ordre imprimé.</summary>
     public List<int>? RowOrder { get; set; }

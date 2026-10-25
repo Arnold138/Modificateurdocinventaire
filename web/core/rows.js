@@ -12,7 +12,7 @@
 import { Rect } from './geometry.js';
 import { firstText, applyLocks, isModified } from './model.js';
 import { CUT, FILET, cutY, gapMid, lineTop } from './arrange.js';
-import { baseBox, insertBand, removeBand, setExtra, toBase, insertsOf, cutBand } from './layout.js';
+import { baseBox, insertBand, removeBand, setExtra, toBase, insertsOf, cutBand, pieces } from './layout.js';
 import { rowOrder } from './lots.js';
 import { adjustStrikes } from './strikes.js';
 
@@ -40,9 +40,20 @@ export function canCopyLine(page, line) {
 }
 
 /** « Séparer ici » : la ligne n'est pas la première de sa rangée. */
+/**
+ * Le trait tracé au-dessus de la ligne i passe bien entre les lignes : toutes les cases d'avant au-dessus, toutes celles
+ * d'après en dessous (une lecture parasite sur un fond tramé peut chevaucher la ligne d'au-dessus : pas de trait alors).
+ */
+function splitOk(at) {
+  if (!at || at.i <= 0 || at.i >= at.row.Lines.length) return false;
+  const { row, i } = at;
+  const y = gapMid(row.Lines[i - 1], row.Lines[i]) + CUT;
+  const cy = (l, f) => { const b = baseBox(l, f); return b.Y + b.Height / 2; };
+  return row.Lines.every((l, k) => l.Cells.every((f) => (k < i ? cy(l, f) < y : cy(l, f) > y)));
+}
 export function canSplit(page, line) {
   const at = line && !line.OutsideTable ? locate(page, line) : null;
-  return !!at && at.i > 0;
+  return splitOk(at);
 }
 
 /** Rangée ajoutée par l'utilisateur qui contient cette ligne : { table, r, band } (null sinon). */
@@ -52,13 +63,26 @@ export function addedRowOf(page, line) {
   return band ? { ...at, band } : null;
 }
 
-/** Rangées de pixels (page agrandie) [y0, y1[ → morceaux de l'image d'origine. */
+/**
+ * Rangées de pixels (page agrandie) [y0, y1[ → morceaux : rangées de l'image d'origine, et interlignes d'une rangée déjà
+ * ajoutée (recopiés comme interlignes : sans eux, copier une ligne ajoutée donnait une rangée réduite à son filet).
+ * Les bandes d'agrandissement d'un texte tapé ne sont pas recopiées (la copie grandit à son tour si son texte le demande).
+ */
 function partsOf(page, y0, y1) {
+  const seq = pieces(page);
   const parts = [];
+  let pos = 0, k = 0, gapOf = -1;
   for (let y = y0; y < y1; y++) {
-    const s = toBase(page, y);
-    if (s === null) continue;
-    const last = parts[parts.length - 1];
+    while (k < seq.length && y >= pos + seq[k].n) { pos += seq[k].n; k++; }
+    if (k >= seq.length) break;
+    const x = seq[k], last = parts[parts.length - 1];
+    if (x.extra) continue;
+    if (x.gap) {
+      if (last?.Gap && gapOf === k) last.Height++;
+      else { parts.push({ Src: x.s, Height: 1, Gap: true, Span: x.span, Cols: x.cols, X0: x.x0, X1: x.x1 }); gapOf = k; }
+      continue;
+    }
+    const s = x.y0 + (y - pos);
     if (last && !last.Gap && last.Src + last.Height === s) last.Height++;
     else parts.push({ Src: s, Height: 1 });
   }
@@ -89,8 +113,12 @@ function orderRemove(t, index) {
 /** Zone verticale [haut, bas[ de la ligne dans sa rangée (de l'interligne au-dessus à celui d'en dessous). */
 function lineBand(at, line) {
   const { table: t, r, i, row } = at;
-  const top = i > 0 ? gapMid(row.Lines[i - 1], line) : cutY(t.RowYs[r]) + FILET;
-  const bottom = i + 1 < row.Lines.length ? gapMid(line, row.Lines[i + 1]) : cutY(t.RowYs[r + 1]);
+  let top = i > 0 ? gapMid(row.Lines[i - 1], line) : cutY(t.RowYs[r]) + FILET;
+  let bottom = i + 1 < row.Lines.length ? gapMid(line, row.Lines[i + 1]) : cutY(t.RowYs[r + 1]);
+  // Lignes qui se chevauchent (lecture parasite sur un fond tramé) : la bande contient toujours toute la ligne, dans sa rangée.
+  const boxes = line.Cells.map((f) => baseBox(line, f));
+  top = Math.max(cutY(t.RowYs[r]) + FILET, Math.min(top, Math.floor(Math.min(...boxes.map((b) => b.Y)))));
+  bottom = Math.min(cutY(t.RowYs[r + 1]), Math.max(bottom, Math.ceil(Math.max(...boxes.map((b) => Rect.bottom(b))))));
   return { top, bottom: Math.max(top + 1, bottom) };
 }
 
@@ -114,16 +142,18 @@ export function copyLine(page, line, blank = false, above = false) {
   const filetTop = cutY(t.RowYs[r]);
   const body = partsOf(page, top, bottom);
   const cols = t.ColumnXs.map((x) => Math.floor(x + 0.5)), x0 = Math.floor(t.ColumnXs[0]) - 4, x1 = Math.ceil(t.ColumnXs[t.ColumnXs.length - 1]) + 4;
-  const longest = body.filter((p) => !p.Gap).reduce((a, p) => (!a || p.Height > a.Height ? p : a), null);
+  // Rangée la plus nette pour prolonger les filets : la plus longue rangée d'image, sinon l'interligne d'une rangée ajoutée.
+  const longest = body.filter((p) => !p.Gap).reduce((a, p) => (!a || p.Height > a.Height ? p : a), null) ?? body.find((p) => p.Gap) ?? null;
+  const span = longest?.Gap ? longest.Span : longest?.Height;
   const bodyH = body.reduce((n, p) => n + p.Height, 0);
   const parts = [...partsOf(page, filetTop, filetTop + FILET),
-    ...(blank && longest ? [{ Src: longest.Src, Height: bodyH, Gap: true, Span: longest.Height, Cols: cols, X0: x0, X1: x1 }] : body)];
+    ...(blank && longest ? [{ Src: longest.Src, Height: bodyH, Gap: true, Span: span, Cols: cols, X0: x0, X1: x1 }] : body)];
   // Sous le texte, autant d'espace qu'au-dessus (la ligne copiée peut venir d'une rangée de plusieurs lignes) :
   // un interligne propre, filets verticaux prolongés depuis la rangée la plus nette de la ligne copiée.
   const inkTop = lineTop(line), inkBottom = inkBottomOf(line);
   const spaceAbove = inkTop - top, below = bodyH - (inkBottom - top);
   const pad = Math.min(40, Math.max(0, Math.ceil(spaceAbove - below)));
-  if (pad > 0 && longest) parts.push({ Src: longest.Src, Height: pad, Gap: true, Span: longest.Height, Cols: cols, X0: x0, X1: x1 });
+  if (pad > 0 && longest) parts.push({ Src: longest.Src, Height: pad, Gap: true, Span: span, Cols: cols, X0: x0, X1: x1 });
   const y = cutY(t.RowYs[above ? r : r + 1]);
   // Cases de la ligne, relevées avant que la bande ne décale la page.
   const src = line.Cells.map((f) => ({ f, b: baseBox(line, f), ink: f.Ink }));
@@ -156,7 +186,7 @@ export const addBlankLine = (page, line, above = false) => copyLine(page, line, 
 /** « Séparer ici » : la ligne et ce qui la suit dans sa rangée forment une rangée à part (filet tracé au-dessus). */
 export function splitAt(page, line) {
   const at = locate(page, line);
-  if (!at || at.i === 0) return false;
+  if (!splitOk(at)) return false;
   const { table: t, r, i, row } = at;
   const y = gapMid(row.Lines[i - 1], line);
   const filetTop = cutY(t.RowYs[r]);
@@ -208,7 +238,7 @@ export function removeAddedRow(page, line) {
 /** « Tracer un trait en dessous » : la ligne suivante de la rangée commence une nouvelle rangée. */
 export function canSplitBelow(page, line) {
   const at = line && !line.OutsideTable ? locate(page, line) : null;
-  return !!at && at.i + 1 < at.row.Lines.length;
+  return !!at && at.i + 1 < at.row.Lines.length && splitOk({ ...at, i: at.i + 1 });
 }
 export function splitBelow(page, line) {
   const at = locate(page, line);
@@ -305,6 +335,8 @@ export function rowTrimOf(page, line) {
   if (!at) return null;
   const { table: t, r, row } = at;
   if (bandOf(page, row)?.Kind === 'Copy' || row.Lines.some((l) => l.Deleted || (l.Extra ?? 0) > 0)) return null;
+  // Texte tapé sur plusieurs lignes : la place lui revient, on ne réduit pas.
+  if (row.Lines.some((l) => l.Cells.some((c) => isModified(c) && c.Text.includes('\n')))) return null;
   const pads = normalPads(t), s = rowSpan(t, r);
   if (!pads || !s) return null;
   const min = Math.max(4, Math.trunc(pads.height / 2));

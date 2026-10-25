@@ -111,15 +111,17 @@ function cleanGap(page, line) {
   const inked = line.Cells.filter((c) => !Rect.isEmpty(c.Ink));
   const lb = lineBounds(line);
   const a = inked.length > 0 ? Math.max(...inked.map((c) => Rect.bottom(c.Ink))) : Rect.cy(lb);
-  let b = Rect.bottom(lb);
+  let b = Rect.bottom(lb), hi = Infinity;
   for (const t of page.Tables)
     t.Rows.forEach((row, r) => {
       const i = row.Lines.indexOf(line);
       if (i < 0) return;
       const below = row.Lines.slice(i + 1).flatMap((l) => l.Cells).filter((c) => !Rect.isEmpty(c.Ink)).map((c) => c.Ink.Y);
       b = below.length > 0 ? Math.min(...below) : r + 1 < t.RowYs.length ? t.RowYs[r + 1] - 4 : b;
+      if (r + 1 < t.RowYs.length) hi = Math.floor(t.RowYs[r + 1]) - 3;
     });
-  return b > a ? Math.floor((a + b) / 2) : Math.floor(a);
+  // Toujours dans la rangée de la ligne (au-dessus de son filet du bas) : sinon c'est la rangée suivante qui grandirait.
+  return Math.min(hi, b > a ? Math.floor((a + b) / 2) : Math.floor(a));
 }
 
 /**
@@ -173,6 +175,17 @@ export function pieces(page, baseH = baseHeight(page)) {
     before += e.height;
   }
   return seq;
+}
+
+/** Rangées de l'image d'origine → ordonnée (la 1re) où chacune est affichée sur la page agrandie. */
+export function baseToPage(page) {
+  const map = new Map();
+  let pos = 0;
+  for (const x of pieces(page)) {
+    if (!x.extra && !x.gap) for (let i = 0; i < x.n; i++) if (!map.has(x.y0 + i)) map.set(x.y0 + i, pos + i);
+    pos += x.n;
+  }
+  return map;
 }
 
 /** Rangée de l'image d'origine affichée à l'ordonnée y de la page agrandie (null dans une bande d'interligne). */

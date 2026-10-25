@@ -121,8 +121,18 @@ function updateEditBar() {
 async function run(work) {
   if (state.busy) return;
   setBusy(true);
+  const depth = state.undo.length, top = state.undo[depth - 1];
   try { await work(); }
-  catch (e) { console.error(e); await dialog('Erreur', `<p>${escapeHtml(e?.message ?? String(e))}</p>`, [{ label: 'OK' }]); }
+  catch (e) {
+    console.error(e);
+    // Garde-fou : une action qui échoue en cours de route ne laisse rien à moitié fait, on revient à l'état d'avant.
+    let back = false;
+    if (state.undo.length > depth || (state.undo.length && state.undo[state.undo.length - 1] !== top)) {
+      while (state.undo.length > depth + 1) state.undo.pop();
+      try { await undo(); back = true; } catch (e2) { console.error(e2); }
+    }
+    await dialog('Erreur', `<p>${escapeHtml(e?.message ?? String(e))}</p>${back ? '<p>Rien n\'a changé, vous pouvez continuer.</p>' : ''}`, [{ label: 'OK' }]);
+  }
   finally { setBusy(false); }
 }
 
@@ -540,7 +550,8 @@ async function lineAction(item, f) {
     replan(); recomputeAll();
     await refreshView();
     state.view?.flashLine(line);
-    status(item.act === 'trim' ? `Rangée de « ${name} » réduite : même hauteur que les autres. ↶ pour annuler.` : `Rangée de « ${name} » remise à sa hauteur d'origine.`);
+    const rowName = short(locate(page, line)?.row.Lines.map(firstText).find(Boolean) ?? '') || 'cette ligne';
+    status(item.act === 'trim' ? `Rangée de « ${rowName} » réduite : même hauteur que les autres. ↶ pour annuler.` : `Rangée de « ${rowName} » remise à sa hauteur d'origine.`);
     return scheduleSave();
   }
   if (item.act === 'bold') {

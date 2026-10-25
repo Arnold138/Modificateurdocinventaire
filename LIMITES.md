@@ -76,6 +76,10 @@
 - **Ligne TOTAL ajoutée** : additionne les articles et titres (pas les totaux, en-têtes, récapitulatifs, lignes supprimées ni autres lignes TOTAL ajoutées) ; « lignes au-dessus » = du début du tableau (ou du total précédent) jusqu'à elle, sur sa page. Elle ne compte pas dans les totaux imprimés.
 - Le .txt garde une ligne par ligne : séparer ne change rien au .txt (sauf les numéros de lot) ; un titre avec valeurs séparé de son article garde ses valeurs sur sa propre ligne.
 - Tableaux sans filets : ni copie ni séparation (il n'y a pas de rangées à tracer).
+- **Séparer** est refusé quand le texte de deux lignes se chevauche sur l'image (fond tramé lu en plusieurs lignes) : le trait couperait les lettres.
+- Une **ligne ajoutée** (vide ou dupliquée) depuis une rangée elle-même ajoutée reprend la hauteur et les filets de celle-ci ; son agrandissement (texte tapé) reste dans sa rangée et ne fait jamais grandir la rangée suivante.
+- Le **style des traits** de la colonne des lots (épaisseur, couleur) est mesuré une fois par tableau et gardé dans le projet : les lignes ajoutées ne le font plus changer.
+- **Action qui échoue** : sur Windows comme sur iPad, l'action est annulée en entier (le projet revient à l'état d'avant), un message le dit et on peut continuer ; sur Windows, le détail est noté dans `erreurs.log` (dossier des données de l'app) pour la correction.
 - **Recadrer** une page relit le texte : ses lignes ajoutées sont perdues (comme les agrandissements).
 - Une page avec des lignes ajoutées est exportée **redressée** (comme une page agrandie).
 

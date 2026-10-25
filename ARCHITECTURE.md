@@ -148,3 +148,9 @@ Application web installable (« Sur l'écran d'accueil »), sans étape de compi
 
 - `Field.Colors` : morceaux [Start, Start+Length[ en rouge, bleu ou vert ; suivent la saisie comme les traits.
 - Texte non retouché : l'encre du morceau prend la couleur sur l'image (chaque canal garde le plus clair de l'encre et de la couleur). Texte retapé : écrit morceau par morceau en couleur (écran : texte par-dessus le champ quand on n'y tape pas ; export : Win2D / canvas).
+
+## Garde-fou et banc d'essai
+
+- Windows : chaque action (lignes, lots, lots 0, déplacements, totaux, retirer, synchroniser, cases de lot ajoutées/retirées, rangées déplacées) passe par `GuardAsync` : instantané JSON au début ; en cas d'erreur, `RestoreAsync` remet le projet, l'historique est coupé à son niveau d'avant, `_busy` est relâché, l'erreur est notée dans `erreurs.log`. `App.UnhandledException` rattrape le reste (l'app ne se ferme pas). iPad : `run()` revient à l'état d'avant si l'action avait déjà mémorisé un retour.
+- `web/tests/stress.mjs` génère et applique des manipulations reproductibles et contrôle la mise en page après chaque pas ; `tests/.../Stress.cs` rejoue la même liste (`ops.json`) avec le cœur C# ; `stress-compare.mjs` exige le même .txt et les mêmes pages au pixel près.
+- Correctifs trouvés par le banc : `partsOf` copie aussi les morceaux ajoutés (rangée ajoutée copiée depuis une rangée ajoutée), garde `splitOk` (pas de trait à travers des lignes qui se chevauchent), `cleanGap` limité à la rangée, `lineBand` qui contient toute la ligne, mesure des traits de la colonne des lots en coordonnées d'origine (`baseToPage`) puis gardée dans `Table.Rules`, pas de réduction automatique d'une rangée avec texte tapé sur plusieurs lignes.

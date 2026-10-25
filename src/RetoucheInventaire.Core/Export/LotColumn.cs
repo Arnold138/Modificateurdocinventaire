@@ -51,8 +51,9 @@ public static class LotColumn
             if (right - left < 8) continue;
             var rows = FramedRows(t);
             if (rows.Count == 0) continue;
-            var (vt, ht, color) = MeasureRules(image, t);
-            frames.Add(new Frame(t, left, right, rows, vt, ht, color));
+            // Traits mesurés une fois, sur l'imprimé (gardés dans le projet) : la colonne garde le même style quoi qu'on ajoute.
+            if (t.Rules is null) { var (v, h, c) = MeasureRules(image, t, page); t.Rules = new RuleStyle { V = v, H = h, Color = c.Select(b => (int)b).ToList() }; }
+            frames.Add(new Frame(t, left, right, rows, t.Rules.V, t.Rules.H, t.Rules.Color.Select(b => (byte)b).ToArray()));
         }
         return frames;
     }
@@ -167,7 +168,11 @@ public static class LotColumn
     /// Épaisseur des filets (vertical gauche, horizontaux) et leur couleur, mesurées sur l'image :
     /// les traits ajoutés ressemblent à ceux imprimés. Couleur : moyenne du cœur des traits, 3 octets dans l'ordre de l'image + gris.
     /// </summary>
-    public static (int VThick, int HThick, byte[] Color) MeasureRules(Raster img, Table t)
+    /// <summary>
+    /// <paramref name="page"/> : les traits sont mesurés seulement sur les rangées imprimées (pas dans une rangée ajoutée ni une
+    /// bande d'agrandissement, où le trait recopié est plus fin) : l'épaisseur ne change pas quand on ajoute des lignes.
+    /// </summary>
+    public static (int VThick, int HThick, byte[] Color) MeasureRules(Raster img, Table t, Page? page = null)
     {
         var vRuns = new List<int>();
         var hRuns = new List<int>();
@@ -187,9 +192,18 @@ public static class LotColumn
         // Filet vertical gauche, coupé à plusieurs hauteurs (loin des filets horizontaux).
         int xr = R(t.ColumnXs[0]);
         double top = t.RowYs[0], bottom = t.RowYs[^1];
+        // Mesures aux mêmes endroits de l'image imprimée, quoi qu'on ajoute (positions prises sur la page d'origine).
+        var map = page != null && (page.Inserts.Count > 0 || page.Tables.Any(u => u.Rows.Any(r => r.Lines.Any(l => l.Extra > 0)))) ? PageLayout.BaseToPage(page) : null;
+        if (map != null)
+        {
+            top += (PageLayout.ToBase(page!, R(top)) ?? R(top)) - R(top);
+            bottom += (PageLayout.ToBase(page!, R(bottom)) ?? R(bottom)) - R(bottom);
+        }
         for (int k = 1; k <= 11; k++)
         {
-            int y = R(top + (bottom - top) * k / 12);
+            int yb = R(top + (bottom - top) * k / 12);
+            int y = yb;
+            if (map != null && !map.TryGetValue(yb, out y)) continue;
             if (y < 0 || y >= img.Height || t.RowYs.Any(ry => Math.Abs(ry - y) < 6)) continue;
             int a = Math.Max(0, xr - 6), b = Math.Min(img.Width - 1, xr + 6);
             if (a >= b) continue;
@@ -201,9 +215,10 @@ public static class LotColumn
 
         // Filets horizontaux, coupés dans la première colonne (loin des filets verticaux).
         double x0 = t.ColumnXs[0], x1 = t.ColumnXs[1];
-        foreach (var ryD in t.RowYs)
+        for (int ri = 0; ri < t.RowYs.Count; ri++)
         {
-            int ry = R(ryD);
+            if (page != null && ri < t.Rows.Count && t.Rows[ri].Inserted != null) continue; // filet recopié d'une rangée ajoutée : pas mesuré
+            int ry = R(t.RowYs[ri]);
             for (int k = 1; k <= 5; k++)
             {
                 int x = R(x0 + (x1 - x0) * k / 6);

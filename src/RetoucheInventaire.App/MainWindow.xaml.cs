@@ -413,7 +413,7 @@ public sealed partial class MainWindow : Window
         };
         view.LocksChanged += _ => { ScheduleAutosave(); SetStatus("Zones verrouillées mises à jour."); };
         view.LotChanged += async (v, line, value) => await ApplyLotAsync(v, line, value);
-        view.LotRemoved += async (_, line) =>
+        view.LotRemoved += async (_, line) => await GuardAsync("Retirer la case de lot", async () =>
         {
             PushUndo();
             Lots.Remove(_project, line);
@@ -422,16 +422,16 @@ public sealed partial class MainWindow : Window
             await RefreshViewAsync();
             SetStatus("Case de lot retirée : cette ligne n'est pas un objet.");
             ScheduleAutosave();
-        };
-        view.LotAdded += async (_, line) =>
+        });
+        view.LotAdded += async (_, line) => await GuardAsync("Ajouter une case de lot", async () =>
         {
             PushUndo();
             Lots.Add(_project, line);
             await RefreshViewAsync();
             SetStatus("Case de lot ajoutée : tapez le numéro.");
             ScheduleAutosave();
-        };
-        view.RowMoved += async (_, table, movedRow, beforeRow) =>
+        });
+        view.RowMoved += async (_, table, movedRow, beforeRow) => await GuardAsync("Déplacer la rangée", async () =>
         {
             PushUndo();
             var order = Lots.RowOrder(table).Where(r => r != movedRow).ToList();
@@ -440,7 +440,7 @@ public sealed partial class MainWindow : Window
             await RefreshViewAsync();
             SetStatus("Rangée déplacée. ↶ pour annuler.");
             ScheduleAutosave();
-        };
+        });
         view.LineMoved += async (v, table, line, before) => await MoveLineAsync(v.Page, table, line, before);
         view.UnitMoved += async (v, table, unit, before) => await PlaceZeroAsync(v.Page, table, unit, before);
         view.LineCommands = LineCommandsFor;
@@ -496,7 +496,9 @@ public sealed partial class MainWindow : Window
     private Button? _syncButton;
 
     /// <summary>« Synchroniser… » : cette page ou toutes les pages.</summary>
-    private async Task SyncDialogAsync()
+    private Task SyncDialogAsync() => GuardAsync("Synchroniser", () => SyncDialogAsyncCore());
+
+    private async Task SyncDialogAsyncCore()
     {
         if (_busy || !Lots.IsActive(_project)) return;
         var page = CurrentPage;
@@ -741,7 +743,9 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>Exécute une action du menu « Ligne » ; une seule action à annuler (↶).</summary>
-    private async Task LineActionAsync(string act, int from, Field f)
+    private Task LineActionAsync(string act, int from, Field f) => GuardAsync("Ligne", () => LineActionAsyncCore(act, from, f));
+
+    private async Task LineActionAsyncCore(string act, int from, Field f)
     {
         if (_busy || PageEdits.FindLine(_project, f) is not { } hit) return;
         var (page, line) = hit;
@@ -766,7 +770,9 @@ public sealed partial class MainWindow : Window
             RecomputeTotals();
             await RefreshViewAsync();
             _view?.FlashLine(line);
-            SetStatus(act == "trim" ? $"Rangée de « {name} » réduite : même hauteur que les autres. ↶ pour annuler." : $"Rangée de « {name} » remise à sa hauteur d'origine.");
+            string rowName = Short(Rows.Locate(page, line)?.Row.Lines.Select(l => l.FirstText).FirstOrDefault(x => x.Length > 0) ?? "");
+            if (rowName.Length == 0) rowName = "cette ligne";
+            SetStatus(act == "trim" ? $"Rangée de « {rowName} » réduite : même hauteur que les autres. ↶ pour annuler." : $"Rangée de « {rowName} » remise à sa hauteur d'origine.");
             ScheduleAutosave();
             return;
         }
@@ -958,7 +964,9 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>Numéro tapé dans une case de lot (0 : à la fin, après confirmation).</summary>
-    private async Task ApplyLotAsync(PageView v, PrintedLine line, string value)
+    private Task ApplyLotAsync(PageView v, PrintedLine line, string value) => GuardAsync("Numéro de lot", () => ApplyLotAsyncCore(v, line, value));
+
+    private async Task ApplyLotAsyncCore(PageView v, PrintedLine line, string value)
     {
         bool wasZero = Lots.IsZero(line);
         bool goingZero = System.Text.RegularExpressions.Regex.IsMatch(value.Trim(), "^[+-]?0+$") && !wasZero;
@@ -996,7 +1004,9 @@ public sealed partial class MainWindow : Window
     /// Poignée d'un lot 0 recollé (mode Modifier) : il est posé avant la rangée <paramref name="before"/> (null : à la fin du
     /// tableau) ; l'endroit est gardé (EndAt) tant qu'il est au lot 0.
     /// </summary>
-    private async Task PlaceZeroAsync(ModelPage page, Table table, Arrangement.Unit unit, int? before)
+    private Task PlaceZeroAsync(ModelPage page, Table table, Arrangement.Unit unit, int? before) => GuardAsync("Placer le lot 0", () => PlaceZeroAsyncCore(page, table, unit, before));
+
+    private async Task PlaceZeroAsyncCore(ModelPage page, Table table, Arrangement.Unit unit, int? before)
     {
         if (_busy) return;
         var order = Lots.RowOrder(table);
@@ -1018,7 +1028,9 @@ public sealed partial class MainWindow : Window
     /// Poignée d'une ligne dans un bloc : la ligne devient une rangée à part (trait au-dessus et, s'il le faut, en dessous ;
     /// rangées réduites à la hauteur des autres), puis cette rangée est posée avant la rangée <paramref name="before"/> (null : à la fin).
     /// </summary>
-    private async Task MoveLineAsync(ModelPage page, Table table, PrintedLine line, int? before)
+    private Task MoveLineAsync(ModelPage page, Table table, PrintedLine line, int? before) => GuardAsync("Déplacer la ligne", () => MoveLineAsyncCore(page, table, line, before));
+
+    private async Task MoveLineAsyncCore(ModelPage page, Table table, PrintedLine line, int? before)
     {
         if (_busy || Rows.Locate(page, line) is not { } at) return;
         PushUndo();
@@ -1095,7 +1107,9 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>« Retirer… » : cette page, des pages au choix, tout le dossier ; remettre les lignes supprimées.</summary>
-    private async Task RetireMenuAsync(ModelPage page)
+    private Task RetireMenuAsync(ModelPage page) => GuardAsync("Retirer", () => RetireMenuAsyncCore(page));
+
+    private async Task RetireMenuAsyncCore(ModelPage page)
     {
         if (_busy) return;
         int k = _project.Pages.IndexOf(page);
@@ -1157,7 +1171,9 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>« Totaux » : recalculer les totaux de la page ; ajouter une ligne TOTAL (calcul au choix).</summary>
-    private async Task TotalsMenuAsync(ModelPage page)
+    private Task TotalsMenuAsync(ModelPage page) => GuardAsync("Totaux", () => TotalsMenuAsyncCore(page));
+
+    private async Task TotalsMenuAsyncCore(ModelPage page)
     {
         if (_busy) return;
         var choice = await ChooseAsync("Totaux", "Les totaux se recalculent tout seuls quand un montant change. Ici, vous pouvez aussi :",
@@ -1668,24 +1684,72 @@ public sealed partial class MainWindow : Window
         _undo.RemoveAt(_undo.Count - 1);
         await RunBusyAsync(async () =>
         {
-            string? currentId = CurrentPage?.Id;
-            var flats = _flats.ToDictionary(kv => kv.Key.Id, kv => (Key: ImageKey(kv.Key), Image: kv.Value));
-            var oriented = _oriented.ToDictionary(kv => kv.Key.Id, kv => (Key: kv.Key.QuarterTurns + "|" + kv.Key.SourceEntry, Image: kv.Value));
-            _project = System.Text.Json.JsonSerializer.Deserialize<InventoryProject>(snap, ProjectStore.Json) ?? _project;
-            _flats.Clear(); _oriented.Clear(); _recent.Clear();
-            foreach (var p in _project.Pages)
-            {
-                if (flats.TryGetValue(p.Id, out var f) && f.Key == ImageKey(p)) Remember(_flats, p, f.Image, 3);
-                if (oriented.TryGetValue(p.Id, out var o) && o.Key == p.QuarterTurns + "|" + p.SourceEntry) Remember(_oriented, p, o.Image, 2);
-            }
-            _editSession = null;
-            _currentField = null;
-            _crops.Clear();
-            int index = Math.Max(0, _project.Pages.FindIndex(p => p.Id == currentId));
-            await ShowPageAsync(index, fit: false, keepScroll: index == _index);
+            await RestoreAsync(snap);
             SetStatus("Dernière action annulée.");
             ScheduleAutosave();
         });
+    }
+
+    /// <summary>Remet le projet dans l'état <paramref name="snap"/> (images gardées quand elles n'ont pas changé) et réaffiche la page.</summary>
+    private async Task RestoreAsync(string snap)
+    {
+        string? currentId = CurrentPage?.Id;
+        var flats = _flats.ToDictionary(kv => kv.Key.Id, kv => (Key: ImageKey(kv.Key), Image: kv.Value));
+        var oriented = _oriented.ToDictionary(kv => kv.Key.Id, kv => (Key: kv.Key.QuarterTurns + "|" + kv.Key.SourceEntry, Image: kv.Value));
+        _project = System.Text.Json.JsonSerializer.Deserialize<InventoryProject>(snap, ProjectStore.Json) ?? _project;
+        _flats.Clear(); _oriented.Clear(); _recent.Clear();
+        foreach (var p in _project.Pages)
+        {
+            if (flats.TryGetValue(p.Id, out var f) && f.Key == ImageKey(p)) Remember(_flats, p, f.Image, 3);
+            if (oriented.TryGetValue(p.Id, out var o) && o.Key == p.QuarterTurns + "|" + p.SourceEntry) Remember(_oriented, p, o.Image, 2);
+        }
+        _editSession = null;
+        _currentField = null;
+        _crops.Clear();
+        int index = Math.Max(0, _project.Pages.FindIndex(p => p.Id == currentId));
+        await ShowPageAsync(index, fit: false, keepScroll: index == _index);
+    }
+
+    private static readonly string ErrorLog = System.IO.Path.Combine(DataDir, "erreurs.log");
+
+    private static void LogError(string what, Exception ex)
+    {
+        try { Directory.CreateDirectory(DataDir); File.AppendAllText(ErrorLog, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {what}\n{ex}\n\n"); } catch { /* sans importance */ }
+    }
+
+    /// <summary>
+    /// Garde-fou : si l'action échoue, le projet revient exactement à l'état d'avant (rien n'est à moitié fait), l'écran est
+    /// réaffiché, un message le dit, et l'app continue (l'erreur est notée dans erreurs.log pour la corriger).
+    /// </summary>
+    private async Task GuardAsync(string what, Func<Task> work)
+    {
+        string snap = System.Text.Json.JsonSerializer.Serialize(_project, ProjectStore.Json);
+        int undo = _undo.Count;
+        try { await work(); }
+        catch (Exception ex)
+        {
+            LogError(what, ex);
+            try
+            {
+                while (_undo.Count > undo) _undo.RemoveAt(_undo.Count - 1);
+                _busy = false;
+                await RestoreAsync(snap);
+            }
+            catch (Exception again) { LogError(what + " (remise en état)", again); }
+            _busy = false;
+            Progress.Visibility = Visibility.Collapsed;
+            UpdateCommands();
+            SetStatus($"« {what} » n'a pas pu se faire : rien n'a changé, vous pouvez continuer. (Détail noté dans erreurs.log : {ex.Message})");
+        }
+    }
+
+    /// <summary>Erreur qui n'a été rattrapée nulle part : notée, l'app continue, l'écran est réaffiché.</summary>
+    public void OnUnexpectedError(Exception ex)
+    {
+        LogError("erreur imprévue", ex);
+        _busy = false;
+        try { Progress.Visibility = Visibility.Collapsed; UpdateCommands(); _ = RefreshViewAsync(); } catch { /* sans importance */ }
+        SetStatus($"Une erreur est survenue ({ex.Message}). Vous pouvez continuer ; ↶ revient à l'état d'avant si besoin.");
     }
 
     // ---------- Exports ----------

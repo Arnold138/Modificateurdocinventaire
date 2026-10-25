@@ -102,12 +102,21 @@ Add-WindowsCapability -Online -Name "Language.OCR~~~fr-FR~0.0.1.0"
 dotnet run --project tests/RetoucheInventaire.Core.Tests -c Release
 ```
 
-56 tests sur tes pages (et 46 côté iPad, dont la comparaison octet pour octet et pixel pour pixel avec Windows), dont les cas demandés :
+59 tests sur tes pages (et 51 côté iPad, dont la comparaison octet pour octet et pixel pour pixel avec Windows), dont les cas demandés :
 - le .txt est en UTF-8 avec BOM, fins de ligne Windows, tabulations, sans caractère parasite, et se relit comme un tableau ;
 - modifier une ligne de titre (« SALLE LAVAGE : » → « SALLE DE BAIN : »), un chiffre (10 → 30) et un texte ne change la position ni la taille d'aucun champ ;
 - titres seuls, valeurs rattachées à l'article, une ligne par ligne imprimée, totaux, nombres sans espace, numéro de page non exporté ;
 - numéros de lot : un par objet, un numéro tapé ne change rien d'autre, « Synchroniser » remplit tout, poubelle et « + », présents dans le .txt ; colonne tracée seulement sur les objets, identique pixel pour pixel entre Windows et iPhone/iPad ;
 - lot 0 : la ligne quitte sa page et passe après le dernier lot (avec les valeurs de son titre), puis revient ; page « Lots de fin » insérée où on veut, nouvelle page quand elle est pleine, retirée sans lot 0 ; ligne supprimée (page, .txt, totaux, lots inchangés) ; ligne TOTAL ajoutée (au-dessus, page, pages au choix, tout, à la main) ; trait tracé sous une ligne ; rangée déplacée à la main ; totaux et récapitulatif recalculés, saisie à la main, « Recalculer » ; couleur du texte ;
 - redressement d'une photo simulée prise de travers, sauvegarde/reprise, imports CSV/XLSX, verrouillage, tableau sans filets.
+
+**Banc d'essai** (`web/tests/stress.mjs` + `stress-replay` côté Windows) : des centaines de manipulations au hasard mais reproductibles (graine), comme à l'écran — lignes vides, dupliquées, séparées, texte tapé sur plusieurs lignes, mots ajoutés et enlevés, montants, lots, lots 0, synchroniser, rangées et lignes déplacées, lignes TOTAL. Après **chaque** pas : image d'origine intacte, rangées dans l'ordre, chaque case dans sa rangée, colonne des lots continue, chaque objet a sa case, aucun mot tapé perdu, numéros inchangés hors actions de lot. Windows rejoue la même liste : le .txt et chaque page doivent être identiques au pixel près. La CI en fait 3 × 400 sur les pages de test.
+
+```
+RetoucheInventaire.Core.Tests stress-fixtures /tmp/banc
+node web/tests/stress.mjs /tmp/banc/project.json /tmp/banc /tmp/ipad 400 1
+RetoucheInventaire.Core.Tests stress-replay /tmp/ipad/ops.json /tmp/banc/project.json /tmp/banc /tmp/win
+node web/tests/stress-compare.mjs /tmp/ipad /tmp/win
+```
 
 Hors Windows, l'OCR est simulé avec Tesseract : les mots reconnus sont enregistrés dans `tests/fixtures/*.words.tsv` (régénérables avec `tools/generer_fixtures.py`). Les erreurs de lecture visibles dans `docs/export-exemple.txt` (« souffiants », « S 500 »…) viennent de cet OCR de test, pas de la structure.

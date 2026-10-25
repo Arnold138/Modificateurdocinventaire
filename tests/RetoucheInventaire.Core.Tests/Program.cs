@@ -112,6 +112,49 @@ if (args.Length > 0 && args[0] == "export-arrange")
     }
     return 0;
 }
+if (args.Length > 0 && args[0] == "stress-fixtures")
+{
+    // Projet de départ du banc d'essai fait des pages de test (pour la CI) : project.json + p1.pgm…
+    var project = new InventoryProject();
+    foreach (var n in new[] { "page1", "page2", "page5" }) project.Pages.Add(Fixtures.Analyze(n));
+    Directory.CreateDirectory(args[1]);
+    File.WriteAllText(Path.Combine(args[1], "project.json"), System.Text.Json.JsonSerializer.Serialize(project, RetoucheInventaire.Core.Storage.ProjectStore.Json));
+    for (int k = 0; k < project.Pages.Count; k++) Pgm.Write(Path.Combine(args[1], $"p{k + 1}.pgm"), Fixtures.Load(project.Pages[k].Id).Image);
+    return 0;
+}
+if (args.Length > 0 && args[0] == "stress-replay") return Stress.Replay(args[1], args[2], args[3], args[4]);
+if (args.Length > 0 && args[0] == "replay")
+{
+    // Rejoue sur un vrai projet .inventaire la suite d'actions de l'écran Windows (diagnostic).
+    var (project, _) = RetoucheInventaire.Core.Storage.ProjectStore.Load(args[1]);
+    foreach (var pg in project.Pages) RetoucheInventaire.Core.Analysis.PageAnalyzer.Upgrade(pg);
+    void Step(string what, Action a)
+    {
+        try { a(); var plan = RetoucheInventaire.Core.Export.Arrangement.Build(project); Totals.Recompute(project, plan); for (int k = 0; k < project.Pages.Count; k++) RetoucheInventaire.Core.Export.Arrangement.ViewOf(project, plan, k); RetoucheInventaire.Core.Export.TxtExporter.Build(project); Console.WriteLine("OK   " + what); }
+        catch (Exception e) { Console.WriteLine("ERR  " + what + " : " + e.GetType().Name + " " + e.Message + "\n" + e.StackTrace); }
+    }
+    var page = project.Pages[6];
+    PrintedLine Find(string t) => page.AllLines().First(l => l.Cells[0].Text.StartsWith(t));
+    Lots.SetTables(project, project.Pages.SelectMany(pg => Lots.LotTables(pg).Where(x => Lots.DefaultChoice(project, x.Table)).Select(x => x.Table)).ToHashSet());
+    Lots.CreateEmpty(project);
+    Step("synchroniser", () => Lots.FillAutomatically(project));
+    var rc = Find("1 RICE COOKER");
+    Step("4 saisies", () => { rc.Cells[0].Text = "1 RICE COOKER HENDI\n2 Mac book pro\n2 Asus\n2 Acer\n1 souris"; PageLayout.SetExtra(page, rc, 155); Lots.Resync(project); });
+    Step("réduire RICE COOKER", () => Console.WriteLine("   réduite ? " + Rows.TrimRow(page, rc)));
+    var mac = Find("2 ordinateurs portables MacBook"); var asus = Find("2 ordinateurs portables Asus"); var acer = Find("2 ordinateurs portables Acer");
+    Step("séparer sous MacBook", () => { Rows.SplitBelow(page, mac); Rows.TrimRow(page, mac); Rows.TrimRow(page, asus); Lots.Resync(project); });
+    Step("séparer sous Asus", () => { Rows.SplitBelow(page, asus); Rows.TrimRow(page, asus); Rows.TrimRow(page, acer); Lots.Resync(project); });
+    PrintedLine? blank = null;
+    Step("ligne vide sous Acer", () => { Rows.TrimRow(page, acer); blank = Rows.AddBlank(page, acer); Lots.Resync(project); });
+    Step("réduire ligne vide", () => Console.WriteLine("   réduite ? " + Rows.TrimRow(page, blank!)));
+    Step("lot sur Asus", () => Lots.Set(project, asus, "500"));
+    Step("lot sur ligne vide", () => Lots.Set(project, blank!, "501"));
+    Step("lot 0 sur Acer", () => Lots.Set(project, acer, "0"));
+    Step("synchroniser page", () => Lots.FillAutomatically(project, [page]));
+    Console.WriteLine("RICE COOKER : « " + rc.Cells[0].Text.Replace("\n", "⏎") + " » extra " + rc.Extra + " box " + rc.Cells[0].Box);
+    foreach (var l in new[] { mac, asus, acer, blank! }) Console.WriteLine($"   [{(l.LotSlot ? l.Lot : "-")}] {l.Cells[0].Text}");
+    return 0;
+}
 if (args.Length > 0 && args[0] == "export-pdf")
 {
     // PDF des trois pages de test (comparé au PDF de la version iPad).
