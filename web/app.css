@@ -74,6 +74,7 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 .grip { position: absolute; right: 52px; width: 30px; border-radius: 8px; display: grid; place-items: center; color: #4a5560; background: #eef1f4; border: 1px solid #cdd3da; touch-action: none; cursor: grab; }
 .grip svg { width: 22px; height: 22px; fill: currentColor; stroke: none; }
 .grip:hover, .grip:active { background: var(--accent-soft); color: var(--accent); }
+.grip.line { background: #fff; border-style: dashed; }
 .dragghost { position: absolute; background: rgba(10,102,194,.10); outline: 2px solid var(--accent); pointer-events: none; z-index: 4; }
 .dropline { position: absolute; height: 4px; background: var(--accent); border-radius: 2px; pointer-events: none; z-index: 4; }
 .gbtn { position: absolute; right: 6px; width: 42px; border-radius: 10px; display: grid; place-items: center; }

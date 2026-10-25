@@ -89,6 +89,17 @@ export function insertBand(page, at, parts, kind) {
   return band;
 }
 
+/**
+ * « Réduire la rangée » : retire les rangées de pixels [at, at + h[ (espace vide imprimé), ce qui est en dessous remonte.
+ * Bande « Trim » de hauteur négative (Skip : rangées de l'image d'origine sautées) ; removeBand la remet.
+ */
+export function cutBand(page, at, h, lineId = null) {
+  shiftBelow(page, at, -h);
+  const band = { Id: Math.random().toString(16).slice(2, 10), Kind: 'Trim', At: at, Height: -h, Skip: h, Line: lineId, Parts: [] };
+  (page.Inserts ??= []).push(band);
+  return band;
+}
+
 /** Retire une bande insérée (son contenu a déjà été retiré) : ce qui est en dessous remonte. */
 export function removeBand(page, band) {
   page.Inserts = insertsOf(page).filter((b) => b !== band);
@@ -134,6 +145,7 @@ export function pieces(page, baseH = baseHeight(page)) {
     const until = Math.min(baseH, Math.max(src, b.At - above(b.At) - inserted));
     if (until > src) seq.push({ y0: src, n: until - src });
     src = until;
+    if (b.Skip) { src = Math.min(baseH, until + b.Skip); inserted += b.Height; continue; } // rangée réduite : rangées sautées
     for (const p of b.Parts) if (p.Height > 0) seq.push(p.Gap ? { gap: true, s: p.Src, span: p.Span, cols: p.Cols, n: p.Height, x0: p.X0, x1: p.X1 } : { y0: p.Src, n: p.Height });
     inserted += b.Height;
   }
@@ -175,7 +187,7 @@ export function toBase(page, y) {
 
 /** Image de la page agrandie : l'image d'origine avec les bandes d'interligne et les rangées ajoutées. */
 export function stretch(base, page) {
-  if (totalExtra(page) === 0) return base;
+  if (totalExtra(page) === 0 && insertsOf(page).length === 0) return base;
   const seq = pieces(page, base.h);
   const w = base.w, ch = base.ch, stride = w * ch;
   const height = seq.reduce((s, x) => s + x.n, 0);

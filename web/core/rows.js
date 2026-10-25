@@ -10,9 +10,9 @@
 // « Supprimer la ligne ajoutée » / « Remettre dans la rangée du dessus » défont exactement l'opération.
 // Portage identique dans Rows.cs.
 import { Rect } from './geometry.js';
-import { firstText, applyLocks } from './model.js';
+import { firstText, applyLocks, isModified } from './model.js';
 import { CUT, FILET, cutY, gapMid, lineTop } from './arrange.js';
-import { baseBox, insertBand, removeBand, setExtra, toBase, insertsOf } from './layout.js';
+import { baseBox, insertBand, removeBand, setExtra, toBase, insertsOf, cutBand } from './layout.js';
 import { rowOrder } from './lots.js';
 import { adjustStrikes } from './strikes.js';
 
@@ -225,7 +225,7 @@ export function addTotalLine(page, line, scope) {
   t.Kind = 'Total';
   t.KindChosenByUser = true;
   t.Cells[0].Text = 'TOTAL';
-  t.TotalScope = { Mode: scope?.Mode ?? 'above', Pages: [...(scope?.Pages ?? [])], Auto: scope?.Auto !== false };
+  t.TotalScope = { Mode: scope?.Mode ?? 'above', Pages: [...(scope?.Pages ?? [])], Auto: scope?.Auto !== false, Bold: !!scope?.Bold };
   return t;
 }
 
@@ -250,3 +250,95 @@ export function lastObjectLine(page, table = null) {
 }
 
 const AMOUNT = /^\s*(?:m[ée]moire|[+-]?\d[\d\s.,]*)\s*€?\s*$/i;
+
+// ---------- Réduire la rangée : enlever l'espace vide imprimé au-dessus ou en dessous du texte ----------
+
+/** Écriture de la ligne : encre lue (texte retapé : sa case), null si la ligne est vide. */
+function contentOf(l) {
+  let r = null;
+  for (const c of l.Cells) {
+    if (!c.Text.trim()) continue;
+    const b = !isModified(c) && !Rect.isEmpty(c.Ink) ? c.Ink : baseBox(l, c);
+    r = r ? Rect.union(r, b) : b;
+  }
+  return r;
+}
+
+/** Haut et bas de l'écriture d'une rangée, et ses bornes utiles (sous le filet du haut, au-dessus de celui du bas). */
+function rowSpan(t, r) {
+  const rects = t.Rows[r].Lines.map(contentOf).filter(Boolean);
+  if (!rects.length) return null;
+  return {
+    lines: rects.length,
+    top: cutY(t.RowYs[r]) + FILET, bottom: cutY(t.RowYs[r + 1]),
+    inkTop: Math.floor(Math.min(...rects.map((x) => x.Y))), inkBottom: Math.ceil(Math.max(...rects.map((x) => Rect.bottom(x)))),
+  };
+}
+
+const median = (a) => { const s = [...a].sort((x, y) => x - y); return s[Math.trunc(s.length / 2)]; };
+
+/** Marges habituelles des rangées d'une ligne du tableau (au-dessus et en dessous du texte) et hauteur du texte. */
+function normalPads(t) {
+  const top = [], bottom = [], height = [];
+  t.Rows.forEach((row, r) => {
+    if (r + 1 >= t.RowYs.length || row.Inserted || row.Lines.some((l) => (l.Extra ?? 0) > 0)) return;
+    const s = rowSpan(t, r);
+    if (!s || s.lines !== 1) return;
+    top.push(s.inkTop - s.top); bottom.push(s.bottom - s.inkBottom); height.push(s.inkBottom - s.inkTop);
+  });
+  return top.length ? { top: median(top), bottom: median(bottom), height: median(height) } : null;
+}
+
+/** Rangées de pixels [y0, y0 + h[ toutes prises dans l'image d'origine, d'un seul tenant (pas dans une bande ajoutée). */
+function contiguous(page, y0, h) {
+  const a = toBase(page, y0), b = toBase(page, y0 + h - 1);
+  return a !== null && b !== null && b - a === h - 1;
+}
+
+/**
+ * Espace vide en trop dans la rangée de la ligne (au-dessus et en dessous du texte), comparé aux autres rangées du tableau :
+ * [{ y0, h }] du bas vers le haut, ou null. Pas pour une ligne dupliquée ou vide ajoutée, une rangée agrandie ou qui contient une ligne supprimée
+ * (une rangée séparée, oui : seul son filet a été ajouté).
+ */
+export function rowTrimOf(page, line) {
+  const at = line && !line.OutsideTable ? locate(page, line) : null;
+  if (!at) return null;
+  const { table: t, r, row } = at;
+  if (bandOf(page, row)?.Kind === 'Copy' || row.Lines.some((l) => l.Deleted || (l.Extra ?? 0) > 0)) return null;
+  const pads = normalPads(t), s = rowSpan(t, r);
+  if (!pads || !s) return null;
+  const min = Math.max(4, Math.trunc(pads.height / 2));
+  const cuts = [];
+  // Espace en trop au-dessus et en dessous du texte : enlevé s'il dépasse, en tout, la moitié d'une ligne.
+  const below = Math.max(0, s.bottom - s.inkBottom - pads.bottom), above = Math.max(0, s.inkTop - s.top - pads.top);
+  if (below + above < min) return null;
+  if (below > 0 && contiguous(page, s.bottom - below, below)) cuts.push({ y0: s.bottom - below, h: below });
+  if (above > 0 && contiguous(page, s.top, above)) cuts.push({ y0: s.top, h: above });
+  return cuts.length ? cuts : null;
+}
+
+/** « Réduire la rangée » : enlève l'espace vide en trop ; la rangée prend la hauteur des autres. Vrai si elle a changé. */
+export function trimRow(page, line) {
+  const cuts = rowTrimOf(page, line);
+  if (!cuts) return false;
+  const id = locate(page, line).row.Lines[0]?.Cells[0]?.Id ?? null; // la réduction suit sa rangée
+  for (const c of cuts) cutBand(page, c.y0, c.h, id);
+  rowBounds(locate(page, line).table);
+  return true;
+}
+
+/** Bandes « Trim » de la rangée de la ligne (rangée réduite). */
+export function trimsOf(page, line) {
+  const at = line ? locate(page, line) : null;
+  if (!at) return [];
+  const ids = new Set(at.row.Lines.map((l) => l.Cells[0]?.Id));
+  return insertsOf(page).filter((b) => b.Kind === 'Trim' && b.Line && ids.has(b.Line));
+}
+
+/** « Remettre la hauteur d'origine » : l'espace enlevé revient (les cases reprennent la place qu'il leur faut). */
+export function untrimRow(page, line) {
+  const bands = trimsOf(page, line).sort((a, b) => b.At - a.At);
+  for (const b of bands) removeBand(page, b);
+  if (bands.length) rowBounds(locate(page, line).table);
+  return bands.length > 0;
+}

@@ -249,7 +249,7 @@ public static class Rows
         t.Kind = LineKind.Total;
         t.KindChosenByUser = true;
         t.Cells[0].Text = "TOTAL";
-        t.TotalScope = new TotalScope { Mode = scope?.Mode ?? "above", Pages = [.. scope?.Pages ?? []], Auto = scope?.Auto ?? true };
+        t.TotalScope = new TotalScope { Mode = scope?.Mode ?? "above", Pages = [.. scope?.Pages ?? []], Auto = scope?.Auto ?? true, Bold = scope?.Bold ?? false };
         return t;
     }
 
@@ -278,5 +278,100 @@ public static class Rows
                 }
         }
         return null;
+    }
+
+    // ---------- Réduire la rangée : enlever l'espace vide imprimé au-dessus ou en dessous du texte ----------
+
+    /// <summary>Écriture de la ligne : encre lue (texte retapé : sa case), null si la ligne est vide.</summary>
+    private static RectD? ContentOf(PrintedLine l)
+    {
+        RectD? r = null;
+        foreach (var c in l.Cells)
+        {
+            if (string.IsNullOrWhiteSpace(c.Text)) continue;
+            var b = !c.IsModified && !c.Ink.IsEmpty ? c.Ink : PageLayout.BaseBox(l, c);
+            r = r is { } x ? x.Union(b) : b;
+        }
+        return r;
+    }
+
+    private sealed record Span(int Lines, int Top, int Bottom, int InkTop, int InkBottom);
+
+    /// <summary>Haut et bas de l'écriture d'une rangée, et ses bornes utiles (sous le filet du haut, au-dessus de celui du bas).</summary>
+    private static Span? RowSpan(Table t, int r)
+    {
+        var rects = t.Rows[r].Lines.Select(ContentOf).Where(x => x != null).Select(x => x!.Value).ToList();
+        if (rects.Count == 0) return null;
+        return new Span(rects.Count, Arrangement.CutY(t.RowYs[r]) + Arrangement.Filet, Arrangement.CutY(t.RowYs[r + 1]),
+            (int)Math.Floor(rects.Min(x => x.Y)), (int)Math.Ceiling(rects.Max(x => x.Bottom)));
+    }
+
+    private static int Median(List<int> a) { var s = a.OrderBy(x => x).ToList(); return s[s.Count / 2]; }
+
+    /// <summary>Marges habituelles des rangées d'une ligne du tableau (au-dessus et en dessous du texte) et hauteur du texte.</summary>
+    private static (int Top, int Bottom, int Height)? NormalPads(Table t)
+    {
+        List<int> top = [], bottom = [], height = [];
+        for (int r = 0; r < t.Rows.Count; r++)
+        {
+            var row = t.Rows[r];
+            if (r + 1 >= t.RowYs.Count || row.Inserted != null || row.Lines.Any(l => l.Extra > 0)) continue;
+            if (RowSpan(t, r) is not { Lines: 1 } s) continue;
+            top.Add(s.InkTop - s.Top); bottom.Add(s.Bottom - s.InkBottom); height.Add(s.InkBottom - s.InkTop);
+        }
+        return top.Count > 0 ? (Median(top), Median(bottom), Median(height)) : null;
+    }
+
+    /// <summary>Rangées de pixels [y0, y0 + h[ toutes prises dans l'image d'origine, d'un seul tenant (pas dans une bande ajoutée).</summary>
+    private static bool Contiguous(Page page, int y0, int h) =>
+        PageLayout.ToBase(page, y0) is int a && PageLayout.ToBase(page, y0 + h - 1) is int b && b - a == h - 1;
+
+    /// <summary>
+    /// Espace vide en trop dans la rangée de la ligne (au-dessus et en dessous du texte), comparé aux autres rangées du tableau :
+    /// (Y0, H) du bas vers le haut, ou null. Pas pour une ligne dupliquée ou vide ajoutée, une rangée agrandie ou qui contient
+    /// une ligne supprimée (une rangée séparée, oui : seul son filet a été ajouté).
+    /// </summary>
+    public static List<(int Y0, int H)>? RowTrimOf(Page page, PrintedLine line)
+    {
+        if (line.OutsideTable || Locate(page, line) is not { } at) return null;
+        var (t, r, _, row) = at;
+        if (BandOf(page, row)?.Kind == "Copy" || row.Lines.Any(l => l.Deleted || l.Extra > 0)) return null;
+        if (NormalPads(t) is not { } pads || RowSpan(t, r) is not { } s) return null;
+        int min = Math.Max(4, pads.Height / 2);
+        var cuts = new List<(int, int)>();
+        // Espace en trop au-dessus et en dessous du texte : enlevé s'il dépasse, en tout, la moitié d'une ligne.
+        int below = Math.Max(0, s.Bottom - s.InkBottom - pads.Bottom), above = Math.Max(0, s.InkTop - s.Top - pads.Top);
+        if (below + above < min) return null;
+        if (below > 0 && Contiguous(page, s.Bottom - below, below)) cuts.Add((s.Bottom - below, below));
+        if (above > 0 && Contiguous(page, s.Top, above)) cuts.Add((s.Top, above));
+        return cuts.Count > 0 ? cuts : null;
+    }
+
+    /// <summary>« Réduire la rangée » : enlève l'espace vide en trop ; la rangée prend la hauteur des autres. Vrai si elle a changé.</summary>
+    public static bool TrimRow(Page page, PrintedLine line)
+    {
+        if (RowTrimOf(page, line) is not { } cuts) return false;
+        var row = Locate(page, line)!.Row;
+        string? id = row.Lines.FirstOrDefault()?.Cells.FirstOrDefault()?.Id; // la réduction suit sa rangée
+        foreach (var (y0, h) in cuts) PageLayout.CutBand(page, y0, h, id);
+        RowBounds(Locate(page, line)!.Table);
+        return true;
+    }
+
+    /// <summary>Bandes « Trim » de la rangée de la ligne (rangée réduite).</summary>
+    public static List<InsertedBand> TrimsOf(Page page, PrintedLine line)
+    {
+        if (Locate(page, line) is not { } at) return [];
+        var ids = at.Row.Lines.Select(l => l.Cells.FirstOrDefault()?.Id).ToHashSet();
+        return page.Inserts.Where(b => b.Kind == "Trim" && b.Line != null && ids.Contains(b.Line)).ToList();
+    }
+
+    /// <summary>« Remettre la hauteur d'origine » : l'espace enlevé revient.</summary>
+    public static bool UntrimRow(Page page, PrintedLine line)
+    {
+        var bands = TrimsOf(page, line).OrderByDescending(b => b.At).ToList();
+        foreach (var b in bands) PageLayout.RemoveBand(page, b);
+        if (bands.Count > 0) RowBounds(Locate(page, line)!.Table);
+        return bands.Count > 0;
     }
 }

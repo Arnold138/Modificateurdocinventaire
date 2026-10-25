@@ -273,18 +273,34 @@ export class PageView {
         const row = vt.table.Rows[s.r];
         if (!row || row.Lines.length === 0 || row.Lines.every((l) => l.Kind === 'EnTete')) continue;
         if (row.Lines.every((l) => l.Cells.every((c) => !c.Text.trim()))) continue;
+        // Bloc de plusieurs lignes : la poignée de la 1re ligne déplace le bloc, celle de chaque autre ligne déplace cette ligne seule.
+        const bands = row.Lines.filter((l) => !l.Deleted && l.Cells.some((c) => c.Text.trim()))
+          .map((l) => ({ l, e: this.view.lines.find((x) => x.line === l && !x.carriedOnly) })).filter((x) => x.e)
+          .map((x) => ({ l: x.l, b: this.lineBand(x.e) })).filter((x) => x.b && Rect.cy(x.b) > s.top && Rect.cy(x.b) < s.bottom);
+        const block = bands.length > 1;
         const h = el('div', 'grip', this.gutter);
         h.innerHTML = '<svg><use href="#i-grip"/></svg>';
-        h.title = 'Glisser pour déplacer la rangée';
-        h.setAttribute('aria-label', 'Déplacer la rangée');
-        const hh = Math.max(24, Math.min(40, s.bottom - s.top - 4));
-        Object.assign(h.style, { top: (s.top + s.bottom) / 2 - hh / 2 + 'px', height: hh + 'px' });
+        h.title = block ? 'Glisser pour déplacer le bloc' : 'Glisser pour déplacer la rangée';
+        h.setAttribute('aria-label', h.title);
+        const hh = block ? Math.max(24, Math.min(36, bands[0].b.Height + 6)) : Math.max(24, Math.min(40, s.bottom - s.top - 4));
+        const cy = block ? Rect.cy(bands[0].b) : (s.top + s.bottom) / 2;
+        Object.assign(h.style, { top: cy - hh / 2 + 'px', height: hh + 'px' });
         this.initDrag(h, vt, s);
+        for (const { l, b } of bands.slice(1)) {
+          const g = el('div', 'grip line', this.gutter);
+          g.innerHTML = '<svg><use href="#i-grip"/></svg>';
+          g.title = 'Glisser pour déplacer cette ligne seule (elle devient une rangée)';
+          g.setAttribute('aria-label', 'Déplacer cette ligne');
+          const gh = Math.max(24, Math.min(36, b.Height + 6));
+          Object.assign(g.style, { top: Rect.cy(b) - gh / 2 + 'px', height: gh + 'px' });
+          this.initDrag(g, vt, { r: s.r, top: Math.max(s.top, b.Y - 4), bottom: Math.min(s.bottom, Rect.bottom(b) + 4) }, l);
+        }
       }
     }
   }
 
-  initDrag(handle, vt, strip) {
+  /** Glisser une poignée : rangée entière, ou une ligne seule (`line`) qui devient une rangée à l'endroit choisi. */
+  initDrag(handle, vt, strip, line = null) {
     let marker = null, ghost = null, target = null;
     const yOf = (e) => (e.clientY - this.root.getBoundingClientRect().top) / this.cb.zoom();
     handle.addEventListener('pointerdown', (e) => {
@@ -309,7 +325,9 @@ export class PageView {
       marker = ghost = null;
       const t = target;
       target = null;
-      if (!ok || !t || t.before === strip.r) return;
+      if (!ok || !t) return;
+      if (line) return this.cb.onMoveLine?.(this, vt.table, line, t.before);
+      if (t.before === strip.r) return;
       const next = vt.strips[vt.strips.findIndex((s) => s.r === strip.r) + 1];
       if (next && t.before === next.r) return; // même place
       this.cb.onMoveRow?.(this, vt.table, strip.r, t.before);
@@ -378,7 +396,7 @@ export class PageView {
     this.layout(input, f);
     this.visual(input, f, false);
 
-    input.addEventListener('focus', () => { this.visual(input, f, true); this.showLoupe(f); this.cb.onFocus?.(this, f); });
+    input.addEventListener('focus', () => { this.visual(input, f, true); if (this.cb.loupe?.() !== false) this.showLoupe(f); this.cb.onFocus?.(this, f); });
     input.addEventListener('blur', () => { this.visual(input, f, false); this.loupe.style.display = 'none'; });
     const remember = () => { this.selection = { f, start: input.selectionStart ?? 0, end: input.selectionEnd ?? 0 }; };
     for (const ev of ['select', 'keyup', 'pointerup', 'focus']) input.addEventListener(ev, remember);

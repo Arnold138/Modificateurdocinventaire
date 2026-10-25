@@ -2,7 +2,7 @@
 // Portage de PageAnalyzer.cs, LineClassifier.cs, PageEdits.cs et Project.cs.
 // Les noms de propriétés sont ceux du JSON de la version Windows (projets compatibles).
 import { Rect } from './geometry.js';
-import { detectGrids } from './rules.js';
+import { detectGrids, mergeThinRows } from './rules.js';
 
 const PAD = 4;
 
@@ -69,11 +69,12 @@ export function upgradePage(page) {
     if (t.HasGrid === false || !(t.ColumnXs?.length >= 2) || !(t.RowYs?.length >= 2)) continue;
     const sizes = t.Rows.flatMap((r) => r.Lines).map((l) => l.Cells[0]?.FontSize ?? 0).filter((v) => v > 0).sort((a, b) => a - b);
     const em = sizes.length > 0 ? sizes[Math.trunc(sizes.length / 2)] : 12;
+    const header = mergeThinRowsOf(t);
     t.Rows.forEach((row, r) => {
       if (row.Lines.length > 0 || r + 1 >= t.RowYs.length) return;
       const rowTop = t.RowYs[r], rowBottom = t.RowYs[r + 1];
       const top = rowTop + PAD, bottom = Math.max(rowTop + PAD + 1, rowBottom - PAD);
-      const line = { Kind: 'Article', KindChosenByUser: false, OutsideTable: false, Cells: [], Lot: '', LotManual: false, NoLot: false, ForceLot: false, Extra: 0, ExtraAt: 0 };
+      const line = { Kind: r === 0 && header ? 'EnTete' : 'Article', KindChosenByUser: false, OutsideTable: false, Cells: [], Lot: '', LotManual: false, NoLot: false, ForceLot: false, Extra: 0, ExtraAt: 0 };
       for (let c = 0; c + 1 < t.ColumnXs.length; c++) {
         const box = cellBox(t.ColumnXs[c], t.ColumnXs[c + 1], rowTop, rowBottom, top, bottom, Rect.empty());
         line.Cells.push(newField({ Id: `${page.Id}-v${n++}`, Column: c, Box: box, Align: c === 0 ? 'Left' : 'Right', Indent: 4, FontSize: Math.min(em, Math.max(6, box.Height / 1.05)) }));
@@ -86,6 +87,30 @@ export function upgradePage(page) {
       for (const l of row.Lines) if (!l.KindChosenByUser && !l.OutsideTable) l.Kind = 'EnTete';
     });
   }
+}
+
+/**
+ * Rangées fines d'une trame lue comme plusieurs filets (projet d'une version précédente) : réunies en une rangée (même règle
+ * que la détection). En-tête du tableau relu en morceaux (texte illisible) : remplacé par des cases vides modifiables,
+ * sauf s'il a été corrigé. Vrai si l'en-tête a été vidé.
+ */
+function mergeThinRowsOf(t) {
+  if (t.RowOrder || t.Rows.some((r) => r.Inserted) || t.Rows.length + 1 !== t.RowYs.length) return false;
+  const keep = mergeThinRows(t.RowYs);
+  if (keep.length === t.RowYs.length) return false;
+  const rows = [];
+  let header = false;
+  t.Rows.forEach((row, r) => {
+    if (keep.includes(t.RowYs[r])) { rows.push({ ...row, Lines: [...row.Lines], n: 1 }); return; }
+    const g = rows[rows.length - 1];
+    g.Lines.push(...row.Lines);
+    g.n++;
+    g.Bounds = Rect.fromEdges(g.Bounds.X, g.Bounds.Y, Math.max(Rect.right(g.Bounds), Rect.right(row.Bounds)), Rect.bottom(row.Bounds));
+  });
+  if (rows[0]?.n > 1 && !rows[0].Lines.some((l) => l.KindChosenByUser || l.Cells.some(isModified))) { rows[0].Lines = []; header = true; }
+  t.Rows = rows.map(({ n, ...row }) => row);
+  t.RowYs = keep;
+  return header;
 }
 
 export function assignIds(page) {

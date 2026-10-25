@@ -66,13 +66,14 @@ public static class PageAnalyzer
             if (!t.HasGrid || t.ColumnXs.Count < 2 || t.RowYs.Count < 2) continue;
             var sizes = t.Rows.SelectMany(r => r.Lines).Select(l => l.Cells.FirstOrDefault()?.FontSize ?? 0).Where(v => v > 0).OrderBy(v => v).ToList();
             double em = sizes.Count > 0 ? sizes[sizes.Count / 2] : 12;
+            bool header = MergeThinRowsOf(t);
             for (int r = 0; r < t.Rows.Count && r + 1 < t.RowYs.Count; r++)
             {
                 var row = t.Rows[r];
                 if (row.Lines.Count > 0) continue;
                 double rowTop = t.RowYs[r], rowBottom = t.RowYs[r + 1];
                 double top = rowTop + Pad, bottom = Math.Max(rowTop + Pad + 1, rowBottom - Pad);
-                var line = new PrintedLine();
+                var line = new PrintedLine { Kind = r == 0 && header ? LineKind.EnTete : LineKind.Article };
                 for (int c = 0; c + 1 < t.ColumnXs.Count; c++)
                 {
                     var box = CellBox(t.ColumnXs[c], t.ColumnXs[c + 1], rowTop, rowBottom, top, bottom, RectD.Empty);
@@ -92,6 +93,37 @@ public static class PageAnalyzer
                 foreach (var l in lines.Where(l => !l.KindChosenByUser && !l.OutsideTable)) l.Kind = LineKind.EnTete;
             }
         }
+    }
+
+    /// <summary>
+    /// Rangées fines d'une trame lue comme plusieurs filets (projet d'une version précédente) : réunies en une rangée (même règle
+    /// que la détection). En-tête du tableau relu en morceaux (texte illisible) : remplacé par des cases vides modifiables,
+    /// sauf s'il a été corrigé. Vrai si l'en-tête a été vidé. Même règle que mergeThinRowsOf (iPhone/iPad).
+    /// </summary>
+    private static bool MergeThinRowsOf(Table t)
+    {
+        if (t.RowOrder != null || t.Rows.Any(r => r.Inserted != null) || t.Rows.Count + 1 != t.RowYs.Count) return false;
+        var keep = RuleDetector.MergeThinRows(t.RowYs);
+        if (keep.Count == t.RowYs.Count) return false;
+        var rows = new List<(Row Row, int N)>();
+        for (int r = 0; r < t.Rows.Count; r++)
+        {
+            var row = t.Rows[r];
+            if (keep.Contains(t.RowYs[r])) { rows.Add((new Row { Bounds = row.Bounds, Lines = [.. row.Lines] }, 1)); continue; }
+            var g = rows[^1];
+            g.Row.Lines.AddRange(row.Lines);
+            g.Row.Bounds = RectD.FromEdges(g.Row.Bounds.X, g.Row.Bounds.Y, Math.Max(g.Row.Bounds.Right, row.Bounds.Right), row.Bounds.Bottom);
+            rows[^1] = (g.Row, g.N + 1);
+        }
+        bool header = false;
+        if (rows.Count > 0 && rows[0].N > 1 && !rows[0].Row.Lines.Any(l => l.KindChosenByUser || l.Cells.Any(c => c.IsModified)))
+        {
+            rows[0].Row.Lines.Clear();
+            header = true;
+        }
+        t.Rows = rows.Select(x => x.Row).ToList();
+        t.RowYs = keep;
+        return header;
     }
 
     public static void AssignIds(Page page)

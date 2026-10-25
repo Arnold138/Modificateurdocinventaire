@@ -15,10 +15,11 @@ import { numberLots, setLot, resyncLots, clearLots, lotsActive, objectLines, rep
 import { drawLotColumns, frames, framedRows } from '../core/lotcolumn.js';
 import { setExtra, stretch, extraFor } from '../core/layout.js';
 import { toggleStrike, isStruck, adjustStrikes, setColor, colorRuns } from '../core/strikes.js';
-import { planArrangement, composePage, unitCrop, viewOf, pageArranged, syncEndPages } from '../core/arrange.js';
+import { planArrangement, composePage, unitCrop, viewOf, pageArranged, syncEndPages, cutY } from '../core/arrange.js';
+import { Rect } from '../core/geometry.js';
 import { recomputeTotals, parseAmount, formatAmount } from '../core/totals.js';
 import { isZeroLot } from '../core/lots.js';
-import { copyLine, splitAt, splitTypedText, removeAddedRow, canCopyLine, canSplit, addedRowOf, addBlankLine, splitBelow, canSplitBelow, addTotalLine, lastObjectLine } from '../core/rows.js';
+import { copyLine, splitAt, splitTypedText, removeAddedRow, canCopyLine, canSplit, addedRowOf, addBlankLine, splitBelow, canSplitBelow, addTotalLine, lastObjectLine, rowTrimOf, trimRow, untrimRow, trimsOf } from '../core/rows.js';
 import { lotTables, tableHasObjects, setLotTables } from '../core/lots.js';
 import { carryOver, allLines as linesOf } from '../core/model.js';
 import { detectPage } from '../core/imaging.js';
@@ -560,6 +561,11 @@ function rowsScenario() {
   vest.Cells[0].Text = '2 vestiaires avec 1 porte en métal\nLOT 6 : 1 table de travail';
   splitTypedText(a, vest, 1).Cells[1].Text = '20';
   addBlankLine(a, findLine(a, '1 diable à plateau à roulettes'), true).Cells[0].Text = 'Ajoutée au-dessus';
+  const dans = findLine(a, "DANS L'ENTREPOT");
+  splitBelow(a, dans);
+  trimRow(a, dans);
+  trimRow(a, findLine(a, '2 laves main en inox + 1 sanibroyeur SPEED'));
+  copyLine(a, dans);
   createEmptyLots(p);
   fillLotsAutomatically(p);
   recomputeTotals(p, planArrangement(p));
@@ -769,6 +775,35 @@ test('Tracer un trait en dessous d\'une ligne (1re ligne d\'un bloc)', () => {
   const n = a.Tables[0].Rows.length;
   check(splitBelow(a, comp), 'trait tracé');
   eq(n + 1, a.Tables[0].Rows.length, 'deux rangées');
+});
+
+test('Réduire la rangée : l\'espace vide imprimé part, la rangée prend la hauteur des autres ; et revient', () => {
+  const p = fromPages(['page1']);
+  const a = p.Pages[0], t = a.Tables[0];
+  const before = JSON.stringify(a);
+  const dans = findLine(a, "DANS L'ENTREPOT");
+  const laves = findLine(a, '2 laves main en inox + 1 sanibroyeur SPEED');
+  const rolls = findLine(a, '2 rolls en métal');
+  check(!rowTrimOf(a, rolls), 'rangée normale : rien à réduire');
+  check(splitAt(a, laves), 'séparée');
+  const r = t.Rows.findIndex((x) => x.Lines.includes(dans));
+  const h0 = t.RowYs[r + 1] - t.RowYs[r], hn = t.RowYs[r + 3] - t.RowYs[r + 2];
+  check(rowTrimOf(a, dans), 'espace vide au-dessus de DANS L\'ENTREPOT');
+  const H = a.Height;
+  check(trimRow(a, dans), 'réduite');
+  const h1 = t.RowYs[r + 1] - t.RowYs[r];
+  check(h1 < h0 && h1 <= hn * 1.6, `hauteur ${h0} → ${h1} (rangée normale ${hn})`);
+  eq(H - (h0 - h1), a.Height, 'la page raccourcit d\'autant');
+  check(!rowTrimOf(a, dans), 'plus rien à réduire');
+  const img = stretch(load('page1').n.image, a);
+  eq(a.Height, img.h, 'image');
+  const c = dans.Cells[0];
+  check(Rect.cy(c.Box) > t.RowYs[r] && Rect.cy(c.Box) < t.RowYs[r + 1] && c.Ink.Y >= cutY(t.RowYs[r]) + 5, 'case dans sa rangée');
+  check(trimsOf(a, dans).length > 0 && untrimRow(a, dans), 'hauteur d\'origine');
+  eq(H, a.Height, 'page revenue');
+  removeAddedRow(a, laves);
+  if (!a.Inserts.length) delete a.Inserts;
+  eq(before.replace(/"Bounds":\{[^}]*\}/g, ''), JSON.stringify(a).replace(/"Bounds":\{[^}]*\}/g, ''), 'page d\'origine');
 });
 
 test('Couleur du texte : sur la sélection, suit la saisie, .txt inchangé', () => {

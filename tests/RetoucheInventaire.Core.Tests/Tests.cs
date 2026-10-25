@@ -906,6 +906,11 @@ public static class Tests
         vest.Cells[0].Text = "2 vestiaires avec 1 porte en métal\nLOT 6 : 1 table de travail";
         Rows.SplitTypedText(a, vest, 1)!.Cells[1].Text = "20";
         Rows.AddBlank(a, FindLine(a, "1 diable à plateau à roulettes"), above: true)!.Cells[0].Text = "Ajoutée au-dessus";
+        var dans = FindLine(a, "DANS L'ENTREPOT");
+        Rows.SplitBelow(a, dans);
+        Rows.TrimRow(a, dans);
+        Rows.TrimRow(a, FindLine(a, "2 laves main en inox + 1 sanibroyeur SPEED"));
+        Rows.Copy(a, dans);
         Lots.CreateEmpty(p);
         Lots.FillAutomatically(p);
         Totals.Recompute(p, Arrangement.Build(p));
@@ -1128,6 +1133,29 @@ public static class Tests
         int n = a.Tables[0].Rows.Count;
         Check(Rows.SplitBelow(a, comp), "trait tracé");
         Equal(n + 1, a.Tables[0].Rows.Count, "deux rangées");
+    }
+
+    public static void T_Reduire_la_rangee()
+    {
+        var p = new InventoryProject();
+        p.Pages.Add(Fixtures.Analyze("page1"));
+        var a = p.Pages[0];
+        var t = a.Tables[0];
+        var dans = FindLine(a, "DANS L'ENTREPOT");
+        var laves = FindLine(a, "2 laves main en inox + 1 sanibroyeur SPEED");
+        Check(Rows.RowTrimOf(a, FindLine(a, "2 rolls en métal")) is null, "rangée normale : rien à réduire");
+        Check(Rows.Split(a, laves), "séparée");
+        int r = t.Rows.FindIndex(x => x.Lines.Contains(dans));
+        double h0 = t.RowYs[r + 1] - t.RowYs[r];
+        int H = a.Height;
+        Check(Rows.TrimRow(a, dans), "réduite");
+        double h1 = t.RowYs[r + 1] - t.RowYs[r];
+        Check(h1 < h0, $"hauteur {h0} → {h1}");
+        Equal(H - (int)Math.Round(h0 - h1), a.Height, "la page raccourcit d'autant");
+        Check(Rows.RowTrimOf(a, dans) is null, "plus rien à réduire");
+        Equal(a.Height, PageLayout.Stretch(Fixtures.Load("page1").Image, a).Height, "image");
+        Check(Rows.UntrimRow(a, dans), "hauteur d'origine");
+        Equal(H, a.Height, "page revenue");
     }
 
     public static InventoryProject EndScenario()

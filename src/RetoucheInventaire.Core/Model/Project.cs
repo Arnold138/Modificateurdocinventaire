@@ -116,6 +116,8 @@ public sealed class TotalScope
     public string Mode { get; set; } = "above";
     public List<string> Pages { get; set; } = [];
     public bool Auto { get; set; } = true;
+    /// <summary>Écrite en gras (sinon comme les autres lignes).</summary>
+    public bool Bold { get; set; }
 }
 
 /// <summary>Où vont les lots 0 : « last » (après le dernier lot numéroté) ou « page » (pages « lots de fin » après la page AfterId).</summary>
@@ -157,11 +159,15 @@ public sealed class BandPart
 public sealed class InsertedBand
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N")[..8];
-    /// <summary>« Copy » (ligne dupliquée) ou « Split » (« Séparer ici » : filet seul).</summary>
+    /// <summary>« Copy » (ligne dupliquée), « Split » (« Séparer ici » : filet seul) ou « Trim » (« Réduire la rangée »).</summary>
     public string Kind { get; set; } = "Copy";
     /// <summary>Ordonnée (page agrandie) où la bande commence.</summary>
     public int At { get; set; }
     public int Height { get; set; }
+    /// <summary>Bande « Trim » (« Réduire la rangée ») : rangées de l'image d'origine sautées (Height = −Skip).</summary>
+    public int Skip { get; set; }
+    /// <summary>Bande « Trim » : case (Id) de la 1re ligne de la rangée réduite (la réduction suit sa rangée).</summary>
+    public string? Line { get; set; }
     public List<BandPart> Parts { get; set; } = [];
 }
 

@@ -17,7 +17,7 @@ import { planArrangement, viewOf, composePage, unitCrop, pageArranged, mapY, unm
 import { recomputeTotals, isComputedCell, computedValue } from './core/totals.js';
 import { hasLotCell } from './core/lots.js';
 import { frameSignature, lotFrameEnabled } from './core/lotcolumn.js';
-import { canCopyLine, canSplit, addedRowOf, copyLine, addBlankLine, locate, splitAt, splitTypedText, removeAddedRow, canSplitBelow, splitBelow, addTotalLine, lastObjectLine } from './core/rows.js';
+import { canCopyLine, canSplit, addedRowOf, copyLine, addBlankLine, locate, splitAt, splitTypedText, removeAddedRow, canSplitBelow, splitBelow, addTotalLine, lastObjectLine, rowTrimOf, trimRow, untrimRow, trimsOf } from './core/rows.js';
 import { decodeImage, pdfPages, isImageName, mimeOf } from './services/decode.js';
 import { recognize, warmUp } from './services/ocr.js';
 import { rasterToCanvas, canvasToBlob, renderEdits, freeCanvas, lineExtra, pageRaster } from './services/canvas.js';
@@ -150,6 +150,23 @@ const hidePalette = () => { $('palette').hidden = true; };
 
 const confirmDialog = (title, text, ok = 'Continuer') =>
   dialog(title, `<p>${escapeHtml(text)}</p>`, [{ label: 'Annuler', value: false }, { label: ok, value: true, className: 'accent' }]);
+
+// ---------- Réglages de l'appareil (Mise en page) ----------
+
+/** Loupe « Original » au-dessus de la case ; zoom de l'iPad quand on touche une case. Gardés sur cet appareil. */
+const prefs = (() => {
+  const p = { loupe: true, caseZoom: false };
+  try { Object.assign(p, JSON.parse(localStorage.getItem('retouche-prefs') ?? '{}')); } catch { /* réglages par défaut */ }
+  return p;
+})();
+function savePrefs() {
+  try { localStorage.setItem('retouche-prefs', JSON.stringify(prefs)); } catch { /* sans importance */ }
+  applyPrefs();
+}
+function applyPrefs() {
+  const meta = document.querySelector('meta[name=viewport]');
+  if (meta) meta.content = `width=device-width, initial-scale=1${prefs.caseZoom ? '' : ', maximum-scale=1'}, viewport-fit=cover`;
+}
 
 // ---------- Zoom (pincer, boutons) ----------
 
@@ -340,6 +357,7 @@ async function showPage(n, { flat = null, fit = true, keepScroll = false } = {})
   const view = new PageView(viewOf(state.project, state.plan, k), display, {
     lotsActive: () => lotsActive(state.project),
     zoom: () => state.zoom,
+    loupe: () => prefs.loupe,
     mapY: (y) => mapY(pp(), y),
     unmapY: (y) => unmapY(pp(), y),
     onFocus: (v, f) => { state.field = f; state.editSession = null; updateEditBar(); },
@@ -378,6 +396,7 @@ async function showPage(n, { flat = null, fit = true, keepScroll = false } = {})
       status('Rangée déplacée. ↶ pour annuler.');
       scheduleSave();
     },
+    onMoveLine: (v, table, line, before) => run(() => moveLine(page, table, line, before)),
   });
   view.baseFlat = state.flats.get(page) ?? null;
   view.setLockMode(state.lock);
@@ -388,7 +407,7 @@ async function showPage(n, { flat = null, fit = true, keepScroll = false } = {})
   if (focusedField && view.inputs.has(focusedField)) { state.field = focusedField; view.focus(focusedField); }
   if (!keepScroll)
     status(page.Source === 'Image'
-      ? 'Touchez une case pour la corriger ; l\'original s\'affiche en loupe au-dessus.'
+      ? (prefs.loupe ? 'Touchez une case pour la corriger ; l\'original s\'affiche en loupe au-dessus (réglable : Mise en page).' : 'Touchez une case pour la corriger.')
       : 'Touchez une case pour la corriger.');
   updateButtons();
 }
@@ -448,6 +467,12 @@ function lineChoices(f) {
     items.push({ act: 'splitBelow', icon: 'i-split', label: 'Séparer en dessous (tracer un trait)', hint: 'Un trait sous cette ligne : ce qui suit devient une rangée à part.' });
   if (hasLotCell(line) && !isZeroLot(line))
     items.push({ act: 'end', icon: 'i-addbelow', label: 'Mettre à la fin (lot 0)', hint: 'Objet absent : sa ligne part à la fin, ce qui suit remonte.' });
+  if (rowTrimOf(page, line))
+    items.push({ act: 'trim', icon: 'i-merge', label: 'Réduire la rangée (enlever l\'espace vide)', hint: 'La rangée prend la hauteur des autres ; ce qui suit remonte.' });
+  else if (trimsOf(page, line).length)
+    items.push({ act: 'untrim', icon: 'i-split', label: 'Remettre la hauteur d\'origine', hint: 'L\'espace vide imprimé revient.' });
+  if (line.TotalScope)
+    items.push({ act: 'bold', icon: 'i-sum', label: line.TotalScope.Bold ? 'Enlever le gras' : 'Mettre en gras', hint: 'Ligne TOTAL ajoutée : écriture en gras ou comme les autres lignes.' });
   const added = addedRowOf(page, line);
   if (added?.band.Kind === 'Split' && added.row.Lines[0] === line)
     items.push({ act: 'merge', icon: 'i-merge', label: 'Remettre dans la rangée du dessus', hint: 'Annule « Séparer ici » : le trait ajouté disparaît.' });
@@ -492,6 +517,22 @@ async function lineAction(item, f) {
   const { page, line } = hit;
   const name = short(firstText(line));
   if (item.act === 'end') return applyLot(state.view, line, '0');
+  if (item.act === 'trim' || item.act === 'untrim') {
+    pushUndo();
+    if (item.act === 'trim') trimRow(page, line); else untrimRow(page, line);
+    replan(); recomputeAll();
+    await refreshView();
+    state.view?.flashLine(line);
+    status(item.act === 'trim' ? `Rangée de « ${name} » réduite : même hauteur que les autres. ↶ pour annuler.` : `Rangée de « ${name} » remise à sa hauteur d'origine.`);
+    return scheduleSave();
+  }
+  if (item.act === 'bold') {
+    pushUndo();
+    line.TotalScope.Bold = !line.TotalScope.Bold;
+    await refreshView();
+    status(line.TotalScope.Bold ? `« ${name} » en gras.` : `« ${name} » : même écriture que les autres lignes.`);
+    return scheduleSave();
+  }
   if (item.act === 'back') {
     pushUndo();
     setLot(state.project, line, '');
@@ -513,6 +554,10 @@ async function lineAction(item, f) {
   }
   pushUndo();
   let show = null, msg = '';
+  // Rangée haute (espace vide imprimé) : réduite avant d'ajouter ou de séparer, pour que tout ait la hauteur des autres.
+  const neighbour = (d) => { const at = locate(page, line); return at?.row.Lines[at.i + d] ?? null; };
+  const prev = neighbour(-1), next = neighbour(1);
+  if (['copy', 'blankBelow', 'blankAbove', 'typed'].includes(item.act) && canCopyLine(page, line)) trimRow(page, line);
   if (item.act === 'blankBelow' || item.act === 'blankAbove') {
     show = addBlankLine(page, line, item.act === 'blankAbove');
     msg = `Ligne vide ajoutée ${item.act === 'blankAbove' ? 'au-dessus de' : 'sous'} « ${name} » : tapez la désignation et les prix. Case de lot vide : tapez le numéro ou « Synchroniser ».`;
@@ -543,6 +588,8 @@ async function lineAction(item, f) {
     status('Impossible ici : choisissez une ligne d\'article d\'un tableau.');
     return;
   }
+  if (item.act === 'split' && prev) { trimRow(page, prev); trimRow(page, line); }
+  if (item.act === 'splitBelow' && next) { trimRow(page, line); trimRow(page, next); }
   resyncLots(state.project);
   replan();
   recomputeAll();
@@ -618,6 +665,36 @@ async function applyLot(v, line, value) {
       : 'Lot 0 : aucun autre lot numéroté, la ligne reste en place.');
   } else if (wasZero && !zero) status(`Lot ${line.Lot || '(vide)'} : « ${short(firstText(line))} » est revenu à sa place.`);
   else status(line.Lot ? `Lot ${line.Lot} enregistré.` : 'Case de lot vidée.');
+  scheduleSave();
+}
+
+/**
+ * Poignée d'une ligne dans un bloc : la ligne devient une rangée à part (trait au-dessus et, s'il le faut, en dessous ;
+ * rangées réduites à la hauteur des autres), puis cette rangée est posée avant la rangée `before` (null : à la fin).
+ */
+async function moveLine(page, table, line, before) {
+  const at = locate(page, line);
+  if (!at) return;
+  pushUndo();
+  const target = before === null ? null : table.Rows[before];
+  const prev = at.i > 0 ? at.row.Lines[at.i - 1] : null;
+  if (prev) splitAt(page, line);
+  const own = locate(page, line);
+  const next = own.row.Lines[own.i + 1] ?? null;
+  if (next) splitBelow(page, line);
+  for (const l of [prev, line, next]) if (l) trimRow(page, l);
+  const from = table.Rows.findIndex((r) => r.Lines.includes(line));
+  const to = target ? table.Rows.indexOf(target) : -1;
+  if (to !== from) {
+    const order = rowOrder(table).filter((r) => r !== from);
+    order.splice(to < 0 ? order.length : order.indexOf(to), 0, from);
+    table.RowOrder = order;
+  }
+  resyncLots(state.project);
+  replan(); recomputeAll();
+  await refreshView();
+  state.view?.flashLine(line);
+  status(`« ${short(firstText(line))} » déplacée : c'est maintenant une rangée à part (case de lot vide : tapez son numéro ou « Synchroniser »). ↶ pour annuler.`);
   scheduleSave();
 }
 
@@ -704,14 +781,16 @@ async function totalsMenu(page) {
     <label class="choice"><input type="radio" name="totScope" value="pages"> <span><b>Les pages au choix</b><small>À cocher dans la liste qui s'ouvre.</small></span></label>
     <div id="totPages" hidden>${pageChecklist((p) => p === page)}</div>
     <label class="choice"><input type="radio" name="totScope" value="all"> <span><b>Tout le document</b></span></label>
-    <label class="switch"><input id="totAuto" type="checkbox" checked> Calculer automatiquement (sinon : à taper soi-même)</label>`;
+    <label class="switch"><input id="totAuto" type="checkbox" checked> Calculer automatiquement (sinon : à taper soi-même)</label>
+    <label class="switch"><input id="totBold" type="checkbox"> En gras (sinon : même écriture que les autres lignes)</label>`;
   const showPages = (e) => { if (e.target.name === 'totScope') $('totPages').hidden = e.target.value !== 'pages'; };
   if ((await dialog('Ajouter une ligne TOTAL', html, [{ label: 'Annuler', value: null }, { label: 'Ajouter', value: 'ok', className: 'accent' }], showPages)) !== 'ok') return;
   const sel = $('totTable')?.value;
   const anchor = sel === 'here' ? here : tables[sel !== undefined ? +sel : 0].last;
   const mode = document.querySelector('input[name=totScope]:checked')?.value ?? 'above';
-  const scope = { Mode: mode, Pages: mode === 'pages' ? checkedPages().map((p) => p.Id) : [], Auto: $('totAuto').checked };
+  const scope = { Mode: mode, Pages: mode === 'pages' ? checkedPages().map((p) => p.Id) : [], Auto: $('totAuto').checked, Bold: $('totBold').checked };
   pushUndo();
+  trimRow(page, anchor);
   const t = addTotalLine(page, anchor, scope);
   if (!t) { state.undo.pop(); updateButtons(); return status('Impossible d\'ajouter la ligne ici.'); }
   resyncLots(state.project);
@@ -1175,9 +1254,10 @@ function lotsHelp() {
       <li><b>Numéroter.</b> Touchez une case à gauche d'un objet et tapez son numéro : rien d'autre ne change. Ou <b>Synchroniser automatiquement</b> : toutes les cases se remplissent dans l'ordre, en repartant des numéros déjà tapés.</li>
       <li><b>Objet absent : à la fin.</b> Tapez <b>0</b> (ou clic droit › <b>Mettre à la fin</b>). La 1re fois, l'app demande où : <b>après le dernier lot</b>, ou sur une <b>page « Lots de fin »</b> placée où vous voulez (les pages suivantes sont renumérotées, une nouvelle page s'ajoute quand elle est pleine). Le message en bas dit exactement où la ligne est partie. Pour la remettre : retapez son numéro (ou clic droit › <b>Remettre à sa place</b>).</li>
       <li><b>Objet retiré de la vente.</b> Clic droit › <b>Supprimer cette ligne</b> : elle disparaît (page, fichier texte, totaux), ce qui suit remonte. Pour la retrouver : ↶, ou <b>Retirer… › Remettre les lignes supprimées</b>.</li>
-      <li><b>Ajouter ou séparer.</b> Clic droit (ou bouton <b>Ligne</b>) : <b>ligne vide</b> au-dessus ou en dessous, <b>dupliquer</b>, <b>tracer un trait</b> au-dessus ou en dessous pour séparer un gros bloc.</li>
-      <li><b>Déplacer une rangée.</b> Glissez la poignée <b>⋮⋮</b> (à gauche de la poubelle) vers le haut ou le bas.</li>
-      <li><b>Totaux.</b> Ils suivent tout seuls. Bouton <b>Totaux</b> de la page : recalculer, ou <b>ajouter une ligne TOTAL</b> (lignes au-dessus, la page, des pages au choix ou tout le document).</li>
+      <li><b>Ajouter ou séparer.</b> Clic droit (ou bouton <b>Ligne</b>) : <b>ligne vide</b> au-dessus ou en dessous, <b>dupliquer</b>, <b>tracer un trait</b> au-dessus ou en dessous pour séparer un gros bloc. Une rangée trop haute (espace vide imprimé) est réduite à la hauteur des autres ; aussi au clic droit : <b>Réduire la rangée</b>.</li>
+      <li><b>Déplacer.</b> Glissez la poignée <b>⋮⋮</b> (à gauche de la poubelle) vers le haut ou le bas : une rangée, ou une ligne seule d'un bloc (poignée en pointillés), qui devient alors une rangée.</li>
+      <li><b>Totaux.</b> Ils suivent tout seuls. Bouton <b>Totaux</b> de la page : recalculer, ou <b>ajouter une ligne TOTAL</b> (lignes au-dessus, la page, des pages au choix ou tout le document ; en gras ou non).</li>
+      <li><b>Mise en page.</b> Cochez ou non la <b>loupe « Original »</b> au-dessus de la case et le <b>zoom automatique de l'iPad</b>.</li>
     </ol>
     <p class="muted">Rien ne change sans votre action. ↶ annule la dernière action (jusqu'à 30).</p>`, [{ label: 'Compris', className: 'accent' }]);
 }
@@ -1272,10 +1352,12 @@ async function lotsDialog() {
   scheduleSave();
 }
 
-/** « Modifier » : le document (nom, pages) ; les outils de la case sélectionnée sont dans la barre du haut. */
+/** « Mise en page » : le document (nom, pages), réglages de l'écran ; les outils de la case sélectionnée sont dans la barre du haut. */
 async function editDialog() {
   const page = currentPage();
-  const choice = await dialog('Modifier', `<p>Le document <b>${escapeHtml(state.project.Name)}</b>${page ? `, page ${state.index + 1} sur ${pages().length}` : ''}.</p>
+  const shown = dialog('Mise en page', `<p>Le document <b>${escapeHtml(state.project.Name)}</b>${page ? `, page ${state.index + 1} sur ${pages().length}` : ''}.</p>
+    <label class="switch"><input id="prefLoupe" type="checkbox" ${prefs.loupe ? 'checked' : ''}> Loupe « Original » au-dessus de la case touchée</label>
+    <label class="switch"><input id="prefZoom" type="checkbox" ${prefs.caseZoom ? 'checked' : ''}> Zoom automatique de l'iPad quand on touche une case</label>
     <p class="muted">Pour une case : touchez-la, puis en haut <b>Ligne</b> (dupliquer la ligne, séparer ici ; aussi au clic droit ou à l'appui long sur la case), <b>Barrer</b>, <b>Couleur</b>, <b>Type de ligne</b>, <b>Rétablir</b> (et <b>Recalculer</b> pour un total). Sélectionnez quelques mots pour ne barrer ou colorer qu'eux.</p>`, [
     { label: 'Renommer le document', value: 'rename', className: 'accent' },
     { label: 'Liste des pages', value: 'pages' },
@@ -1283,6 +1365,9 @@ async function editDialog() {
     ...(page ? [{ label: 'Retirer cette page', value: 'remove', className: 'danger' }] : []),
     { label: 'Fermer', value: null },
   ]);
+  $('prefLoupe').onchange = (e) => { prefs.loupe = e.target.checked; savePrefs(); status(prefs.loupe ? 'Loupe activée.' : 'Loupe désactivée : plus d\'agrandissement au-dessus de la case.'); };
+  $('prefZoom').onchange = (e) => { prefs.caseZoom = e.target.checked; savePrefs(); status(prefs.caseZoom ? 'Zoom automatique de l\'iPad activé.' : 'Zoom automatique de l\'iPad désactivé.'); };
+  const choice = await shown;
   if (choice === 'rename') await renameProject();
   else if (choice === 'pages') await pagesDialog();
   else if (choice === 'sync') { pushUndo(); syncLots(); }
@@ -1556,6 +1641,7 @@ async function start() {
   warmUp();
 }
 
+applyPrefs();
 window.addEventListener('DOMContentLoaded', start);
 window.__app = { state }; // essais automatiques
 export { state };

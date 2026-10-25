@@ -75,8 +75,20 @@ public sealed partial class MainWindow : Window
         Closed += (_, _) => Autosave();
     }
 
+    private static readonly string LoupeFile = System.IO.Path.Combine(DataDir, "loupe.txt");
+
+    /// <summary>Mise en page › Loupe : activée ou non, gardé sur cet ordinateur.</summary>
+    private void Loupe_Click(object sender, RoutedEventArgs e)
+    {
+        PageView.LoupeEnabled = LoupeItem.IsChecked;
+        try { Directory.CreateDirectory(DataDir); File.WriteAllText(LoupeFile, LoupeItem.IsChecked ? "oui" : "non"); } catch { /* sans importance */ }
+        SetStatus(LoupeItem.IsChecked ? "Loupe activée." : "Loupe désactivée : plus d'agrandissement au-dessus de la case.");
+    }
+
     private async Task StartAsync()
     {
+        try { PageView.LoupeEnabled = !(File.Exists(LoupeFile) && File.ReadAllText(LoupeFile).Trim() == "non"); } catch { /* réglage par défaut */ }
+        LoupeItem.IsChecked = PageView.LoupeEnabled;
         if (!_ocr.IsAvailable)
             SetStatus("Reconnaissance du texte indisponible : installez la reconnaissance optique française de Windows (voir le README). TXT, CSV et XLSX restent utilisables.");
         else if (!_ocr.IsFrench)
@@ -428,6 +440,7 @@ public sealed partial class MainWindow : Window
             SetStatus("Rangée déplacée. ↶ pour annuler.");
             ScheduleAutosave();
         };
+        view.LineMoved += async (v, table, line, before) => await MoveLineAsync(v.Page, table, line, before);
         view.LineCommands = LineCommandsFor;
         view.SetLockMode(LockToggle.IsChecked == true);
         _view = view;
@@ -662,6 +675,15 @@ public sealed partial class MainWindow : Window
         if (Lots.HasCell(line) && !Lots.IsZero(line))
             list.Add(new("Mettre à la fin (lot 0)", "Objet absent : sa ligne part à la fin, ce qui suit remonte.", "\uE74B",
                 () => _ = LineActionAsync("end", 0, f)));
+        if (Rows.RowTrimOf(page, line) != null)
+            list.Add(new("Réduire la rangée (enlever l'espace vide)", "La rangée prend la hauteur des autres ; ce qui suit remonte.", "\uE73F",
+                () => _ = LineActionAsync("trim", 0, f)));
+        else if (Rows.TrimsOf(page, line).Count > 0)
+            list.Add(new("Remettre la hauteur d'origine", "L'espace vide imprimé revient.", "\uE740",
+                () => _ = LineActionAsync("untrim", 0, f)));
+        if (line.TotalScope is { } ts)
+            list.Add(new(ts.Bold ? "Enlever le gras" : "Mettre en gras", "Ligne TOTAL ajoutée : écriture en gras ou comme les autres lignes.", "\uE8DD",
+                () => _ = LineActionAsync("bold", 0, f)));
         if (Rows.AddedRowOf(page, line) is { } added)
         {
             if (added.Band.Kind == "Split" && added.At.Row.Lines.Count > 0 && added.At.Row.Lines[0] == line)
@@ -701,6 +723,27 @@ public sealed partial class MainWindow : Window
         var (page, line) = hit;
         string name = Short(line.FirstText);
         if (act == "end") { if (_view != null) await ApplyLotAsync(_view, line, "0"); return; }
+        if (act is "trim" or "untrim")
+        {
+            PushUndo();
+            if (act == "trim") Rows.TrimRow(page, line); else Rows.UntrimRow(page, line);
+            Replan();
+            RecomputeTotals();
+            await RefreshViewAsync();
+            _view?.FlashLine(line);
+            SetStatus(act == "trim" ? $"Rangée de « {name} » réduite : même hauteur que les autres. ↶ pour annuler." : $"Rangée de « {name} » remise à sa hauteur d'origine.");
+            ScheduleAutosave();
+            return;
+        }
+        if (act == "bold" && line.TotalScope is { } scope)
+        {
+            PushUndo();
+            scope.Bold = !scope.Bold;
+            await RefreshViewAsync();
+            SetStatus(scope.Bold ? $"« {name} » en gras." : $"« {name} » : même écriture que les autres lignes.");
+            ScheduleAutosave();
+            return;
+        }
         if (act == "back")
         {
             PushUndo();
@@ -730,6 +773,11 @@ public sealed partial class MainWindow : Window
         PushUndo();
         PrintedLine? show = null;
         string msg = "";
+        // Rangée haute (espace vide imprimé) : réduite avant d'ajouter ou de séparer, pour que tout ait la hauteur des autres.
+        var loc = Rows.Locate(page, line);
+        PrintedLine? prev = loc is { I: > 0 } ? loc.Row.Lines[loc.I - 1] : null;
+        PrintedLine? next = loc != null && loc.I + 1 < loc.Row.Lines.Count ? loc.Row.Lines[loc.I + 1] : null;
+        if (act is "copy" or "blankBelow" or "blankAbove" or "typed" && Rows.CanCopy(page, line)) Rows.TrimRow(page, line);
         switch (act)
         {
             case "blankBelow":
@@ -775,6 +823,8 @@ public sealed partial class MainWindow : Window
             SetStatus("Impossible ici : choisissez une ligne d'article d'un tableau.");
             return;
         }
+        if (act == "split" && prev != null) { Rows.TrimRow(page, prev); Rows.TrimRow(page, line); }
+        if (act == "splitBelow" && next != null) { Rows.TrimRow(page, line); Rows.TrimRow(page, next); }
         Lots.Resync(_project);
         Replan();
         RecomputeTotals();
@@ -904,6 +954,38 @@ public sealed partial class MainWindow : Window
         }
         else if (wasZero && !zero) SetStatus($"Lot {(line.Lot.Length > 0 ? line.Lot : "(vide)")} : « {Short(line.FirstText)} » est revenu à sa place.");
         else SetStatus(line.Lot.Length > 0 ? $"Lot {line.Lot} enregistré." : "Case de lot vidée.");
+        ScheduleAutosave();
+    }
+
+    /// <summary>
+    /// Poignée d'une ligne dans un bloc : la ligne devient une rangée à part (trait au-dessus et, s'il le faut, en dessous ;
+    /// rangées réduites à la hauteur des autres), puis cette rangée est posée avant la rangée <paramref name="before"/> (null : à la fin).
+    /// </summary>
+    private async Task MoveLineAsync(ModelPage page, Table table, PrintedLine line, int? before)
+    {
+        if (_busy || Rows.Locate(page, line) is not { } at) return;
+        PushUndo();
+        var target = before is int b ? table.Rows[b] : null;
+        var prev = at.I > 0 ? at.Row.Lines[at.I - 1] : null;
+        if (prev != null) Rows.Split(page, line);
+        var own = Rows.Locate(page, line)!;
+        var next = own.I + 1 < own.Row.Lines.Count ? own.Row.Lines[own.I + 1] : null;
+        if (next != null) Rows.SplitBelow(page, line);
+        foreach (var l in new[] { prev, line, next }) if (l != null) Rows.TrimRow(page, l);
+        int from = table.Rows.FindIndex(r => r.Lines.Contains(line));
+        int to = target is null ? -1 : table.Rows.IndexOf(target);
+        if (to != from)
+        {
+            var order = Lots.RowOrder(table).Where(r => r != from).ToList();
+            order.Insert(to < 0 ? order.Count : order.IndexOf(to), from);
+            table.RowOrder = order;
+        }
+        Lots.Resync(_project);
+        Replan();
+        RecomputeTotals();
+        await RefreshViewAsync();
+        _view?.FlashLine(line);
+        SetStatus($"« {Short(line.FirstText)} » déplacée : c'est maintenant une rangée à part (case de lot vide : tapez son numéro ou « Synchroniser »). ↶ pour annuler.");
         ScheduleAutosave();
     }
 
@@ -1069,6 +1151,8 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(all);
         var auto = new CheckBox { Content = "Calculer automatiquement (sinon : à taper soi-même)", IsChecked = true, MinHeight = 40 };
         panel.Children.Add(auto);
+        var bold = new CheckBox { Content = "En gras (sinon : même écriture que les autres lignes)", IsChecked = false, MinHeight = 40 };
+        panel.Children.Add(bold);
         var dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot, Title = "Ajouter une ligne TOTAL", Content = new ScrollViewer { Content = panel, MaxHeight = 600 },
@@ -1080,10 +1164,11 @@ public sealed partial class MainWindow : Window
         string mode = onPage.IsChecked == true ? "page" : some.IsChecked == true ? "pages" : all.IsChecked == true ? "all" : "above";
         var scope = new TotalScope
         {
-            Mode = mode, Auto = auto.IsChecked == true,
+            Mode = mode, Auto = auto.IsChecked == true, Bold = bold.IsChecked == true,
             Pages = mode == "pages" ? boxes.Where(b => b.Box.IsChecked == true).Select(b => b.Page.Id).ToList() : [],
         };
         PushUndo();
+        Rows.TrimRow(page, anchor);
         var t = Rows.AddTotalLine(page, anchor, scope);
         if (t is null)
         {
@@ -1113,9 +1198,10 @@ public sealed partial class MainWindow : Window
             ("Numéroter.", "Touchez une case à gauche d'un objet et tapez son numéro : rien d'autre ne change. Ou « Synchroniser automatiquement » : toutes les cases se remplissent dans l'ordre, en repartant des numéros déjà tapés."),
             ("Objet absent : à la fin.", "Tapez 0 (ou clic droit › Mettre à la fin). La 1re fois, l'app demande où : après le dernier lot, ou sur une page « Lots de fin » placée où vous voulez (les pages suivantes sont renumérotées, une nouvelle page s'ajoute quand elle est pleine). Le message en bas dit exactement où la ligne est partie. Pour la remettre : retapez son numéro (ou clic droit › Remettre à sa place)."),
             ("Objet retiré de la vente.", "Clic droit › Supprimer cette ligne : elle disparaît (page, fichier texte, totaux), ce qui suit remonte. Pour la retrouver : ↶, ou Retirer… › Remettre les lignes supprimées."),
-            ("Ajouter ou séparer.", "Clic droit (ou bouton Ligne) : ligne vide au-dessus ou en dessous, dupliquer, tracer un trait au-dessus ou en dessous pour séparer un gros bloc."),
-            ("Déplacer une rangée.", "Glissez la poignée ⋮⋮ (à gauche de la poubelle) vers le haut ou le bas."),
-            ("Totaux.", "Ils suivent tout seuls. Bouton Totaux de la page : recalculer, ou ajouter une ligne TOTAL (lignes au-dessus, la page, des pages au choix ou tout le document)."),
+            ("Ajouter ou séparer.", "Clic droit (ou bouton Ligne) : ligne vide au-dessus ou en dessous, dupliquer, tracer un trait au-dessus ou en dessous pour séparer un gros bloc. Une rangée trop haute (espace vide imprimé) est réduite à la hauteur des autres ; aussi au clic droit : Réduire la rangée."),
+            ("Déplacer.", "Glissez la poignée ⋮⋮ (à gauche de la poubelle) vers le haut ou le bas : une rangée, ou une ligne seule d'un bloc (poignée blanche), qui devient alors une rangée."),
+            ("Totaux.", "Ils suivent tout seuls. Bouton Totaux de la page : recalculer, ou ajouter une ligne TOTAL (lignes au-dessus, la page, des pages au choix ou tout le document ; en gras ou non)."),
+            ("Mise en page.", "Cochez ou non la loupe « Original » au-dessus de la case."),
         };
         var panel = new StackPanel { Spacing = 10, MaxWidth = 560 };
         for (int i = 0; i < steps.Length; i++)

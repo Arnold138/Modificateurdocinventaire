@@ -94,6 +94,8 @@ public sealed class PageView
     public event Action<PageView, PrintedLine>? LotAdded;
     /// <summary>Rangée glissée : (tableau, rangée déplacée, rangée devant laquelle la poser ou null pour la fin).</summary>
     public event Action<PageView, Table, int, int?>? RowMoved;
+    /// <summary>Poignée d'une ligne dans un bloc lâchée : (tableau, ligne, rangée avant laquelle la poser ou null : à la fin).</summary>
+    public event Action<PageView, Table, PrintedLine, int?>? LineMoved;
 
     /// <summary>Une action du menu « Ligne » (clic droit, appui long ou bouton « Ligne ») : dupliquer, séparer…</summary>
     public sealed record LineCommand(string Label, string Hint, string Glyph, Action Run, bool Danger = false);
@@ -474,23 +476,40 @@ public sealed class PageView
                 var row = vt.Table.Rows[strip.R];
                 if (row.Lines.Count == 0 || row.Lines.All(l => l.Kind == LineKind.EnTete)) continue;
                 if (row.Lines.All(l => l.Cells.All(c => string.IsNullOrWhiteSpace(c.Text)))) continue;
-                double h = Math.Max(24, Math.Min(40, strip.Bottom - strip.Top - 4));
-                var grip = new Border
-                {
-                    Width = 30, Height = h, CornerRadius = new CornerRadius(8), Background = GripFill,
-                    BorderBrush = GripBorder, BorderThickness = new Thickness(1),
-                    Child = new FontIcon { Glyph = "", FontSize = 20, Foreground = GripInk },
-                };
-                ToolTipService.SetToolTip(grip, "Glisser pour déplacer la rangée");
-                Canvas.SetLeft(grip, GutterWidth - 52 - 30); // juste à gauche de la poubelle
-                Canvas.SetTop(grip, (strip.Top + strip.Bottom) / 2 - h / 2);
-                InitDrag(grip, vt, strip);
-                _gutter.Children.Add(grip);
+                // Bloc de plusieurs lignes : la poignée de la 1re ligne déplace le bloc, celle de chaque autre ligne déplace cette ligne seule.
+                var bands = row.Lines.Where(l => !l.Deleted && l.Cells.Any(c => !string.IsNullOrWhiteSpace(c.Text)))
+                    .Select(l => (Line: l, Entry: _view.Lines.FirstOrDefault(x => x.Line == l && !x.CarriedOnly)))
+                    .Where(x => x.Entry != null).Select(x => (x.Line, Band: LineBand(x.Entry!)))
+                    .Where(x => x.Band is RectD b && b.CenterY > strip.Top && b.CenterY < strip.Bottom)
+                    .Select(x => (x.Line, Band: x.Band!.Value)).ToList();
+                bool block = bands.Count > 1;
+                double h = block ? Math.Max(24, Math.Min(36, bands[0].Band.Height + 6)) : Math.Max(24, Math.Min(40, strip.Bottom - strip.Top - 4));
+                double cy = block ? bands[0].Band.CenterY : (strip.Top + strip.Bottom) / 2;
+                AddGrip(vt, strip, null, cy, h, block ? "Glisser pour déplacer le bloc" : "Glisser pour déplacer la rangée");
+                foreach (var (line, band) in bands.Skip(1))
+                    AddGrip(vt, strip with { Top = Math.Max(strip.Top, band.Top - 4), Bottom = Math.Min(strip.Bottom, band.Bottom + 4) }, line,
+                        band.CenterY, Math.Max(24, Math.Min(36, band.Height + 6)), "Glisser pour déplacer cette ligne seule (elle devient une rangée)");
             }
         }
     }
 
-    private void InitDrag(Border grip, Arrangement.ViewTable vt, Arrangement.Strip strip)
+    private void AddGrip(Arrangement.ViewTable vt, Arrangement.Strip strip, PrintedLine? line, double centerY, double h, string tip)
+    {
+        var grip = new Border
+        {
+            Width = 30, Height = h, CornerRadius = new CornerRadius(8), Background = line is null ? GripFill : Paper,
+            BorderBrush = GripBorder, BorderThickness = new Thickness(1),
+            Child = new FontIcon { Glyph = "", FontSize = line is null ? 20 : 17, Foreground = GripInk },
+        };
+        ToolTipService.SetToolTip(grip, tip);
+        Canvas.SetLeft(grip, GutterWidth - 52 - 30); // juste à gauche de la poubelle
+        Canvas.SetTop(grip, centerY - h / 2);
+        InitDrag(grip, vt, strip, line);
+        _gutter.Children.Add(grip);
+    }
+
+    /// <summary>Glisser une poignée : rangée entière, ou une ligne seule (<paramref name="line"/>) qui devient une rangée à l'endroit choisi.</summary>
+    private void InitDrag(Border grip, Arrangement.ViewTable vt, Arrangement.Strip strip, PrintedLine? line = null)
     {
         int? before = null;
         bool dragging = false, moved = false;
@@ -526,7 +545,9 @@ public sealed class PageView
             if (!dragging) return;
             dragging = false;
             _ghost.Visibility = _dropLine.Visibility = Visibility.Collapsed;
-            if (!ok || !moved || before == strip.R) return;
+            if (!ok || !moved) return;
+            if (line != null) { LineMoved?.Invoke(this, vt.Table, line, before); return; }
+            if (before == strip.R) return;
             int k = vt.Strips.FindIndex(s => s.R == strip.R);
             if (k + 1 < vt.Strips.Count && before == vt.Strips[k + 1].R) return; // même place
             if (k == vt.Strips.Count - 1 && before is null) return;
@@ -817,9 +838,12 @@ public sealed class PageView
     // ---------- Loupe, cadre, case suivante ----------
 
     /// <summary>Pendant l'édition, l'original de la case est montré en loupe juste au-dessus.</summary>
+    /// <summary>Loupe « Original » au-dessus de la case touchée (réglage Mise en page).</summary>
+    public static bool LoupeEnabled { get; set; } = true;
+
     private void ShowLoupe(Field f)
     {
-        if (_bitmap is null) return;
+        if (_bitmap is null || !LoupeEnabled) return;
         var box = _place[f].Cell.Box;
         var b = RectD.FromEdges(Math.Max(0, box.Left - 4), Math.Max(0, box.Top - 2), Math.Min(_view.Width, box.Right + 4), Math.Min(_view.Height, box.Bottom + 2));
         var holder = new Canvas { Width = b.Width, Height = b.Height, Clip = new RectangleGeometry { Rect = new Rect(0, 0, b.Width, b.Height) } };

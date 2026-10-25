@@ -98,6 +98,18 @@ public static class PageLayout
         return band;
     }
 
+    /// <summary>
+    /// « Réduire la rangée » : retire les rangées de pixels [at, at + h[ (espace vide imprimé), ce qui est en dessous remonte.
+    /// Bande « Trim » de hauteur négative (Skip : rangées de l'image d'origine sautées) ; RemoveBand la remet.
+    /// </summary>
+    public static InsertedBand CutBand(Page page, int at, int h, string? lineId = null)
+    {
+        ShiftBelow(page, at, -h);
+        var band = new InsertedBand { Kind = "Trim", At = at, Height = -h, Skip = h, Line = lineId };
+        page.Inserts.Add(band);
+        return band;
+    }
+
     /// <summary>Retire une bande insérée (son contenu a déjà été retiré) : ce qui est en dessous remonte.</summary>
     public static void RemoveBand(Page page, InsertedBand band)
     {
@@ -162,6 +174,7 @@ public static class PageLayout
             int until = Math.Min(baseHeight, Math.Max(src, b.At - Above(b.At) - inserted));
             if (until > src) seq.Add(new Piece(src, until - src));
             src = until;
+            if (b.Skip > 0) { src = Math.Min(baseHeight, until + b.Skip); inserted += b.Height; continue; } // rangée réduite : rangées sautées
             foreach (var p in b.Parts) if (p.Height > 0) seq.Add(p.Gap ? new Piece(p.Src, p.Height, p.X0, p.X1, Gap: true, Span: p.Span, Cols: p.Cols) : new Piece(p.Src, p.Height));
             inserted += b.Height;
         }
@@ -218,7 +231,7 @@ public static class PageLayout
     /// </summary>
     public static Raster Stretch(Raster baseImage, Page page)
     {
-        if (TotalExtra(page) == 0) return baseImage;
+        if (TotalExtra(page) == 0 && page.Inserts.Count == 0) return baseImage;
         var seq = Pieces(page, baseImage.Height);
         int w = baseImage.Width, ch = baseImage.Channels, stride = w * ch;
         int height = seq.Sum(x => x.N);
