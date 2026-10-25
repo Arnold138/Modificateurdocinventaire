@@ -42,7 +42,7 @@ export function detectGrids(image) {
     }
     if (ys.length === 0 || ys[0] > top + 8) ys.unshift(top);
     if (ys[ys.length - 1] < bottom - 8) ys.push(bottom);
-    ys = cluster(ys, 8);
+    ys = mergeThinRows(cluster(ys, 8));
     if (ys.length < 2) continue;
     tables.push({ Bounds: Rect.fromEdges(left, ys[0], right, ys[ys.length - 1]), ColumnXs: xs, RowYs: ys });
   }
@@ -132,6 +132,17 @@ function groupByVerticalOverlap(lines) {
     groups.get(r).push(l);
   });
   return [...groups.values()];
+}
+
+/**
+ * Trame (fond hachuré d'un en-tête ou d'un total) lue comme plusieurs filets serrés : une suite de rangées plus fines
+ * qu'une ligne de texte (moins de 70 % de la rangée médiane) ne fait qu'une rangée ; on garde son premier et son dernier filet.
+ */
+export function mergeThinRows(ys) {
+  if (ys.length < 5) return ys;
+  const gaps = ys.slice(1).map((y, i) => y - ys[i]).sort((a, b) => a - b);
+  const min = 0.7 * gaps[Math.trunc(gaps.length / 2)];
+  return ys.filter((y, i) => !(i > 0 && i + 1 < ys.length && y - ys[i - 1] < min && ys[i + 1] - y < min));
 }
 
 export function cluster(values, tol) {

@@ -23,7 +23,10 @@ jobs:
           tests/RetoucheInventaire.Core.Tests/bin/Release/net10.0/RetoucheInventaire.Core.Tests export-file /tmp/windows-lots.txt --lots page1 page2 page5
           tests/RetoucheInventaire.Core.Tests/bin/Release/net10.0/RetoucheInventaire.Core.Tests export-frame /tmp/windows-colonne.pgm page1 page2 page5
           tests/RetoucheInventaire.Core.Tests/bin/Release/net10.0/RetoucheInventaire.Core.Tests export-arrange /tmp/windows-arrange
-          node web/tests/test.mjs /tmp/windows.txt /tmp/windows-lots.txt /tmp/windows-colonne.pgm /tmp/windows-arrange
+          tests/RetoucheInventaire.Core.Tests/bin/Release/net10.0/RetoucheInventaire.Core.Tests export-rows /tmp/windows-rows
+          tests/RetoucheInventaire.Core.Tests/bin/Release/net10.0/RetoucheInventaire.Core.Tests export-fin /tmp/windows-fin
+          tests/RetoucheInventaire.Core.Tests/bin/Release/net10.0/RetoucheInventaire.Core.Tests export-pdf /tmp/windows.pdf
+          node web/tests/test.mjs /tmp/windows.txt /tmp/windows-lots.txt /tmp/windows-colonne.pgm /tmp/windows-arrange /tmp/windows-rows /tmp/windows-fin /tmp/windows.pdf
 
   # Version iPad : application web publiée sur GitHub Pages (branche gh-pages).
   site:
@@ -106,3 +109,25 @@ jobs:
           gh release create derniere-version RetoucheInventaire-win-*.zip -R "$GITHUB_REPOSITORY" \
             --title "Retouche d'inventaire — dernière version" --latest \
             --notes "Télécharger le zip qui correspond à la Surface (x64 ou arm64), le débloquer, l'extraire, puis double-cliquer sur Installer.cmd."
+
+  # Branche d'essai : même chose sur une version « version-essai » (pré-version), sans toucher à « dernière version » ni à l'iPad.
+  publication-essai:
+    needs: [tests, application]
+    if: github.ref == 'refs/heads/lignes-ajoutees'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+      - name: Création de la version d'essai téléchargeable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dl
+          for d in RetoucheInventaire-win-*; do (cd "$d" && zip -qr "../$d.zip" .); done
+          gh release delete version-essai --yes --cleanup-tag -R "$GITHUB_REPOSITORY" || true
+          gh release create version-essai RetoucheInventaire-win-*.zip -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Retouche d'inventaire — version d'essai" --prerelease --latest=false \
+            --notes "Version d'essai (pas encore sur l'iPad). Télécharger le zip qui correspond au PC (x64) ou à la Surface ARM (arm64), le débloquer, l'extraire, puis double-cliquer sur Installer.cmd."

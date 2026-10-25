@@ -7,6 +7,8 @@ namespace RetoucheInventaire.Core.Model;
 /// une bande est ajoutée sous la ligne et tout ce qui est en dessous descend d'autant.
 /// Les positions de la page (cases, filets, rangées, zones verrouillées) sont décalées en conséquence ;
 /// l'image est « étirée » : la bande reprend un interligne propre du scan (filets verticaux prolongés).
+/// Rangées ajoutées (ligne dupliquée, « Séparer ici ») : une bande insérée dans la page (<see cref="InsertedBand"/>),
+/// tout ce qui est en dessous descend aussi ; voir <see cref="Rows"/>.
 /// Entiers uniquement : même résultat sur Windows et sur iPhone/iPad.
 /// </summary>
 public static class PageLayout
@@ -14,8 +16,8 @@ public static class PageLayout
     /// <summary>Hauteur de ligne du texte, en tailles de police (Times New Roman).</summary>
     public const double LineHeightRatio = 1.15;
 
-    /// <summary>Somme des hauteurs ajoutées sur la page.</summary>
-    public static int TotalExtra(Page page) => page.AllLines().Sum(l => l.Extra);
+    /// <summary>Somme des hauteurs ajoutées sur la page (rangées agrandies et rangées ajoutées).</summary>
+    public static int TotalExtra(Page page) => page.AllLines().Sum(l => l.Extra) + page.Inserts.Sum(b => b.Height);
 
     /// <summary>Hauteur de la page redressée d'origine (sans les bandes ajoutées).</summary>
     public static int BaseHeight(Page page) => page.Height - TotalExtra(page);
@@ -47,8 +49,19 @@ public static class PageLayout
         if (extra == line.Extra) return false;
         if (line.Extra == 0) line.ExtraAt = CleanGap(page, line);
         int delta = extra - line.Extra;
-        int at = line.ExtraAt;
+        ShiftBelow(page, line.ExtraAt, delta, line);
+        foreach (var f in line.Cells) f.Box = f.Box with { Height = f.Box.Height + delta };
+        line.Extra = extra;
+        if (extra == 0) line.ExtraAt = 0;
+        return true;
+    }
 
+    /// <summary>
+    /// Décale de <paramref name="delta"/> tout ce qui est sous l'ordonnée <paramref name="at"/> (filets, rangées, cases, encre,
+    /// zones verrouillées, autres bandes) et allonge la page. <paramref name="self"/> : ligne dont la bande change (traitée à part).
+    /// </summary>
+    public static void ShiftBelow(Page page, int at, int delta, PrintedLine? self = null)
+    {
         foreach (var t in page.Tables)
         {
             for (int i = 0; i < t.RowYs.Count; i++) if (t.RowYs[i] > at) t.RowYs[i] += delta;
@@ -58,11 +71,7 @@ public static class PageLayout
         for (int i = 0; i < page.LockZones.Count; i++) page.LockZones[i] = Shift(page.LockZones[i], at, delta);
         foreach (var l in page.AllLines())
         {
-            if (l == line)
-            {
-                foreach (var f in l.Cells) f.Box = f.Box with { Height = f.Box.Height + delta };
-                continue;
-            }
+            if (l == self) continue;
             if (l.Extra > 0 && l.ExtraAt > at) l.ExtraAt += delta;
             foreach (var f in l.Cells)
             {
@@ -72,10 +81,40 @@ public static class PageLayout
                 if (!f.Ink.IsEmpty) f.Ink = f.Ink with { Y = f.Ink.Y + delta };
             }
         }
+        foreach (var b in page.Inserts) if (b.At >= at) b.At += delta;
         page.Height += delta;
-        line.Extra = extra;
-        if (extra == 0) line.ExtraAt = 0;
-        return true;
+    }
+
+    /// <summary>
+    /// Insère une bande à l'ordonnée <paramref name="at"/> : chaque morceau recopie des rangées entières de pixels
+    /// de l'image d'origine. Tout ce qui est en dessous descend.
+    /// </summary>
+    public static InsertedBand InsertBand(Page page, int at, List<BandPart> parts, string kind)
+    {
+        int height = parts.Sum(p => p.Height);
+        ShiftBelow(page, at, height);
+        var band = new InsertedBand { Kind = kind, At = at, Height = height, Parts = parts };
+        page.Inserts.Add(band);
+        return band;
+    }
+
+    /// <summary>
+    /// « Réduire la rangée » : retire les rangées de pixels [at, at + h[ (espace vide imprimé), ce qui est en dessous remonte.
+    /// Bande « Trim » de hauteur négative (Skip : rangées de l'image d'origine sautées) ; RemoveBand la remet.
+    /// </summary>
+    public static InsertedBand CutBand(Page page, int at, int h, string? lineId = null)
+    {
+        ShiftBelow(page, at, -h);
+        var band = new InsertedBand { Kind = "Trim", At = at, Height = -h, Skip = h, Line = lineId };
+        page.Inserts.Add(band);
+        return band;
+    }
+
+    /// <summary>Retire une bande insérée (son contenu a déjà été retiré) : ce qui est en dessous remonte.</summary>
+    public static void RemoveBand(Page page, InsertedBand band)
+    {
+        page.Inserts.Remove(band);
+        ShiftBelow(page, band.At, -band.Height);
     }
 
     /// <summary>Rectangle : descend s'il est sous la bande, s'allonge s'il la traverse.</summary>
@@ -106,46 +145,139 @@ public static class PageLayout
     }
 
     /// <summary>
-    /// Image de la page agrandie : l'image d'origine (hauteur <see cref="BaseHeight"/>) avec, pour chaque bande,
-    /// la reprise de l'interligne propre sur la largeur du tableau (filets verticaux prolongés) et le papier ailleurs.
+    /// Morceau de la page agrandie : rangées de l'image d'origine (y compris celles recopiées par une bande insérée) ou bande
+    /// d'interligne (<see cref="Extra"/>, ou <see cref="Gap"/> dans une bande insérée : filets verticaux de la rangée
+    /// <see cref="Y0"/> prolongés entre X0 et X1, papier ailleurs).
     /// </summary>
-    public static Raster Stretch(Raster baseImage, Page page)
+    public sealed record Piece(int Y0, int N, int X0 = 0, int X1 = 0, bool Extra = false, bool Gap = false, int Span = 0, List<int>? Cols = null);
+
+    /// <summary>Suite des rangées de la page agrandie, de haut en bas.</summary>
+    public static List<Piece> Pieces(Page page) => Pieces(page, BaseHeight(page));
+
+    public static List<Piece> Pieces(Page page, int baseHeight)
     {
-        var bands = new List<(int At, int Height, int X0, int X1)>();
+        var extras = new List<(int At, int Height, int X0, int X1)>();
         foreach (var t in page.Tables)
             foreach (var l in t.Rows.SelectMany(r => r.Lines).Where(l => l.Extra > 0))
             {
                 double left = t.HasGrid && t.ColumnXs.Count > 0 ? t.ColumnXs[0] : t.Bounds.Left;
                 double right = t.HasGrid && t.ColumnXs.Count > 0 ? t.ColumnXs[^1] : t.Bounds.Right;
-                bands.Add((l.ExtraAt, l.Extra, (int)Math.Floor(left) - 4, (int)Math.Ceiling(right) + 4));
+                extras.Add((l.ExtraAt, l.Extra, (int)Math.Floor(left) - 4, (int)Math.Ceiling(right) + 4));
             }
-        if (bands.Count == 0) return baseImage;
-        bands.Sort((x, y) => x.At.CompareTo(y.At));
-
-        int w = baseImage.Width, ch = baseImage.Channels, stride = w * ch;
-        int height = baseImage.Height + bands.Sum(b => b.Height);
-        var data = new byte[height * stride];
-        int src = 0, dst = 0, before = 0;
-        foreach (var band in bands)
+        extras = [.. extras.OrderBy(e => e.At)];
+        // 1) Image d'origine et bandes insérées (positions sans les bandes d'interligne au-dessus d'elles).
+        int Above(int y) => extras.Where(e => e.At < y).Sum(e => e.Height);
+        var seq = new List<Piece>();
+        int src = 0, inserted = 0;
+        foreach (var b in page.Inserts.OrderBy(b => b.At))
         {
-            int s = Math.Clamp(band.At - before, 0, baseImage.Height - 1); // interligne, en coordonnées d'origine
-            int n = s - src;
-            if (n > 0) { Array.Copy(baseImage.Data, src * stride, data, dst * stride, n * stride); src += n; dst += n; }
-            var paper = PaperOf(baseImage, s);
-            int x0 = Math.Clamp(band.X0, 0, w), x1 = Math.Clamp(band.X1, 0, w);
-            for (int k = 0; k < band.Height; k++, dst++)
-                for (int x = 0; x < w; x++)
-                {
-                    int o = dst * stride + x * ch;
-                    // Dans le tableau : les filets verticaux (sombres) sont prolongés, le reste devient papier propre.
-                    if (x >= x0 && x < x1 && Gray(baseImage, x, s) < 150) Array.Copy(baseImage.Data, s * stride + x * ch, data, o, ch);
-                    else Array.Copy(paper, 0, data, o, ch);
-                }
-            before += band.Height;
+            int until = Math.Min(baseHeight, Math.Max(src, b.At - Above(b.At) - inserted));
+            if (until > src) seq.Add(new Piece(src, until - src));
+            src = until;
+            if (b.Skip > 0) { src = Math.Min(baseHeight, until + b.Skip); inserted += b.Height; continue; } // rangée réduite : rangées sautées
+            foreach (var p in b.Parts) if (p.Height > 0) seq.Add(p.Gap ? new Piece(p.Src, p.Height, p.X0, p.X1, Gap: true, Span: p.Span, Cols: p.Cols) : new Piece(p.Src, p.Height));
+            inserted += b.Height;
         }
-        int rest = baseImage.Height - src;
-        if (rest > 0) Array.Copy(baseImage.Data, src * stride, data, dst * stride, rest * stride);
+        if (baseHeight > src) seq.Add(new Piece(src, baseHeight - src));
+        // 2) Bandes d'interligne, chacune avant la rangée qui suit sa position.
+        int total = seq.Sum(x => x.N);
+        int before = 0;
+        foreach (var e in extras)
+        {
+            int q = Math.Min(Math.Max(0, total - 1), Math.Max(0, e.At - before));
+            int pos = 0, s = 0, i = 0;
+            Piece? from = null;
+            for (; i < seq.Count; i++)
+            {
+                var x = seq[i];
+                if (x.Extra) continue;
+                if (q < pos + x.N)
+                {
+                    s = x.Gap ? x.Y0 : x.Y0 + (q - pos);
+                    if (x.Gap) from = x;
+                    if (q > pos)
+                    {
+                        seq[i] = x with { N = q - pos };
+                        seq.Insert(i + 1, x with { Y0 = s, N = x.N - (q - pos) });
+                        i++;
+                    }
+                    break;
+                }
+                pos += x.N;
+            }
+            // Dans l'interligne d'une rangée ajoutée : même rangée source.
+            seq.Insert(i, new Piece(Math.Clamp(s, 0, Math.Max(0, baseHeight - 1)), e.Height, e.X0, e.X1, Extra: true, Span: from?.Span ?? 0, Cols: from?.Cols));
+            before += e.Height;
+        }
+        return seq;
+    }
+
+    /// <summary>Rangée de l'image d'origine affichée à l'ordonnée <paramref name="y"/> de la page agrandie (null dans une bande d'interligne).</summary>
+    public static int? ToBase(Page page, int y)
+    {
+        int pos = 0;
+        foreach (var x in Pieces(page))
+        {
+            if (y < pos + x.N) return x.Extra || x.Gap ? null : x.Y0 + (y - pos);
+            pos += x.N;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Image de la page agrandie : l'image d'origine (hauteur <see cref="BaseHeight"/>) avec, pour chaque bande d'interligne,
+    /// la reprise de l'interligne propre sur la largeur du tableau (filets verticaux prolongés) et le papier ailleurs,
+    /// et les rangées ajoutées (rangées de pixels recopiées).
+    /// </summary>
+    public static Raster Stretch(Raster baseImage, Page page)
+    {
+        if (TotalExtra(page) == 0 && page.Inserts.Count == 0) return baseImage;
+        var seq = Pieces(page, baseImage.Height);
+        int w = baseImage.Width, ch = baseImage.Channels, stride = w * ch;
+        int height = seq.Sum(x => x.N);
+        var data = new byte[height * stride];
+        int dst = 0;
+        foreach (var x in seq)
+        {
+            if (x.Extra || x.Gap)
+            {
+                int s = x.Span > 0 ? CleanRow(baseImage, x.Y0, x.Span, x.Cols ?? []) : x.Y0;
+                var paper = PaperOf(baseImage, s);
+                int x0 = Math.Clamp(x.X0, 0, w), x1 = Math.Clamp(x.X1, 0, w);
+                for (int k = 0; k < x.N; k++, dst++)
+                    for (int xx = 0; xx < w; xx++)
+                    {
+                        int o = dst * stride + xx * ch;
+                        // Dans le tableau : les filets verticaux (sombres) sont prolongés, le reste devient papier propre.
+                        if (xx >= x0 && xx < x1 && Gray(baseImage, xx, s) < 150) Array.Copy(baseImage.Data, s * stride + xx * ch, data, o, ch);
+                        else Array.Copy(paper, 0, data, o, ch);
+                    }
+                continue;
+            }
+            int a = Math.Clamp(x.Y0, 0, baseImage.Height), b = Math.Min(baseImage.Height, a + x.N);
+            if (b > a) Array.Copy(baseImage.Data, a * stride, data, dst * stride, (b - a) * stride);
+            dst += x.N;
+        }
         return new Raster(w, height, ch, data);
+    }
+
+    /// <summary>
+    /// Rangée la plus nette pour prolonger les filets verticaux, parmi [s0, s0 + span[ : le plus de pixels sombres près des
+    /// filets du tableau (± 3 px) et le moins ailleurs (texte). À égalité, la plus haute.
+    /// </summary>
+    public static int CleanRow(Raster img, int s0, int span, List<int> cols)
+    {
+        int w = img.Width;
+        var near = new bool[w];
+        foreach (var c in cols) for (int x = Math.Max(0, c - 3); x <= Math.Min(w - 1, c + 3); x++) near[x] = true;
+        int best = Math.Clamp(s0, 0, img.Height - 1), bestScore = int.MinValue;
+        for (int y = Math.Max(0, s0); y < Math.Min(img.Height, s0 + span); y++)
+        {
+            int score = 0;
+            for (int x = 0; x < w; x++) if (Gray(img, x, y) < 150) score += near[x] ? 1 : -1;
+            if (score > bestScore) { bestScore = score; best = y; }
+        }
+        return best;
     }
 
     private static int Gray(Raster img, int x, int y)

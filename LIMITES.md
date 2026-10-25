@@ -12,6 +12,8 @@
 - **Ombres, éclairage inégal** : le seuil adaptatif les atténue. Une ombre qui coupe un filet peut faire perdre une rangée (deux rangées fusionnées).
 - **Feuille courbée, pliée, pas à plat** : la perspective corrige un plan, pas une courbure ; des filets courbes peuvent ne pas être détectés.
 - **Feuille claire sur fond clair** : les coins ne sont pas trouvés → « Recadrer » et placer les 4 poignées à la main.
+- **Scan, PDF** : quand le papier touche les quatre bords de l'image, la page entière est gardée (sinon une grande case blanche d'un tableau qui touche les bords pouvait être prise pour la feuille : page 6 de « BEENDHI prisé »). Une photo de feuille posée sur un fond clair qui remplit toute l'image est donc aussi gardée entière : « Recadrer » si besoin.
+- **Recadrer** relit le texte : chaque ligne relue reprend le numéro de lot et les corrections de la ligne d'avant **de même texte lu**. Une ligne lue différemment après recadrage perd les siens (à retaper) ; les lignes ajoutées sont perdues.
 - **Reflets, flash** : zone illisible, à ressaisir à la main.
 
 ## Tableaux
@@ -37,6 +39,9 @@
 
 ## Numéros de lot
 
+- **Pages et tableaux** : seuls les tableaux cochés ont des lots ; « Synchroniser » ne numérote qu'eux. La proposition (tableaux d'objets) écarte les cadres à une colonne, les récapitulatifs (« I - … », « II - … ») et les tableaux sans objet ; elle se corrige d'un toucher. Le nom affiché d'un tableau est sa 1re ligne d'objet telle qu'elle a été lue.
+- **Lignes illisibles** (bandes grisées des en-têtes et totaux lues comme du charabia) : pas d'objet sans montant lisible (chiffres ou « mémoire ») ni début d'objet (« 1 … », « +/- 20 … ») ni texte lisible. Une rangée d'en-tête ou de total n'a jamais d'objet. Une ligne réelle écartée à tort : « + ».
+
 - **Un objet = la ligne d'article qui porte les valeurs** (ou la première ligne de la rangée) : les lignes de suite (« CD3+ +/- 14130 heures ») n'ont pas de numéro. Si une rangée imprimée contient en réalité deux objets, l'un des deux n'aura pas de numéro : corriger le type de ligne ou taper le numéro voulu.
 - **La colonne tient dans la marge gauche** : le tableau n'est jamais déplacé. Marge étroite (photo recadrée au ras de la feuille, tableau près du bord) → colonne étroite et numéros réduits. Sous 8 pixels de marge, pas de colonne tracée.
 - **Où est la colonne** : de l'en-tête au dernier objet de chaque tableau ; rien sur les totaux, le récapitulatif (« I - … », « II - … », TOTAL GENERAL) ni sous le dernier objet. Une ligne de récapitulatif est reconnue à son numéro romain suivi d'un tiret.
@@ -48,8 +53,30 @@
 - **Afficher la page où arrivent les lots 0** demande de lire un morceau des pages d'où ils viennent : la première fois, un peu plus lent (gardé ensuite en mémoire).
 - **Déplacer une rangée (⋮⋮)** : seulement dans son tableau (pas d'une page à l'autre). L'en-tête ne se déplace pas.
 - **Tableau sans filets** : les lots 0 n'y bougent pas (seul le .txt les place après le dernier lot).
+- **Page « Lots de fin »** : composée sur la dernière page à lots qui la précède (marge du haut, rangées refaites à son tableau, filet du bas, même hauteur) ; l'en-tête du tableau n'y est pas recopié. Elle se remplit jusqu'à la hauteur du tableau modèle, puis une autre page s'ajoute juste après. Créée et retirée automatiquement : on ne la recadre pas, on n'y verrouille rien, on n'y retire rien (retaper un numéro y suffit). Dans le .txt, ses lignes sont à sa place dans l'ordre des pages.
+- **Supprimer cette ligne** emporte ses lignes de suite (texte sans montant) jusqu'au prochain objet ; une ligne supprimée seule dans sa rangée retire toute la rangée. Les numéros des autres lots ne changent pas (« Synchroniser » pour renuméroter). ↶ ou **Retirer… › Remettre les lignes supprimées** (page affichée) la remet.
 - **Retour en arrière** : 30 actions, pendant la session (pas après avoir fermé l'app). Le texte tapé dans une case compte pour une seule action jusqu'à ce qu'on change de case.
 - **Orthographe** : correcteur de l'appareil (iPhone/iPad, Windows), en français si le clavier est en français. Il n'est actif que dans la désignation.
+
+## Lignes ajoutées (Ligne vide, Dupliquer, Séparer ici)
+
+- **Ligne vide** : même hauteur que la ligne touchée (une ligne de texte), filets du tableau prolongés depuis cette rangée ; sa case de lot existe même vide. Pas au-dessus de l'en-tête.
+
+- **Dupliquer** ajoute la copie **sous toute la rangée** de la ligne : si la rangée imprimée contient plusieurs lignes, la copie vient après la dernière. Seule la ligne touchée est copiée (pas ses lignes de suite).
+- La copie reprend les **pixels** de la ligne (de l'interligne au-dessus à celui d'en dessous) : si la lecture avait mal découpé deux lignes collées, un bout de la ligne voisine peut apparaître en haut ou en bas de la copie. Retaper la case le masque.
+- La **case de lot** de la copie est vide : la remplir à la main ou « Synchroniser » (les autres numéros ne changent pas tout seuls).
+- Les **montants de la copie s'ajoutent** aux totaux (ils n'étaient pas dans le total imprimé) : en partageant un objet en deux (« 2 doseuses » → 1 + 1), corriger aussi le prix de l'original.
+- **Séparer au-dessus** trace le filet au milieu de l'interligne au-dessus de la ligne, recopié du filet du haut de la rangée ; impossible sur la 1re ligne d'une rangée (rien à séparer) : utiliser **Séparer en dessous** (trait sous la ligne), impossible sur la dernière.
+- **Synchroniser** ne renumérote plus rien : après une suite tapée à la main qui descend (30, 29…), la case vide suivante prend 30 (le numéro qui suit le lot précédent) même s'il existe déjà ; le message signale les doublons. « Renuméroter tout » refait tout dans l'ordre affiché.
+- **Export PDF** : chaque page est l'image JPEG de la page (comme l'export JPEG), en largeur A4 ; le texte n'est pas sélectionnable dans le PDF (c'est une image, comme le scan d'origine).
+- **Réduire la rangée** : l'espace en trop est mesuré par rapport aux marges habituelles des rangées d'une ligne du même tableau (au-dessus et en dessous du texte) ; il est enlevé s'il dépasse en tout une demi-ligne. Pas sur une ligne dupliquée ou une ligne vide ajoutée (déjà à la bonne hauteur), une rangée agrandie par du texte tapé, ni une rangée qui contient une ligne supprimée.
+- **Déplacer une ligne d'un bloc** : elle devient une rangée à part (trait tracé au-dessus et, si des lignes la suivent, en dessous) ; ses lignes de suite ne partent pas avec elle (les déplacer aussi, ou déplacer le bloc entier par la poignée de sa 1re ligne).
+- **En-tête sur fond tramé** : la trame peut être lue comme plusieurs filets serrés ; ils sont réunis en une rangée (à l'import et à l'ouverture d'un projet existant). Si l'en-tête avait été lu en morceaux, ses cases deviennent vides et modifiables (l'imprimé reste affiché) ; une case déjà corrigée n'est pas touchée.
+- **Ligne TOTAL ajoutée** : additionne les articles et titres (pas les totaux, en-têtes, récapitulatifs, lignes supprimées ni autres lignes TOTAL ajoutées) ; « lignes au-dessus » = du début du tableau (ou du total précédent) jusqu'à elle, sur sa page. Elle ne compte pas dans les totaux imprimés.
+- Le .txt garde une ligne par ligne : séparer ne change rien au .txt (sauf les numéros de lot) ; un titre avec valeurs séparé de son article garde ses valeurs sur sa propre ligne.
+- Tableaux sans filets : ni copie ni séparation (il n'y a pas de rangées à tracer).
+- **Recadrer** une page relit le texte : ses lignes ajoutées sont perdues (comme les agrandissements).
+- Une page avec des lignes ajoutées est exportée **redressée** (comme une page agrandie).
 
 ## Texte sur plusieurs lignes
 

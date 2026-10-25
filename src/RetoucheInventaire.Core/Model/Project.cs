@@ -91,8 +91,40 @@ public sealed class PrintedLine
     /// <summary>Ordonnée (page agrandie) où la bande ajoutée commence : un interligne propre sous le texte d'origine.</summary>
     public int ExtraAt { get; set; }
 
+    /// <summary>
+    /// Ligne dupliquée (« Dupliquer la ligne ») : ses montants ne sont pas dans le total imprimé, ils y sont ajoutés en entier.
+    /// Voir <see cref="Rows"/>.
+    /// </summary>
+    public bool Copy { get; set; }
+
+    /// <summary>Ligne supprimée (« Supprimer cette ligne ») : retirée de la page, du .txt, des totaux et des lots (son numéro est gardé).</summary>
+    public bool Deleted { get; set; }
+
+    /// <summary>Ligne TOTAL ajoutée : ce qu'elle additionne (voir <see cref="Totals"/>).</summary>
+    public TotalScope? TotalScope { get; set; }
+
     [JsonIgnore] public RectD Bounds => Cells.Aggregate(RectD.Empty, (r, f) => r.Union(f.Box));
     [JsonIgnore] public string FirstText => Cells.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c.Text))?.Text.Trim() ?? "";
+}
+
+/// <summary>
+/// Ligne TOTAL ajoutée : somme des montants actuels, colonne par colonne, des lignes au-dessus (« above », depuis l'en-tête ou le total
+/// précédent), de sa page (« page »), des pages choisies (« pages ») ou de tout le document (« all ») ; Auto = false : à taper.
+/// </summary>
+public sealed class TotalScope
+{
+    public string Mode { get; set; } = "above";
+    public List<string> Pages { get; set; } = [];
+    public bool Auto { get; set; } = true;
+    /// <summary>Écrite en gras (sinon comme les autres lignes).</summary>
+    public bool Bold { get; set; }
+}
+
+/// <summary>Où vont les lots 0 : « last » (après le dernier lot numéroté) ou « page » (pages « lots de fin » après la page AfterId).</summary>
+public sealed class EndLotsChoice
+{
+    public string Mode { get; set; } = "last";
+    public string? AfterId { get; set; }
 }
 
 /// <summary>Une rangée du tableau (entre deux filets horizontaux).</summary>
@@ -100,6 +132,43 @@ public sealed class Row
 {
     public RectD Bounds { get; set; }
     public List<PrintedLine> Lines { get; set; } = [];
+    /// <summary>Rangée ajoutée par l'utilisateur : identifiant de sa bande (<see cref="Page.Inserts"/>), null pour une rangée imprimée.</summary>
+    public string? Inserted { get; set; }
+}
+
+/// <summary>
+/// Morceau d'une bande insérée : rangées de pixels recopiées de l'image d'origine (page redressée) ou, avec <see cref="Gap"/>,
+/// interligne propre : filets verticaux (entre X0 et X1) de la rangée la plus nette parmi [Src, Src + Span[, papier ailleurs.
+/// </summary>
+public sealed class BandPart
+{
+    public int Src { get; set; }
+    public int Height { get; set; }
+    public bool Gap { get; set; }
+    public int Span { get; set; }
+    /// <summary>Abscisses (arrondies) des filets verticaux du tableau.</summary>
+    public List<int> Cols { get; set; } = [];
+    public int X0 { get; set; }
+    public int X1 { get; set; }
+}
+
+/// <summary>
+/// Bande insérée dans la page pour une rangée ajoutée (<see cref="Rows"/>) : filet du haut et, pour une ligne dupliquée,
+/// les pixels de la ligne recopiés ; tout ce qui est en dessous descend de <see cref="Height"/>.
+/// </summary>
+public sealed class InsertedBand
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N")[..8];
+    /// <summary>« Copy » (ligne dupliquée), « Split » (« Séparer ici » : filet seul) ou « Trim » (« Réduire la rangée »).</summary>
+    public string Kind { get; set; } = "Copy";
+    /// <summary>Ordonnée (page agrandie) où la bande commence.</summary>
+    public int At { get; set; }
+    public int Height { get; set; }
+    /// <summary>Bande « Trim » (« Réduire la rangée ») : rangées de l'image d'origine sautées (Height = −Skip).</summary>
+    public int Skip { get; set; }
+    /// <summary>Bande « Trim » : case (Id) de la 1re ligne de la rangée réduite (la réduction suit sa rangée).</summary>
+    public string? Line { get; set; }
+    public List<BandPart> Parts { get; set; } = [];
 }
 
 public sealed class Table
@@ -112,6 +181,8 @@ public sealed class Table
     public List<Row> Rows { get; set; } = [];
     /// <summary>Ordre d'affichage des rangées (rangées déplacées à la main), null : l'ordre imprimé.</summary>
     public List<int>? RowOrder { get; set; }
+    /// <summary>Pas de numéros de lot dans ce tableau (lots activés page par page, tableau par tableau).</summary>
+    public bool LotsOff { get; set; }
 }
 
 public sealed class Page
@@ -135,6 +206,10 @@ public sealed class Page
     public List<Table> Tables { get; set; } = [];
     public List<PrintedLine> LooseLines { get; set; } = [];
     public List<RectD> LockZones { get; set; } = [];
+    /// <summary>Bandes insérées (rangées ajoutées), voir <see cref="Rows"/>.</summary>
+    public List<InsertedBand> Inserts { get; set; } = [];
+    /// <summary>Page « lots de fin » (créée automatiquement) : composée depuis une page modèle, voir <see cref="Export.Arrangement"/>.</summary>
+    public bool EndLots { get; set; }
 
     public IEnumerable<PrintedLine> AllLines() =>
         Tables.SelectMany(t => t.Rows).SelectMany(r => r.Lines).Concat(LooseLines);
@@ -151,6 +226,8 @@ public sealed class InventoryProject
     /// <summary>Lots remplis à la main : rien ne se remplit tout seul (sauf « Synchroniser automatiquement »).</summary>
     public bool LotsByHand { get; set; }
     public List<Page> Pages { get; set; } = [];
+    /// <summary>Où vont les lots 0 (null : pas encore choisi, on le demande).</summary>
+    public EndLotsChoice? EndLots { get; set; }
 
     public IEnumerable<Field> AllFields() => Pages.SelectMany(p => p.AllFields());
 }

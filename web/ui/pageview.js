@@ -19,7 +19,7 @@ const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '
 export class PageView {
   /**
    * @param view ce qu'affiche la page (viewOf) ; @param display image affichée (null pour TXT/CSV/XLSX) ;
-   * cb : rappels (onFocus, onEdited, onLot, onLotRemove, onLotAdd, onMoveRow, onLocks, beforeEdit, beforeChange),
+   * cb : rappels (onFocus, onEdited, onLot, onLotRemove, onLotAdd, onMoveRow, onLocks, onLineMenu, beforeEdit, beforeChange),
    * lotsActive, zoom, mapY / unmapY (zones verrouillées : page d'origine ↔ écran).
    */
   constructor(view, display, cb) {
@@ -49,6 +49,19 @@ export class PageView {
     this.overlay = el('div', 'layer overlay', this.root);
     this.lockpad = el('div', 'layer lockpad', this.root);
     this.initLockPad();
+    // Clic droit : la case qui vient de prendre le focus fait apparaître la barre de la case et la loupe, qui peuvent
+    // se trouver sous le pointeur au moment du menu ; on retient donc la case réellement appuyée (bouton droit).
+    this.onContext = (e) => {
+      const press = this.rightPress && performance.now() - this.rightPress.t < 1500 ? this.rightPress : null;
+      this.rightPress = null;
+      const direct = [...this.inputs].find(([, i]) => i === e.target)?.[0] ?? null;
+      const target = press?.f ?? direct;
+      if (!target || press?.selected) return; // texte déjà sélectionné : menu habituel (copier, coller)
+      e.preventDefault();
+      this.rememberSel?.get(target)?.();
+      this.cb.onLineMenu?.(this, target, { x: e.clientX, y: e.clientY });
+    };
+    document.addEventListener('contextmenu', this.onContext);
     this.build();
   }
 
@@ -69,6 +82,7 @@ export class PageView {
 
   /** Libère la mémoire de l'image (important sur iPhone/iPad). */
   dispose() {
+    document.removeEventListener('contextmenu', this.onContext);
     freeCanvas(this.canvas);
     this.row.remove();
   }
@@ -126,6 +140,13 @@ export class PageView {
   }
 
   setLockMode(on) { this.lockpad.classList.toggle('active', on); }
+
+  /** Mode « Modifier » : poignées ⋮⋮ affichées tout de suite ; la poubelle et le « + » des lots sont masqués pendant ce temps. */
+  setMoveMode(on) {
+    this.moveMode = !!on;
+    this.gutter.classList.toggle('moving', this.moveMode);
+    this.refreshGutter();
+  }
 
   /** Textes changés ailleurs (totaux recalculés) : les cases affichées suivent. */
   syncFields(fields) {
@@ -222,7 +243,7 @@ export class PageView {
 
   refreshGutter() {
     this.gutter.replaceChildren();
-    const active = this.cb.lotsActive?.() ?? false;
+    const active = (this.cb.lotsActive?.() ?? false) && !this.moveMode;
     for (const entry of this.view.lines) {
       const { line } = entry;
       if (line.OutsideTable || entry.carriedOnly || line.Cells.length === 0) continue;
@@ -235,7 +256,7 @@ export class PageView {
         d.style.background = badge[1];
         d.style.top = Rect.cy(b) - 12 + 'px';
       }
-      if (!active) continue;
+      if (!active || entry.table.LotsOff) continue;
       const has = hasLotCell(line);
       if (!has && !canAddLot(line, entry.table.Rows?.find((r) => r.Lines.includes(line)))) continue;
       const btn = el('button', has ? 'gbtn trash' : 'gbtn add', this.gutter);
@@ -252,25 +273,41 @@ export class PageView {
   // ---------- Déplacer une rangée (poignée ⋮⋮ à gauche) ----------
 
   drawHandles() {
-    if (!this.cb.onMoveRow) return;
+    if (!this.moveMode || !this.cb.onMoveRow) return;
     for (const vt of this.view.tables) {
       if (vt.strips.length < 2) continue;
       for (const s of vt.strips) {
         const row = vt.table.Rows[s.r];
         if (!row || row.Lines.length === 0 || row.Lines.every((l) => l.Kind === 'EnTete')) continue;
         if (row.Lines.every((l) => l.Cells.every((c) => !c.Text.trim()))) continue;
+        // Bloc de plusieurs lignes : la poignée de la 1re ligne déplace le bloc, celle de chaque autre ligne déplace cette ligne seule.
+        const bands = row.Lines.filter((l) => !l.Deleted && l.Cells.some((c) => c.Text.trim()))
+          .map((l) => ({ l, e: this.view.lines.find((x) => x.line === l && !x.carriedOnly) })).filter((x) => x.e)
+          .map((x) => ({ l: x.l, b: this.lineBand(x.e) })).filter((x) => x.b && Rect.cy(x.b) > s.top && Rect.cy(x.b) < s.bottom);
+        const block = bands.length > 1;
         const h = el('div', 'grip', this.gutter);
         h.innerHTML = '<svg><use href="#i-grip"/></svg>';
-        h.title = 'Glisser pour déplacer la rangée';
-        h.setAttribute('aria-label', 'Déplacer la rangée');
-        const hh = Math.max(24, Math.min(40, s.bottom - s.top - 4));
-        Object.assign(h.style, { top: (s.top + s.bottom) / 2 - hh / 2 + 'px', height: hh + 'px' });
+        h.title = block ? 'Glisser pour déplacer le bloc' : 'Glisser pour déplacer la rangée';
+        h.setAttribute('aria-label', h.title);
+        const hh = block ? Math.max(24, Math.min(36, bands[0].b.Height + 6)) : Math.max(24, Math.min(40, s.bottom - s.top - 4));
+        const cy = block ? Rect.cy(bands[0].b) : (s.top + s.bottom) / 2;
+        Object.assign(h.style, { top: cy - hh / 2 + 'px', height: hh + 'px' });
         this.initDrag(h, vt, s);
+        for (const { l, b } of bands.slice(1)) {
+          const g = el('div', 'grip line', this.gutter);
+          g.innerHTML = '<svg><use href="#i-grip"/></svg>';
+          g.title = 'Glisser pour déplacer cette ligne seule (elle devient une rangée)';
+          g.setAttribute('aria-label', 'Déplacer cette ligne');
+          const gh = Math.max(24, Math.min(36, b.Height + 6));
+          Object.assign(g.style, { top: Rect.cy(b) - gh / 2 + 'px', height: gh + 'px' });
+          this.initDrag(g, vt, { r: s.r, top: Math.max(s.top, b.Y - 4), bottom: Math.min(s.bottom, Rect.bottom(b) + 4) }, l);
+        }
       }
     }
   }
 
-  initDrag(handle, vt, strip) {
+  /** Glisser une poignée : rangée entière, ou une ligne seule (`line`) qui devient une rangée à l'endroit choisi. */
+  initDrag(handle, vt, strip, line = null) {
     let marker = null, ghost = null, target = null;
     const yOf = (e) => (e.clientY - this.root.getBoundingClientRect().top) / this.cb.zoom();
     handle.addEventListener('pointerdown', (e) => {
@@ -295,7 +332,9 @@ export class PageView {
       marker = ghost = null;
       const t = target;
       target = null;
-      if (!ok || !t || t.before === strip.r) return;
+      if (!ok || !t) return;
+      if (line) return this.cb.onMoveLine?.(this, vt.table, line, t.before);
+      if (t.before === strip.r) return;
       const next = vt.strips[vt.strips.findIndex((s) => s.r === strip.r) + 1];
       if (next && t.before === next.r) return; // même place
       this.cb.onMoveRow?.(this, vt.table, strip.r, t.before);
@@ -364,7 +403,7 @@ export class PageView {
     this.layout(input, f);
     this.visual(input, f, false);
 
-    input.addEventListener('focus', () => { this.visual(input, f, true); this.showLoupe(f); this.cb.onFocus?.(this, f); });
+    input.addEventListener('focus', () => { this.visual(input, f, true); if (this.cb.loupe?.() !== false) this.showLoupe(f); this.cb.onFocus?.(this, f); });
     input.addEventListener('blur', () => { this.visual(input, f, false); this.loupe.style.display = 'none'; });
     const remember = () => { this.selection = { f, start: input.selectionStart ?? 0, end: input.selectionEnd ?? 0 }; };
     for (const ev of ['select', 'keyup', 'pointerup', 'focus']) input.addEventListener(ev, remember);
@@ -384,6 +423,40 @@ export class PageView {
         e.preventDefault();
         this.focusNextInColumn(f);
       });
+    this.initLineMenu(input, f, remember);
+  }
+
+  /**
+   * Menu « Ligne » : clic droit (souris, pavé tactile) ou appui long au doigt sur une case.
+   * Avec du texte sélectionné dans la case, le clic droit garde le menu habituel (copier, coller).
+   */
+  initLineMenu(input, f, remember) {
+    this.rememberSel ??= new Map();
+    this.rememberSel.set(f, remember);
+    let timer = null, start = null;
+    const cancel = () => { clearTimeout(timer); timer = null; start = null; };
+    input.addEventListener('pointerdown', (e) => {
+      if (e.button === 2)
+        this.rightPress = { f, t: performance.now(), selected: document.activeElement === input && (input.selectionEnd ?? 0) > (input.selectionStart ?? 0) };
+      if (e.pointerType === 'mouse' || document.activeElement === input) return; // case en cours de frappe : sélection du texte
+      start = { x: e.clientX, y: e.clientY };
+      timer = setTimeout(() => {
+        const at = start;
+        cancel();
+        this.cb.onLineMenu?.(this, f, at);
+      }, 550);
+    });
+    input.addEventListener('pointermove', (e) => { if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 10) cancel(); });
+    for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) input.addEventListener(ev, cancel);
+  }
+
+  /** Repère bref sur une ligne (rangée ajoutée ou séparée). */
+  flashLine(line) {
+    const entry = this.view.lines.find((e) => e.line === line);
+    if (!entry || entry.cells.length === 0) return;
+    const box = entry.cells.reduce((r, c) => Rect.union(r, c.box), Rect.empty());
+    const d = px(el('div', 'rowflash', this.overlay), Rect.inflate(box, 2, 2));
+    setTimeout(() => d.remove(), 1900);
   }
 
   /** Place le champ sur sa case : même taille d'écriture que l'imprimé, 1re ligne à la place du texte d'origine. */

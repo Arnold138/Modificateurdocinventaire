@@ -58,7 +58,7 @@ public static class RuleDetector
             }
             if (ys.Count == 0 || ys[0] > top + 8) ys.Insert(0, top);
             if (ys[^1] < bottom - 8) ys.Add(bottom);
-            ys = Cluster(ys, 8);
+            ys = MergeThinRows(Cluster(ys, 8));
             if (ys.Count < 2) continue;
 
             tables.Add(new TableGrid(RectD.FromEdges(left, ys[0], right, ys[^1]), xs, ys));
@@ -168,6 +168,18 @@ public static class RuleDetector
                     .GroupBy(t => t.root)
                     .Select(g => g.Select(t => t.l).ToList())
                     .ToList();
+    }
+
+    /// <summary>
+    /// Trame (fond hachuré d'un en-tête ou d'un total) lue comme plusieurs filets serrés : une suite de rangées plus fines
+    /// qu'une ligne de texte (moins de 70 % de la rangée médiane) ne fait qu'une rangée ; on garde son premier et son dernier filet.
+    /// </summary>
+    public static List<double> MergeThinRows(List<double> ys)
+    {
+        if (ys.Count < 5) return ys;
+        var gaps = ys.Skip(1).Select((y, i) => y - ys[i]).OrderBy(g => g).ToList();
+        double min = 0.7 * gaps[gaps.Count / 2];
+        return ys.Where((y, i) => !(i > 0 && i + 1 < ys.Count && y - ys[i - 1] < min && ys[i + 1] - y < min)).ToList();
     }
 
     private static List<double> Cluster(IEnumerable<double> values, double tol)

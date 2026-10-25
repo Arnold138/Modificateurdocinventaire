@@ -13,7 +13,8 @@ public static class TextPlacement
     public const double LineHeightRatio = PageLayout.LineHeightRatio;
 
     /// <summary>Lignes imprimées en gras : totaux et en-têtes (« TOTAL STOCK », « II - STOCK »).</summary>
-    public static bool IsBold(PrintedLine? line) => line?.Kind is LineKind.Total or LineKind.EnTete;
+    /// <summary>Gras : totaux et en-têtes imprimés ; ligne TOTAL ajoutée : seulement si « En gras » est coché.</summary>
+    public static bool IsBold(PrintedLine? line) => line?.TotalScope is { } s ? s.Bold : line?.Kind is LineKind.Total or LineKind.EnTete;
 
     /// <summary>
     /// Morceaux d'écriture d'origine à mettre en couleur (texte non retapé) : rectangles en pixels de page,

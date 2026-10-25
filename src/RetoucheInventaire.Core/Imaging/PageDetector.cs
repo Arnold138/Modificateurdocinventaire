@@ -26,6 +26,9 @@ public static class PageDetector
 
         var full = Quad.FullImage(W, H);
         if (brightCount > 0.97 * w * h) return full;
+        // Scan, PDF, capture : le papier touche les quatre bords de l'image (une photo a un fond sombre autour).
+        // Sans ce garde-fou, une grande case blanche d'un tableau qui touche les bords était prise pour la feuille.
+        if (PaperTouchesEdges(bright, w, h)) return full;
 
         // Plus grande composante claire (4-connexité).
         var label = new int[w * h];
@@ -74,6 +77,20 @@ public static class PageDetector
         return nearFull ? full : quad;
 
         PointD Up(PointD p) => new(Math.Clamp((p.X + 0.5) * sx - 0.5, 0, W - 1), Math.Clamp((p.Y + 0.5) * sy - 0.5, 0, H - 1));
+    }
+
+    /// <summary>Les quatre bords (à 2 px du bord de l'image réduite) sont clairs à 90 % au moins.</summary>
+    public static bool PaperTouchesEdges(bool[] bright, int w, int h)
+    {
+        if (w < 8 || h < 8) return false;
+        const int d = 2;
+        bool Side(int n, Func<int, int> at)
+        {
+            int c = 0;
+            for (int i = 0; i < n; i++) if (bright[at(i)]) c++;
+            return c * 10 >= n * 9;
+        }
+        return Side(w, x => d * w + x) && Side(w, x => (h - 1 - d) * w + x) && Side(h, y => y * w + d) && Side(h, y => y * w + (w - 1 - d));
     }
 
     private static Quad Inset(Quad q, double d)

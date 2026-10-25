@@ -35,7 +35,9 @@ public sealed class PageView
     private static readonly SolidColorBrush TrashFill = new(ColorHelper.FromArgb(255, 253, 236, 236));
     private static readonly SolidColorBrush TrashInk = new(ColorHelper.FromArgb(255, 180, 40, 40));
     private static readonly SolidColorBrush AddInk = new(ColorHelper.FromArgb(255, 154, 163, 173));
-    private static readonly SolidColorBrush GripInk = new(ColorHelper.FromArgb(255, 154, 163, 173));
+    private static readonly SolidColorBrush GripInk = new(ColorHelper.FromArgb(255, 74, 85, 96));
+    private static readonly SolidColorBrush GripFill = new(ColorHelper.FromArgb(255, 238, 241, 244));
+    private static readonly SolidColorBrush GripBorder = new(ColorHelper.FromArgb(255, 205, 211, 218));
     private static readonly TextBlock Meter = new() { FontFamily = new FontFamily("Times New Roman") };
 
     private const double LineHeightRatio = 1.15; // hauteur de ligne de Times New Roman, en em
@@ -92,6 +94,20 @@ public sealed class PageView
     public event Action<PageView, PrintedLine>? LotAdded;
     /// <summary>Rangée glissée : (tableau, rangée déplacée, rangée devant laquelle la poser ou null pour la fin).</summary>
     public event Action<PageView, Table, int, int?>? RowMoved;
+    /// <summary>Poignée d'une ligne dans un bloc lâchée : (tableau, ligne, rangée avant laquelle la poser ou null : à la fin).</summary>
+    public event Action<PageView, Table, PrintedLine, int?>? LineMoved;
+
+    /// <summary>Une action du menu « Ligne » (clic droit, appui long ou bouton « Ligne ») : dupliquer, séparer…</summary>
+    public sealed record LineCommand(string Label, string Hint, string Glyph, Action Run, bool Danger = false);
+
+    /// <summary>Actions proposées pour une case, ajoutées en tête du menu Couper / Copier / Coller de la case.</summary>
+    public Func<Field, IReadOnlyList<LineCommand>>? LineCommands { get; set; }
+
+    private const string LineTag = "ligne";
+    /// <summary>Menu de toutes les cases de la page (Couper, Copier, Coller… et les actions « Ligne »).</summary>
+    private readonly TextCommandBarFlyout _textMenu = new() { AlwaysExpanded = true };
+    /// <summary>Case appuyée au bouton droit (la barre de la case qui apparaît peut décaler la page sous le pointeur).</summary>
+    private (Field Field, long At)? _rightPress;
 
     public PageView(Arrangement.ViewPage view, Raster? display, Func<bool> lotsActive, Func<int, int?> mapY, Func<int, int?> unmapY)
     {
@@ -131,6 +147,7 @@ public sealed class PageView
         Root.Children.Add(_overlayLayer);
         Root.Children.Add(_inputLayer);
 
+        _textMenu.Opening += OnTextMenuOpening;
         _inputLayer.PointerPressed += OnLockPressed;
         _inputLayer.PointerMoved += OnLockMoved;
         _inputLayer.PointerReleased += OnLockReleased;
@@ -388,18 +405,30 @@ public sealed class PageView
         return b with { X = b.X + c.Dx, Y = b.Y + c.Dy };
     }
 
-    /// <summary>Colonne de gauche : poignées, type de ligne (T, Σ…), poubelle sur les lignes numérotées, « + » sur les autres.</summary>
+    /// <summary>Mode « Modifier » : poignées ⋮⋮ affichées (la poubelle et le « + » des lots sont masqués pendant ce temps).</summary>
+    public bool MoveMode { get; private set; }
+
+    public void SetMoveMode(bool on)
+    {
+        MoveMode = on;
+        RefreshGutter();
+    }
+
+    /// <summary>
+    /// Colonne de gauche : type de ligne (T, Σ…) ; hors « Modifier » : poubelle sur les lignes numérotées, « + » sur les autres ;
+    /// en « Modifier » : les poignées ⋮⋮ seules (rien d'autre à toucher à côté).
+    /// </summary>
     public void RefreshGutter()
     {
         _gutter.Children.Clear();
-        bool active = _lotsActive();
+        bool active = _lotsActive() && !MoveMode;
         foreach (var entry in _view.Lines)
         {
             var line = entry.Line;
             if (line.OutsideTable || entry.CarriedOnly || line.Cells.Count == 0) continue;
             if (LineBand(entry) is not RectD b) continue;
             AddBadge(line, b.CenterY);
-            if (!active) continue;
+            if (!active || entry.Table.LotsOff) continue;
             bool has = Lots.HasCell(line);
             if (!has && !Lots.CanAdd(line, entry.Table.Rows.FirstOrDefault(r => r.Lines.Contains(line)))) continue;
             double h = Math.Max(26, Math.Min(40, b.Height + 6));
@@ -441,16 +470,16 @@ public sealed class PageView
                 HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
             },
         };
-        Canvas.SetLeft(badge, 34);
+        Canvas.SetLeft(badge, 4);
         Canvas.SetTop(badge, centerY - 12);
         _gutter.Children.Add(badge);
     }
 
-    // ---------- Déplacer une rangée (poignée ⋮⋮ à gauche) ----------
+    // ---------- Déplacer une rangée (poignée ⋮⋮ juste à gauche de la poubelle) ----------
 
     private void DrawGrips()
     {
-        if (RowMoved is null) return;
+        if (!MoveMode) return;
         foreach (var vt in _view.Tables)
         {
             if (vt.Strips.Count < 2) continue;
@@ -459,22 +488,41 @@ public sealed class PageView
                 var row = vt.Table.Rows[strip.R];
                 if (row.Lines.Count == 0 || row.Lines.All(l => l.Kind == LineKind.EnTete)) continue;
                 if (row.Lines.All(l => l.Cells.All(c => string.IsNullOrWhiteSpace(c.Text)))) continue;
-                double h = Math.Max(24, Math.Min(40, strip.Bottom - strip.Top - 4));
-                var grip = new Border
-                {
-                    Width = 28, Height = h, CornerRadius = new CornerRadius(8), Background = Clear,
-                    Child = new FontIcon { Glyph = "", FontSize = 18, Foreground = GripInk },
-                };
-                ToolTipService.SetToolTip(grip, "Glisser pour déplacer la rangée");
-                Canvas.SetLeft(grip, 2);
-                Canvas.SetTop(grip, (strip.Top + strip.Bottom) / 2 - h / 2);
-                InitDrag(grip, vt, strip);
-                _gutter.Children.Add(grip);
+                // Bloc de plusieurs lignes : la poignée de la 1re ligne déplace le bloc, celle de chaque autre ligne déplace cette ligne seule.
+                var bands = row.Lines.Where(l => !l.Deleted && l.Cells.Any(c => !string.IsNullOrWhiteSpace(c.Text)))
+                    .Select(l => (Line: l, Entry: _view.Lines.FirstOrDefault(x => x.Line == l && !x.CarriedOnly)))
+                    .Where(x => x.Entry != null).Select(x => (x.Line, Band: LineBand(x.Entry!)))
+                    .Where(x => x.Band is RectD b && b.CenterY > strip.Top && b.CenterY < strip.Bottom)
+                    .Select(x => (x.Line, Band: x.Band!.Value)).ToList();
+                bool block = bands.Count > 1;
+                double h = block ? Math.Max(24, Math.Min(36, bands[0].Band.Height + 6)) : Math.Max(24, Math.Min(40, strip.Bottom - strip.Top - 4));
+                double cy = block ? bands[0].Band.CenterY : (strip.Top + strip.Bottom) / 2;
+                AddGrip(vt, strip, null, cy, h, block ? "Glisser pour déplacer le bloc" : "Glisser pour déplacer la rangée");
+                foreach (var (line, band) in bands.Skip(1))
+                    AddGrip(vt, strip with { Top = Math.Max(strip.Top, band.Top - 4), Bottom = Math.Min(strip.Bottom, band.Bottom + 4) }, line,
+                        band.CenterY, Math.Max(24, Math.Min(36, band.Height + 6)), "Glisser pour déplacer cette ligne seule (elle devient une rangée)");
             }
         }
     }
 
-    private void InitDrag(Border grip, Arrangement.ViewTable vt, Arrangement.Strip strip)
+    private void AddGrip(Arrangement.ViewTable vt, Arrangement.Strip strip, PrintedLine? line, double centerY, double h, string tip)
+    {
+        var grip = new Border
+        {
+            // Mode « Modifier » : la poubelle est masquée, la poignée prend sa place, plus large (facile à prendre au doigt).
+            Width = line is null ? 72 : 56, Height = h, CornerRadius = new CornerRadius(8), Background = line is null ? GripFill : Paper,
+            BorderBrush = GripBorder, BorderThickness = new Thickness(1),
+            Child = new FontIcon { Glyph = "", FontSize = line is null ? 20 : 17, Foreground = GripInk },
+        };
+        ToolTipService.SetToolTip(grip, tip);
+        Canvas.SetLeft(grip, GutterWidth - 6 - (line is null ? 72 : 56));
+        Canvas.SetTop(grip, centerY - h / 2);
+        InitDrag(grip, vt, strip, line);
+        _gutter.Children.Add(grip);
+    }
+
+    /// <summary>Glisser une poignée : rangée entière, ou une ligne seule (<paramref name="line"/>) qui devient une rangée à l'endroit choisi.</summary>
+    private void InitDrag(Border grip, Arrangement.ViewTable vt, Arrangement.Strip strip, PrintedLine? line = null)
     {
         int? before = null;
         bool dragging = false, moved = false;
@@ -510,7 +558,9 @@ public sealed class PageView
             if (!dragging) return;
             dragging = false;
             _ghost.Visibility = _dropLine.Visibility = Visibility.Collapsed;
-            if (!ok || !moved || before == strip.R) return;
+            if (!ok || !moved) return;
+            if (line != null) { LineMoved?.Invoke(this, vt.Table, line, before); return; }
+            if (before == strip.R) return;
             int k = vt.Strips.FindIndex(s => s.R == strip.R);
             if (k + 1 < vt.Strips.Count && before == vt.Strips[k + 1].R) return; // même place
             if (k == vt.Strips.Count - 1 && before is null) return;
@@ -581,7 +631,56 @@ public sealed class PageView
                 e.Handled = true;
                 FocusNextInColumn(f);
             };
+        // Clic droit ou appui long : menu de la case (Couper, Copier, Coller) avec, en tête, les actions « Ligne ».
+        tb.ContextFlyout = _textMenu;
+        tb.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, e) =>
+        {
+            if (e.GetCurrentPoint(tb).Properties.IsRightButtonPressed) _rightPress = (f, Environment.TickCount64);
+        }), handledEventsToo: true);
         _fieldLayer.Children.Add(tb);
+    }
+
+    /// <summary>Ouverture du menu d'une case : les actions « Ligne » sont mises à jour pour cette case.</summary>
+    private void OnTextMenuOpening(object? sender, object e)
+    {
+        if (sender is not CommandBarFlyout menu) return;
+        foreach (var old in menu.SecondaryCommands.Where(c => (c as FrameworkElement)?.Tag as string == LineTag).ToList())
+            menu.SecondaryCommands.Remove(old);
+        Field? f = _boxes.FirstOrDefault(kv => ReferenceEquals(kv.Value, menu.Target)).Key;
+        if (_rightPress is { } press && Environment.TickCount64 - press.At < 1500) f = press.Field;
+        _rightPress = null;
+        if (f is null || LineCommands is null) return;
+        int at = 0;
+        foreach (var c in LineCommands(f))
+        {
+            var button = new AppBarButton { Label = c.Label, Icon = new FontIcon { Glyph = c.Glyph }, Tag = LineTag };
+            if (c.Danger) button.Foreground = TrashInk;
+            ToolTipService.SetToolTip(button, c.Hint);
+            button.Click += (_, _) => { menu.Hide(); c.Run(); };
+            menu.SecondaryCommands.Insert(at++, button);
+        }
+        if (at > 0) menu.SecondaryCommands.Insert(at, new AppBarSeparator { Tag = LineTag });
+    }
+
+    /// <summary>Repère bref sur une ligne (rangée ajoutée ou séparée).</summary>
+    public void FlashLine(PrintedLine line)
+    {
+        var entry = _view.Lines.FirstOrDefault(e => e.Line == line);
+        if (entry is null || entry.Cells.Count == 0) return;
+        var box = entry.Cells.Aggregate(RectD.Empty, (r, c) => r.Union(c.Box));
+        var mark = new Rectangle
+        {
+            Width = box.Width + 6, Height = box.Height + 6, RadiusX = 4, RadiusY = 4, Stroke = Accent, StrokeThickness = 3,
+            Fill = new SolidColorBrush(ColorHelper.FromArgb(40, 10, 102, 194)),
+        };
+        Canvas.SetLeft(mark, box.X - 3);
+        Canvas.SetTop(mark, box.Y - 3);
+        _overlayLayer.Children.Add(mark);
+        var timer = _overlayLayer.DispatcherQueue.CreateTimer();
+        timer.Interval = TimeSpan.FromMilliseconds(1800);
+        timer.IsRepeating = false;
+        timer.Tick += (_, _) => _overlayLayer.Children.Remove(mark);
+        timer.Start();
     }
 
     /// <summary>Retours à la ligne : « \n » dans le projet (comme sur iPhone/iPad), « \r » dans les champs Windows.</summary>
@@ -752,9 +851,12 @@ public sealed class PageView
     // ---------- Loupe, cadre, case suivante ----------
 
     /// <summary>Pendant l'édition, l'original de la case est montré en loupe juste au-dessus.</summary>
+    /// <summary>Loupe « Original » au-dessus de la case touchée (réglage Mise en page).</summary>
+    public static bool LoupeEnabled { get; set; } = true;
+
     private void ShowLoupe(Field f)
     {
-        if (_bitmap is null) return;
+        if (_bitmap is null || !LoupeEnabled) return;
         var box = _place[f].Cell.Box;
         var b = RectD.FromEdges(Math.Max(0, box.Left - 4), Math.Max(0, box.Top - 2), Math.Min(_view.Width, box.Right + 4), Math.Min(_view.Height, box.Bottom + 2));
         var holder = new Canvas { Width = b.Width, Height = b.Height, Clip = new RectangleGeometry { Rect = new Rect(0, 0, b.Width, b.Height) } };

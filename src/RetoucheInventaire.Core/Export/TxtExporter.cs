@@ -39,17 +39,23 @@ public static partial class TxtExporter
         // Objets au lot 0 (absents ou barrés) : retirés de leur place et placés après le dernier lot.
         var zeroLines = new List<string>();
         int after = -1; // fin du dernier objet numéroté
-        foreach (var table in project.Pages.SelectMany(p => p.Tables))
+        int endAt = -1; // page « lots de fin » (mode page dédiée) : les lots 0 y sont
+        var gone = Arrangement.DeletedLines(project);
+        foreach (var page in project.Pages)
         {
-            var rows = Lots.OrderedRows(table).SelectMany(r => ExportRow(r, lots)).ToList();
-            zeroLines.AddRange(rows.Where(x => x.Zero).Select(x => x.Text));
-            var kept = rows.Where(x => !x.Zero).ToList();
-            bool startsWithHeader = Lots.OrderedRows(table).SelectMany(r => r.Lines).FirstOrDefault(l => l.Kind != LineKind.Ignoree)?.Kind == LineKind.EnTete;
-            if (kept.Count > 0 && startsWithHeader && output.Count > 0 && output[^1].Length > 0)
-                output.Add(""); // une ligne vide sépare deux tableaux
-            foreach (var x in kept) { output.Add(x.Text); if (x.Object) after = output.Count; }
+            if (page.EndLots && project.EndLots?.Mode == "page" && endAt < 0) endAt = output.Count;
+            foreach (var table in page.Tables)
+            {
+                var rows = Lots.OrderedRows(table).SelectMany(r => ExportRow(r, lots, gone)).ToList();
+                zeroLines.AddRange(rows.Where(x => x.Zero).Select(x => x.Text));
+                var kept = rows.Where(x => !x.Zero).ToList();
+                bool startsWithHeader = Lots.OrderedRows(table).SelectMany(r => r.Lines).FirstOrDefault(l => l.Kind != LineKind.Ignoree)?.Kind == LineKind.EnTete;
+                if (kept.Count > 0 && startsWithHeader && output.Count > 0 && output[^1].Length > 0)
+                    output.Add(""); // une ligne vide sépare deux tableaux
+                foreach (var x in kept) { output.Add(x.Text); if (x.Object) after = output.Count; }
+            }
         }
-        output.InsertRange(after < 0 ? output.Count : after, zeroLines);
+        output.InsertRange(endAt >= 0 ? endAt : after < 0 ? output.Count : after, zeroLines);
 
         for (int i = 0; i < output.Count; i++)
             foreach (var cell in output[i].Split('\t'))
@@ -60,7 +66,7 @@ public static partial class TxtExporter
         return new TxtExportResult(text, output.Count, warnings);
     }
 
-    private static IEnumerable<(string Text, bool Zero, bool Object)> ExportRow(Row row, bool lots)
+    private static IEnumerable<(string Text, bool Zero, bool Object)> ExportRow(Row row, bool lots, HashSet<PrintedLine> gone)
     {
         // Lignes qui partent en fin d'inventaire : l'objet au lot 0 et, s'il est le seul objet de la rangée,
         // les lignes d'article sans numéro qui le décrivent (suite de l'objet).
@@ -70,7 +76,7 @@ public static partial class TxtExporter
 
         // Avec les lots : une 1re colonne « Lot » sur toutes les lignes, pour garder les colonnes alignées.
         string Prefix(PrintedLine l) => !lots ? "" : (l.Kind == LineKind.EnTete ? "Lot" : l.Lot) + "\t";
-        var lines = row.Lines.Where(l => l.Kind != LineKind.Ignoree).ToList();
+        var lines = row.Lines.Where(l => l.Kind != LineKind.Ignoree && !gone.Contains(l)).ToList();
 
         // Les valeurs imprimées en face d'un titre descendent sur la première ligne d'article sans valeurs.
         var movedValues = new Dictionary<PrintedLine, string[]>();

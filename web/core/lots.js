@@ -15,23 +15,82 @@ export const orderedRows = (table) => rowOrder(table).map((r) => table.Rows[r]);
 
 /** L'objet de la rangée selon la règle : la ligne d'article qui porte les valeurs, sinon la première (pas les récapitulatifs « II - STOCK »). */
 function defaultPick(row) {
+  // Rangée d'en-tête ou de total (souvent sur fond grisé, où la lecture invente des lignes) : jamais d'objet.
+  if (row.Lines.some((l) => l.Kind === 'EnTete' || l.Kind === 'Total')) return null;
   const articles = row.Lines.filter((l) => l.Kind === 'Article' && !l.OutsideTable && !isRomanHeading(firstText(l)));
   if (articles.length === 0) return null;
   const line = articles.find((l) => l.Cells.slice(1).some((c) => !blank(c.Text))) ?? articles[0];
-  return line.Cells.every((c) => blank(c.Text)) ? null : line;
+  if (line.Cells.every((c) => blank(c.Text))) return null;
+  // Lecture parasite (fond grisé, traits lus comme du texte) : ni montant lisible, ni début d'objet (« 1 … », « +/- 20 … »).
+  if (!row.Lines.some((l) => l.Cells.slice(1).some((c) => AMOUNT_LIKE.test(c.Text))) && !ITEM_START_PICK.test(firstText(line)) && !plainText(firstText(line))) return null;
+  return line;
 }
 
-const isObject = (line, pick) => !line.NoLot && !line.OutsideTable && (line === pick || (!!line.ForceLot && firstText(line).length > 0));
+/** Montant (« 25 000 », « 1 500,50 », « mémoire ») : au moins un chiffre, rien d'autre que des chiffres et séparateurs. */
+const AMOUNT_LIKE = /^\s*(?:m[ée]moire|[+-]?\d[\d\s  .,]*)\s*€?\s*$/i;
+const ITEM_START_PICK = /^\s*(\+\/-\s*)?\d{1,3}\s+\p{L}/u;
+/** Texte lisible : au moins deux mots de trois lettres ou plus, et plus de lettres que de signes. */
+function plainText(t) {
+  const words = t.split(/\s+/).filter((w) => /^\p{L}{3,}[\p{L}'’.,:-]*$/u.test(w));
+  const letters = [...t].filter((c) => /\p{L}/u.test(c)).length, signs = [...t].filter((c) => !/[\p{L}\p{Nd}\s]/u.test(c)).length;
+  return words.length >= 2 && letters > 3 * signs;
+}
 
-/** Lignes d'objet dans l'ordre d'affichage (pages, tableaux, rangées déplacées à la main). */
+const isObject = (line, pick) => !line.NoLot && !line.OutsideTable && !line.Deleted && (line === pick || (!!line.ForceLot && firstText(line).length > 0));
+
+/** Objet d'une rangée : la règle, ou la 1re ligne d'une rangée ajoutée ou séparée (même vide : « Ajouter une ligne vide »). */
+const pickOf = (row) => defaultPick(row)
+  ?? (row.Inserted ? row.Lines.find((l) => l.Kind === 'Article' && !l.NoLot && (l.Copy || firstText(l).length > 0)) ?? null : null);
+
+/** Lignes d'objet dans l'ordre d'affichage (pages, tableaux, rangées déplacées à la main), sur les tableaux choisis. */
 export function* objectLines(project) {
   for (const page of project.Pages)
-    for (const table of page.Tables)
+    for (const table of page.Tables) {
+      if (table.LotsOff) continue;
       for (const r of rowOrder(table)) {
         const row = table.Rows[r];
-        const pick = defaultPick(row);
+        const pick = pickOf(row);
         for (const line of row.Lines) if (isObject(line, pick)) yield { page, table, row: r, line };
       }
+    }
+}
+
+// ---------- Lots page par page, tableau par tableau ----------
+
+/** « II - STOCK », « [- MOBILIER » (lecture abîmée) : rubrique numérotée d'un récapitulatif. */
+const RECAP_LIKE = /^\W{0,2}[IVXLliJj1|!{\[]{1,5}\s*[-–.]\s+\S/;
+
+/**
+ * Le tableau est un tableau d'objets (proposé pour les lots) : au moins deux colonnes de montants et des objets selon la
+ * règle ; pas un cadre de texte (en-tête de l'étude, signature), ni un récapitulatif (« I - MOBILIER… 148 760 »).
+ */
+export function tableHasObjects(table) {
+  if (table.HasGrid === false || !(table.RowYs?.length >= 2) || !(table.ColumnXs?.length >= 4)) return false;
+  const withValues = table.Rows.flatMap((r) => r.Lines).filter((l) => l.Kind !== 'EnTete' && l.Cells.slice(1).some((c) => !blank(c.Text)));
+  if (withValues.length > 0 && withValues.filter((l) => RECAP_LIKE.test(firstText(l))).length * 2 >= withValues.length) return false;
+  return table.Rows.some((row) => { const pick = pickOf(row); return row.Lines.some((l) => isObject(l, pick)); });
+}
+
+/** Tableaux d'une page qui peuvent recevoir des lots (avec leur nom : 1re ligne d'en-tête ou de texte). */
+export function lotTables(page) {
+  return page.Tables.map((t, i) => ({ table: t, index: i }))
+    .filter(({ table: t }) => t.Rows.some((r) => r.Lines.some((l) => firstText(l).length > 0)))
+    .map(({ table, index }) => {
+      // Nom : la 1re ligne d'objet (bien lue), sinon l'en-tête ou la 1re ligne de texte.
+      const lines = table.Rows.flatMap((r) => r.Lines);
+      const object = table.Rows.map((r) => pickOf(r)).find((l) => l && firstText(l).length > 0);
+      const head = object ?? lines.find((l) => l.Kind === 'EnTete' && firstText(l).length > 0) ?? lines.find((l) => firstText(l).length > 0);
+      return { table, index, name: head ? firstText(head) : `Tableau ${index + 1}`, objects: tableHasObjects(table) };
+    });
+}
+
+/** Choix proposé : les tableaux qui contiennent des objets (déjà choisis si les lots existent). */
+export const defaultLotChoice = (project, table) => (lotsActive(project) ? !table.LotsOff : tableHasObjects(table));
+
+/** Applique le choix (tableaux cochés) : les autres n'ont plus de case ni de numéro ; rien d'autre ne change. */
+export function setLotTables(project, chosen) {
+  for (const page of project.Pages) for (const t of page.Tables) t.LotsOff = !chosen.has(t);
+  resyncLots(project);
 }
 
 const ITEM_START = /^\s*(\+\/-\s*)?\d{1,3}\s+\p{L}/u;
@@ -65,17 +124,33 @@ export function createEmptyLots(project) {
 }
 
 /**
- * « Synchroniser automatiquement » : le logiciel remplit toutes les cases d'un coup, dans l'ordre d'affichage.
- * Les numéros tapés à la main restent et la suite repart d'eux (80 → 81, 82…) ; 0 ne prend pas de numéro.
+ * « Synchroniser » : remplit les cases vides, sans toucher aux numéros déjà là (tapés ou remplis avant), dans l'ordre affiché.
+ * Une case vide prend le numéro qui suit le lot précédent (1 au début). Si les lots suivants se suivaient à partir de ce numéro
+ * (6, 7, 8…), ils sont décalés d'un cran (7, 8, 9…) pour éviter un doublon ; un ordre fait à la main (30, 29, 6…) n'est pas touché.
+ * `pages` : seulement les cases vides de ces pages (les numéros des autres pages servent de repère).
  */
-export function fillLotsAutomatically(project) {
+export function fillLotsAutomatically(project, pages = null) {
   resyncLots(project);
-  let next = 1;
-  for (const { line } of objectLines(project)) {
-    const v = /^[+-]?\d+$/.test(line.Lot ?? '') ? parseInt(line.Lot, 10) : NaN;
-    if (line.LotManual && !Number.isNaN(v)) { if (v !== 0) next = v + 1; }
-    else if (line.LotManual && (line.Lot ?? '').length > 0) { /* « 12 bis » : gardé tel quel */ }
-    else { line.Lot = String(next); line.LotManual = false; next++; }
+  const list = [...objectLines(project)];
+  const num = (l) => (/^[+-]?\d+$/.test((l.Lot ?? '').trim()) ? parseInt(l.Lot, 10) : NaN);
+  let prev = 0;
+  for (let i = 0; i < list.length; i++) {
+    const { line, page } = list[i];
+    if ((line.Lot ?? '').length > 0) { const v = num(line); if (!Number.isNaN(v) && v !== 0) prev = v; continue; }
+    if (pages && !pages.includes(page)) continue;
+    const v = prev + 1;
+    line.Lot = String(v);
+    line.LotManual = false;
+    // Décaler la suite : les lots qui se suivaient à partir de v prennent un cran de plus (les 0 et les cases vides sont passés).
+    let k = v;
+    for (let j = i + 1; j < list.length; j++) {
+      const o = list[j].line;
+      if ((o.Lot ?? '').length === 0 || isZeroLot(o)) continue;
+      if (num(o) !== k) break;
+      o.Lot = String(k + 1);
+      k++;
+    }
+    prev = v;
   }
 }
 
@@ -134,7 +209,7 @@ export function resyncLots(project) {
   const objects = new Set([...objectLines(project)].map((o) => o.line));
   for (const l of everyLine(project)) {
     l.LotSlot = objects.has(l);
-    if (!l.LotSlot) { l.Lot = ''; l.LotManual = false; }
+    if (!l.LotSlot && !l.Deleted) { l.Lot = ''; l.LotManual = false; } // ligne supprimée : son numéro est gardé (si on la remet)
   }
 }
 

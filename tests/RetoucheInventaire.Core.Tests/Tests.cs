@@ -363,16 +363,42 @@ public static class Tests
         Equal("81", objects[9].Lot, "lot saisi");
         Equal("11", objects[10].Lot, "le suivant ne bouge pas tout seul");
         Lots.FillAutomatically(p);
-        Equal("82", objects[10].Lot, "« Synchroniser » : la suite repart du numéro tapé");
-        Equal((81 + objects.Count - 10).ToString(), objects[^1].Lot, "toute la suite est recalée");
+        Equal("81|11", $"{objects[9].Lot}|{objects[10].Lot}", "« Synchroniser » : rien de rempli ne bouge");
         PageEdits.CycleKind(objects[11]); // Article → Titre
         Lots.Resync(p);
         Equal("", objects[11].Lot, "plus de lot sur un titre");
-        Equal("84", objects[12].Lot, "les autres ne bougent pas");
+        Equal("13", objects[12].Lot, "les autres ne bougent pas");
         Lots.FillAutomatically(p);
-        Equal("83", objects[12].Lot, "la suite reprend à la synchronisation");
+        Equal("13", objects[12].Lot, "toujours pas à la synchronisation");
         Lots.Clear(p);
         Check(!Lots.IsActive(p), "numérotation enlevée");
+    }
+
+    public static void T_Synchroniser_garde_la_progression()
+    {
+        var p = ThreePages();
+        Lots.Number(p, 1);
+        var objs = Lots.ObjectLines(p).Select(o => o.Line).ToList();
+        int n = objs.Count;
+        for (int i = n - 1; i > 5; i--) objs[i].Lot = i.ToString();
+        objs[5].Lot = ""; objs[5].LotManual = false;
+        Lots.FillAutomatically(p);
+        Equal($"5|6|7|8|{n}", string.Join("|", new[] { objs[4], objs[5], objs[6], objs[7], objs[^1] }.Select(l => l.Lot)), "case vide → 6, la suite décalée");
+        objs[2].Deleted = true;
+        Lots.FillAutomatically(p);
+        Equal("2|4", $"{objs[1].Lot}|{objs[3].Lot}", "trou gardé");
+        objs[2].Deleted = false;
+        Lots.Resync(p);
+        Lots.Set(p, objs[0], "30"); Lots.Set(p, objs[1], "29"); Lots.Set(p, objs[2], "6");
+        objs[3].Lot = "";
+        Lots.FillAutomatically(p);
+        Equal("30|29|6|7|5", string.Join("|", objs.Take(5).Select(l => l.Lot)), "ordre fait à la main respecté");
+        var last = p.Pages[2];
+        var o2 = Lots.ObjectLines(p).Where(o => o.Page == last).Select(o => o.Line).ToList();
+        var first = Lots.ObjectLines(p).First().Line;
+        o2[0].Lot = ""; first.Lot = "";
+        Lots.FillAutomatically(p, [last]);
+        Check(o2[0].Lot != "" && first.Lot == "", "page choisie remplie, les autres non");
     }
 
     public static void T_Lots_poubelle_et_ajout()
@@ -474,7 +500,9 @@ public static class Tests
         Lots.Set(p, objects[3], "0");
         Lots.FillAutomatically(p);
         Equal("0", objects[3].Lot, "lot 0 gardé");
-        Equal("4", objects[4].Lot, "le 0 ne prend pas de numéro");
+        Equal("5", objects[4].Lot, "synchroniser ne renumérote pas");
+        Lots.Number(p, 1);
+        Equal("4", objects[4].Lot, "Renuméroter tout : le 0 ne prend pas de numéro");
         Equal((objects.Count - 1).ToString(), objects[^1].Lot, "la suite continue");
         var lines = ExportLines(p);
         Equal("0\t2 rolls en métal\t60\t30", lines[^1], "objet à 0 regroupé à la fin");
@@ -640,7 +668,9 @@ public static class Tests
         var l = ExportLines(p).ToList();
         Check(l.FindIndex(x => x.Contains("aspirateur")) > l.FindIndex(x => x.Contains("distributeurs")), ".txt dans le nouvel ordre");
         Lots.FillAutomatically(p);
-        Equal("5", p.Pages[0].AllLines().First(x => x.Cells[0].Text.StartsWith("1 aspirateur")).Lot, "numéro selon l'ordre affiché");
+        Equal("2", p.Pages[0].AllLines().First(x => x.Cells[0].Text.StartsWith("1 aspirateur")).Lot, "synchroniser garde son numéro");
+        Lots.Number(p, 1);
+        Equal("5", p.Pages[0].AllLines().First(x => x.Cells[0].Text.StartsWith("1 aspirateur")).Lot, "Renuméroter tout : selon l'ordre affiché");
         var img = Fixtures.Load("page1").Image;
         var plan = Arrangement.Build(p);
         var outImg = ComposeAll(p, plan, _ => img)[0];
@@ -785,6 +815,233 @@ public static class Tests
         Equal("Prix||2,5", string.Join("|", rows[2]), "décimal à la française");
     }
 
+    // ---------- Lignes ajoutées (Dupliquer, Séparer ici) ----------
+
+    private static string RoundJson(Page page) => Regex.Replace(System.Text.Json.JsonSerializer.Serialize(page), @"-?\d+\.\d+",
+        m => Math.Round(double.Parse(m.Value, System.Globalization.CultureInfo.InvariantCulture), 6).ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+    private static PrintedLine FindLine(Page pg, string t) => pg.AllLines().First(l => l.Cells[0].Text == t);
+
+    public static void T_Dupliquer_une_ligne()
+    {
+        var p = new InventoryProject();
+        p.Pages.Add(Fixtures.Analyze("page1"));
+        var page = p.Pages[0];
+        var t = page.Tables[0];
+        string before = RoundJson(page);
+        var txt = ExportLines(p);
+        var rolls = FindLine(page, "2 rolls en métal");
+        var next = FindLine(page, "2 distributeurs de savon + 1 distributeur papier");
+        double y = next.Cells[0].Box.Y;
+        int n = t.Rows.Count, h = page.Height, baseH = PageLayout.BaseHeight(page);
+        Check(Rows.CanCopy(page, rolls) && !Rows.CanCopy(page, FindLine(page, "I - MOBILIER ET MATERIEL")), "pas l'en-tête");
+        var copy = Rows.Copy(page, rolls)!;
+        int H = page.Height - h;
+        Check(H > 20 && H < 80, $"hauteur de la rangée ({H})");
+        Equal(n + 1, t.Rows.Count, "une rangée de plus");
+        Check(t.Rows[5].Lines[0] == copy, "juste sous la ligne copiée");
+        Equal("2 rolls en métal|60|30", string.Join("|", copy.Cells.Select(c => c.Text)), "copie du texte et des valeurs");
+        Equal(y + H, next.Cells[0].Box.Y, "la suite descend");
+        Equal(baseH, PageLayout.BaseHeight(page), "image d'origine inchangée");
+        var l = ExportLines(p);
+        int k = Array.IndexOf(l, "2 rolls en métal\t60\t30");
+        Equal("2 rolls en métal\t60\t30", l[k + 1], "copie juste après dans le .txt");
+        Equal(string.Join("\n", txt), string.Join("\n", l.Where((_, i) => i != k + 1)), "le reste du .txt identique");
+        var img = Fixtures.Load("page1").Image;
+        var big = PageLayout.Stretch(img, page);
+        Equal(img.Height + H, big.Height, "image allongée");
+        int yc = (int)Math.Round(t.RowYs[6]) - 2;
+        Check(img.Data.AsSpan((yc - H) * img.Width).SequenceEqual(big.Data.AsSpan(yc * img.Width, (img.Height - yc + H) * img.Width)), "bas décalé intact");
+        Lots.CreateEmpty(p);
+        Check(copy.LotSlot && copy.Lot == "", "case de lot vide");
+        Lots.FillAutomatically(p);
+        Equal((int.Parse(rolls.Lot) + 1).ToString(), copy.Lot, "numéro suivant");
+        Lots.Clear(p);
+        Check(Rows.AddedRowOf(page, copy) != null && Rows.AddedRowOf(page, rolls) == null, "rangée ajoutée reconnue");
+        Check(Rows.RemoveAdded(page, copy), "supprimée");
+        Equal(before, RoundJson(page), "page revenue à l'origine");
+    }
+
+    public static void T_Separer_ici()
+    {
+        var p = new InventoryProject();
+        p.Pages.Add(Fixtures.Analyze("page1"));
+        var page = p.Pages[0];
+        var t = page.Tables[0];
+        string before = RoundJson(page);
+        var txt = ExportLines(p);
+        var comp = FindLine(page, "1 compresseur à vis ATLASCAPCO avec cuve 250L + 1 sécheur ATLASCAPCO");
+        var cd3 = FindLine(page, "CD3+ +/- 14130 heures");
+        Check(!Rows.CanSplit(page, comp) && Rows.CanSplit(page, cd3), "pas sur la 1re ligne de la rangée");
+        int h = page.Height;
+        double y = cd3.Cells[0].Box.Y;
+        Check(Rows.Split(page, cd3), "séparée");
+        Equal(5, page.Height - h, "un filet de plus");
+        Equal(y + 5, cd3.Cells[0].Box.Y, "la ligne descend du filet");
+        Check(t.Rows[15].Lines.Count == 1 && t.Rows[16].Lines[0] == cd3, "rangées");
+        Equal(string.Join("\n", txt), string.Join("\n", ExportLines(p)), ".txt identique (sans lots)");
+        Lots.CreateEmpty(p);
+        Check(comp.LotSlot && cd3.LotSlot, "chaque rangée a sa case de lot");
+        Lots.Clear(p);
+        Check(Rows.RemoveAdded(page, cd3), "remise dans la rangée du dessus");
+        Equal(before, RoundJson(page), "page revenue à l'origine");
+    }
+
+    public static void T_Separer_un_texte_tape_et_totaux_des_copies()
+    {
+        var p = new InventoryProject();
+        p.Pages.Add(Fixtures.Analyze("page1"));
+        var rolls = FindLine(p.Pages[0], "2 rolls en métal");
+        rolls.Cells[0].Text = "2 rolls en métal\nLOT 6 : 1 table de travail";
+        var typed = Rows.SplitTypedText(p.Pages[0], rolls, 1)!;
+        Equal("2 rolls en métal|60|30", string.Join("|", rolls.Cells.Select(c => c.Text)), "texte du dessus");
+        Equal("LOT 6 : 1 table de travail||", string.Join("|", typed.Cells.Select(c => c.Text)), "suite du texte, prix à taper");
+
+        var q = new InventoryProject();
+        q.Pages.Add(Fixtures.Analyze("page5"));
+        var page = q.Pages[0];
+        var total = FindLine(page, "TOTAL STOCK");
+        var carton = FindLine(page, "CARTONNAGE");
+        var t = page.Tables.First(x => x.Rows.Any(r => r.Lines.Contains(carton)));
+        t.RowOrder = [0, 2, 1, 3, 4, 5];
+        var copy = Rows.Copy(page, carton)!;
+        Equal("0,2,3,1,4,5,6", string.Join(",", t.RowOrder), "ordre d'affichage : la copie suit sa ligne");
+        Totals.Recompute(q);
+        Equal("60 550", total.Cells[1].Text, "copie ajoutée au total");
+        carton.Cells[1].Text = "8 000"; copy.Cells[1].Text = "8 000";
+        Totals.Recompute(q);
+        Equal("44 550", total.Cells[1].Text, "partagé en deux : total inchangé");
+        Check(Rows.RemoveAdded(page, copy), "supprimée");
+        Equal("0,2,1,3,4,5", string.Join(",", t.RowOrder), "ordre rétabli");
+    }
+
+    /// <summary>Scénario partagé avec l'iPad (commande export-rows) : copies, copie de copie, séparations, bandes.</summary>
+    public static InventoryProject RowsScenario()
+    {
+        var p = new InventoryProject();
+        foreach (var n in new[] { "page1", "page5" }) p.Pages.Add(Fixtures.Analyze(n));
+        Page a = p.Pages[0], b = p.Pages[1];
+        var rolls = Rows.Copy(a, FindLine(a, "2 rolls en métal"))!;
+        Rows.Copy(a, rolls);
+        Rows.Split(a, FindLine(a, "CD3+ +/- 14130 heures"));
+        var carton = FindLine(b, "CARTONNAGE");
+        var copy = Rows.Copy(b, carton)!;
+        carton.Cells[1].Text = "8 000"; copy.Cells[1].Text = "8 000";
+        copy.Cells[0].Text = "CARTONNAGE (2e lot)";
+        PageLayout.SetExtra(b, copy, 37);
+        Rows.Copy(b, copy);
+        Rows.Split(b, FindLine(b, "42057 € à l'achat HT"));
+        PageLayout.SetExtra(a, FindLine(a, "2 souffiants STANLEY"), 25);
+        var vest = FindLine(a, "2 vestiaires avec 1 porte en métal");
+        vest.Cells[0].Text = "2 vestiaires avec 1 porte en métal\nLOT 6 : 1 table de travail";
+        Rows.SplitTypedText(a, vest, 1)!.Cells[1].Text = "20";
+        Rows.AddBlank(a, FindLine(a, "1 diable à plateau à roulettes"), above: true)!.Cells[0].Text = "Ajoutée au-dessus";
+        var dans = FindLine(a, "DANS L'ENTREPOT");
+        Rows.SplitBelow(a, dans);
+        Rows.TrimRow(a, dans);
+        Rows.TrimRow(a, FindLine(a, "2 laves main en inox + 1 sanibroyeur SPEED"));
+        Rows.Copy(a, dans);
+        Lots.CreateEmpty(p);
+        Lots.FillAutomatically(p);
+        Totals.Recompute(p, Arrangement.Build(p));
+        return p;
+    }
+
+    public static void T_Lignes_ajoutees_scenario_complet()
+    {
+        var p = RowsScenario();
+        foreach (var page in p.Pages)
+        {
+            Equal(page.Height, PageLayout.Stretch(Fixtures.Load(page.Id).Image, page).Height, $"hauteur {page.Id}");
+            foreach (var t in page.Tables.Where(t => t.HasGrid)) Equal(t.Rows.Count + 1, t.RowYs.Count, "filets");
+        }
+        Equal("52 550", FindLine(p.Pages[1], "TOTAL STOCK").Cells[1].Text, "total");
+        // Enregistré puis relu : tout est gardé.
+        var path = Path.Combine(Path.GetTempPath(), "lignes-ajoutees.inventaire");
+        ProjectStore.Save(path, p, new Dictionary<string, byte[]>());
+        var back = ProjectStore.Load(path).Project;
+        Equal(RoundJson(p.Pages[1]), RoundJson(back.Pages[1]), "relu à l'identique");
+    }
+
+    public static void T_Ligne_vide_au_dessus_en_dessous()
+    {
+        var p = new InventoryProject();
+        p.Pages.Add(Fixtures.Analyze("page5"));
+        var page = p.Pages[0];
+        string before = RoundJson(page);
+        var produits = FindLine(page, "PRODUITS FINIS");
+        var total = FindLine(page, "TOTAL STOCK");
+        var t = page.Tables.First(x => x.Rows.Any(r => r.Lines.Contains(produits)));
+        var below = Rows.AddBlank(page, produits)!;
+        int rb = t.Rows.FindIndex(r => r.Lines.Contains(below));
+        Check(t.Rows[rb - 1].Lines.Contains(produits) && t.Rows[rb + 1].Lines.Contains(total), "entre PRODUITS FINIS et TOTAL STOCK");
+        Check(below.Cells.All(c => c.Text == "" && c.OriginalText == ""), "cases vides");
+        Lots.CreateEmpty(p);
+        Check(below.LotSlot && !total.LotSlot, "case de lot vide sur la ligne vide, pas sur le total");
+        var above = Rows.AddBlank(page, produits, above: true)!;
+        Check(t.Rows[t.Rows.FindIndex(r => r.Lines.Contains(above)) + 1].Lines.Contains(produits), "juste au-dessus");
+        Lots.FillAutomatically(p);
+        Equal(int.Parse(produits.Lot) - 1, int.Parse(above.Lot), "numérotée avant");
+        Equal(int.Parse(produits.Lot) + 1, int.Parse(below.Lot), "numérotée après");
+        Check(Rows.AddBlank(page, FindLine(page, "II - STOCK")) is null, "pas sur l'en-tête");
+        Equal(page.Height, PageLayout.Stretch(Fixtures.Load("page5").Image, page).Height, "image");
+        Lots.Clear(p);
+        Rows.RemoveAdded(page, above);
+        Rows.RemoveAdded(page, below);
+        Equal(before, RoundJson(page), "page revenue à l'origine");
+    }
+
+    public static void T_Lots_page_par_page()
+    {
+        var p = ThreePages();
+        var choices = p.Pages.Select(Lots.LotTables).ToList();
+        Check(choices[0].Any(x => x.Objects) && choices[2].Any(x => x.Objects), "pages d'objets proposées");
+        var chosen = choices[0].Select(x => x.Table).ToHashSet();
+        Lots.SetTables(p, chosen);
+        Lots.CreateEmpty(p);
+        Lots.FillAutomatically(p);
+        Equal("0", string.Join(",", Lots.ObjectLines(p).Select(o => p.Pages.IndexOf(o.Page)).Distinct()), "seulement la page 1");
+        Check(p.Pages[1].AllLines().All(l => !l.LotSlot && l.Lot.Length == 0), "page 2 sans case");
+        string first = Lots.ObjectLines(p).First().Line.Lot;
+        chosen.Add(choices[2][0].Table);
+        Lots.SetTables(p, chosen);
+        Equal(first, Lots.ObjectLines(p).First().Line.Lot, "numéros gardés");
+        Check(Lots.ObjectLines(p).Any(o => o.Page == p.Pages[2]) && Lots.ObjectLines(p).All(o => o.Page != p.Pages[2] || o.Table == choices[2][0].Table), "un seul tableau de la page 3");
+        Lots.SetTables(p, new HashSet<Table>());
+        Check(!Lots.IsActive(p), "plus aucun lot");
+    }
+
+    public static void T_Recadrer_garde_lots_et_corrections()
+    {
+        var p = new InventoryProject();
+        p.Pages.Add(Fixtures.Analyze("page1"));
+        Lots.CreateEmpty(p);
+        Lots.FillAutomatically(p);
+        var old = p.Pages[0];
+        var rolls = FindLine(old, "2 rolls en métal");
+        Lots.Set(p, rolls, "42");
+        rolls.Cells[1].Text = "70";
+        var fresh = Fixtures.Analyze("page1");
+        int kept = PageEdits.CarryOver(old, fresh);
+        Check(kept > 25, $"lignes retrouvées ({kept})");
+        p.Pages[0] = fresh;
+        Lots.Resync(p);
+        Equal("42", FindLine(fresh, "2 rolls en métal").Lot, "numéro gardé");
+        Equal("70", FindLine(fresh, "2 rolls en métal").Cells[1].Text, "correction gardée");
+        Equal(FindLine(old, "1 table pliante").Lot, FindLine(fresh, "1 table pliante").Lot, "les autres numéros aussi");
+    }
+
+    public static void T_Cadrage_scan_qui_touche_les_bords()
+    {
+        int w = 800, h = 1100;
+        var data = Enumerable.Repeat((byte)250, w * h).ToArray();
+        void Line(int x0, int y0, int x1, int y1) { for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) data[y * w + x] = 20; }
+        for (int y = 60; y < h; y += 40) Line(40, y, w - 1, y + 1);
+        foreach (int x in new[] { 40, 600, 700, w - 3 }) Line(x, 60, x + 1, h - 1);
+        var q = PageDetector.Detect(new Raster(w, h, 1, data));
+        Equal($"0,0 {w - 1},{h - 1}", $"{q.TopLeft.X},{q.TopLeft.Y} {q.BottomRight.X},{q.BottomRight.Y}", "page entière");
+    }
+
     // ---------- Repli sans filets ----------
 
     public static void T_Tableau_sans_filets()
@@ -803,5 +1060,165 @@ public static class Tests
         var lines = ExportLines(new InventoryProject { Pages = [page] });
         Equal("1 chaise\t10\t5|SALLE BAIN", string.Join("|", lines), "colonnes devinées par les espaces");
         Check(page.AllFields().All(f => !f.Locked), "sans tableau, rien n'est verrouillé d'office");
+    }
+
+    public static void T_Supprimer_une_ligne_existante()
+    {
+        var p = new InventoryProject();
+        foreach (var n in new[] { "page1", "page5" }) p.Pages.Add(Fixtures.Analyze(n));
+        Lots.CreateEmpty(p);
+        Lots.FillAutomatically(p);
+        var a = p.Pages[0];
+        var rolls = FindLine(a, "2 rolls en métal");
+        var next = FindLine(a, "2 distributeurs de savon + 1 distributeur papier");
+        var before = ExportLines(p);
+        string lotNext = next.Lot;
+        int h = Arrangement.Build(p).Pages[0].Height;
+        rolls.Deleted = true;
+        var plan = Arrangement.Build(p);
+        var l = ExportLines(p);
+        Equal(before.Length - 1, l.Length, "une ligne de moins dans le .txt");
+        Check(!l.Any(x => x.Contains("2 rolls en métal")), "absente du .txt");
+        Equal(lotNext, next.Lot, "les autres numéros ne bougent pas");
+        Check(plan.Pages[0].Height < h, "la page raccourcit");
+        Check(!Arrangement.ViewOf(p, plan, 0).Lines.Any(e => e.Line == rolls), "plus affichée");
+        Lots.Resync(p);
+        Check(!rolls.LotSlot && rolls.Lot == "4", "plus de case de lot (numéro gardé)");
+        var comp = FindLine(a, "1 compresseur à vis ATLASCAPCO avec cuve 250L + 1 sécheur ATLASCAPCO");
+        comp.Deleted = true;
+        Check(!ExportLines(p).Any(x => x.Contains("CD3+")), "la suite part avec");
+        var b = p.Pages[1];
+        var total = FindLine(b, "TOTAL STOCK");
+        FindLine(b, "CARTONNAGE").Deleted = true;
+        Totals.Recompute(p, Arrangement.Build(p));
+        Equal("28 550", total.Cells[1].Text, "montant retiré du total");
+        rolls.Deleted = false; comp.Deleted = false; FindLine(b, "CARTONNAGE").Deleted = false;
+        Lots.Resync(p);
+        Totals.Recompute(p, Arrangement.Build(p));
+        Equal(string.Join("\n", before), string.Join("\n", ExportLines(p)), "remise");
+        Equal("44 550", total.Cells[1].Text, "total revenu");
+    }
+
+    public static void T_Lots_de_fin_sur_une_page_dediee()
+    {
+        var p = new InventoryProject();
+        foreach (var n in new[] { "page1", "page5" }) p.Pages.Add(Fixtures.Analyze(n));
+        Lots.CreateEmpty(p);
+        Lots.FillAutomatically(p);
+        p.EndLots = new EndLotsChoice { Mode = "page", AfterId = "page1" };
+        Lots.Set(p, FindLine(p.Pages[0], "2 rolls en métal"), "0");
+        Check(Arrangement.SyncEndPages(p), "page créée");
+        Equal("page1,END,page5", string.Join(",", p.Pages.Select(x => x.EndLots ? "END" : x.Id)), "entre la page 1 et la page 5");
+        var plan = Arrangement.Build(p);
+        Equal(1, plan.Moving.Count, "un lot 0");
+        Equal(0, plan.Pages[1].Template, "modèle : la page 1");
+        Check(Arrangement.ViewOf(p, plan, 1).Lines.Any(e => e.Line.Cells[0].Text == "2 rolls en métal" && e.Moved), "affiché sur la page dédiée");
+        Check(!Arrangement.ViewOf(p, plan, 0).Lines.Any(e => e.Line.Cells[0].Text == "2 rolls en métal"), "parti de la page 1");
+        var l = ExportLines(p).ToList();
+        int k = l.FindIndex(x => x.StartsWith("0\t2 rolls"));
+        Check(k > l.FindIndex(x => x.Contains("gazelle")) && k < l.FindIndex(x => x.Contains("Liste détaillée")), ".txt : entre les pages");
+        foreach (var o in Lots.ObjectLines(p).ToList()) Lots.Set(p, o.Line, "0");
+        Arrangement.SyncEndPages(p);
+        Check(p.Pages.Count(x => x.EndLots) >= 2, "plusieurs pages de fin");
+        Equal("page1", p.Pages[0].Id, "page 1 en tête");
+        Equal("page5", p.Pages[^1].Id, "page 5 à la fin");
+        foreach (var o in Lots.ObjectLines(p).ToList()) Lots.Set(p, o.Line, "7");
+        Arrangement.SyncEndPages(p);
+        Equal(0, p.Pages.Count(x => x.EndLots), "pages retirées");
+    }
+
+    public static void T_Ligne_TOTAL_ajoutee()
+    {
+        var p = new InventoryProject();
+        foreach (var n in new[] { "page1", "page5" }) p.Pages.Add(Fixtures.Analyze(n));
+        var b = p.Pages[1];
+        var t = Rows.AddTotalLine(b, FindLine(b, "PRODUITS FINIS"), new TotalScope { Mode = "above" })!;
+        Totals.Recompute(p);
+        Equal("TOTAL|44 550|9 000", string.Join("|", t.Cells.Select(c => c.Text)), "lignes au-dessus");
+        Equal("44 550", FindLine(b, "TOTAL STOCK").Cells[1].Text, "le total imprimé ne change pas");
+        FindLine(b, "CARTONNAGE").Cells[1].Text = "6 000";
+        Totals.Recompute(p);
+        Equal("34 550", t.Cells[1].Text, "recalculé tout seul");
+        Equal("34 550", FindLine(b, "TOTAL STOCK").Cells[1].Text, "le total imprimé suit aussi");
+        t.TotalScope = new TotalScope { Mode = "pages", Pages = ["page1"] };
+        Totals.Recompute(p);
+        long sum1 = p.Pages[0].Tables.SelectMany(x => x.Rows).SelectMany(r => r.Lines).Where(x => x.Kind is LineKind.Article or LineKind.Titre)
+            .Sum(x => x.Cells.Count > 1 ? Totals.ParseAmount(x.Cells[1].Text) ?? 0 : 0);
+        Equal(Totals.FormatAmount(sum1), t.Cells[1].Text, "page 1 seulement");
+        t.TotalScope.Auto = false; t.Cells[1].Text = "";
+        Totals.Recompute(p);
+        Equal("", t.Cells[1].Text, "à taper soi-même");
+        Check(ExportLines(p).Any(x => Regex.IsMatch(x, @"^TOTAL\t\t\d+$")), "dans le .txt");
+        var t0 = p.Pages[0].Tables[0];
+        Check(t0.Rows[^1].Lines.Contains(Rows.LastObjectLine(p.Pages[0])!), "appui : la dernière rangée à montants");
+    }
+
+    public static void T_Tracer_un_trait_en_dessous()
+    {
+        var p = new InventoryProject();
+        p.Pages.Add(Fixtures.Analyze("page1"));
+        var a = p.Pages[0];
+        var comp = FindLine(a, "1 compresseur à vis ATLASCAPCO avec cuve 250L + 1 sécheur ATLASCAPCO");
+        Check(Rows.CanSplitBelow(a, comp) && !Rows.CanSplitBelow(a, FindLine(a, "2 rolls en métal")), "seulement s'il y a une ligne dessous");
+        int n = a.Tables[0].Rows.Count;
+        Check(Rows.SplitBelow(a, comp), "trait tracé");
+        Equal(n + 1, a.Tables[0].Rows.Count, "deux rangées");
+    }
+
+    public static void T_Reduire_la_rangee()
+    {
+        var p = new InventoryProject();
+        p.Pages.Add(Fixtures.Analyze("page1"));
+        var a = p.Pages[0];
+        var t = a.Tables[0];
+        var dans = FindLine(a, "DANS L'ENTREPOT");
+        var laves = FindLine(a, "2 laves main en inox + 1 sanibroyeur SPEED");
+        Check(Rows.RowTrimOf(a, FindLine(a, "2 rolls en métal")) is null, "rangée normale : rien à réduire");
+        Check(Rows.Split(a, laves), "séparée");
+        int r = t.Rows.FindIndex(x => x.Lines.Contains(dans));
+        double h0 = t.RowYs[r + 1] - t.RowYs[r];
+        int H = a.Height;
+        Check(Rows.TrimRow(a, dans), "réduite");
+        double h1 = t.RowYs[r + 1] - t.RowYs[r];
+        Check(h1 < h0, $"hauteur {h0} → {h1}");
+        Equal(H - (int)Math.Round(h0 - h1), a.Height, "la page raccourcit d'autant");
+        Check(Rows.RowTrimOf(a, dans) is null, "plus rien à réduire");
+        Equal(a.Height, PageLayout.Stretch(Fixtures.Load("page1").Image, a).Height, "image");
+        Check(Rows.UntrimRow(a, dans), "hauteur d'origine");
+        Equal(H, a.Height, "page revenue");
+    }
+
+    public static InventoryProject EndScenario()
+    {
+        var p = new InventoryProject();
+        foreach (var n in new[] { "page1", "page5" }) p.Pages.Add(Fixtures.Analyze(n));
+        Lots.CreateEmpty(p);
+        Lots.FillAutomatically(p);
+        p.EndLots = new EndLotsChoice { Mode = "page", AfterId = "page1" };
+        Lots.Set(p, FindLine(p.Pages[0], "2 rolls en métal"), "0");
+        Lots.Set(p, FindLine(p.Pages[0], "1 gazelle TULESCA inox"), "0");
+        Lots.Set(p, FindLine(p.Pages[1], "CARTONNAGE"), "0");
+        FindLine(p.Pages[0], "1 compresseur à vis ATLASCAPCO avec cuve 250L + 1 sécheur ATLASCAPCO").Deleted = true;
+        Rows.AddTotalLine(p.Pages[1], FindLine(p.Pages[1], "PRODUITS FINIS"), new TotalScope { Mode = "above" });
+        Arrangement.SyncEndPages(p);
+        return p;
+    }
+
+    public static List<Raster> ComposeEnd(InventoryProject p)
+    {
+        var plan = Arrangement.Build(p);
+        Totals.Recompute(p, plan);
+        var imgs = p.Pages.Select(pg => pg.EndLots ? null : LotColumn.Draw(PageLayout.Stretch(Fixtures.Load(pg.Id).Image, pg), pg)).ToList();
+        return p.Pages.Select((pg, k) => Arrangement.ComposePage(plan, k, imgs[plan.Pages[k].Template ?? k]!,
+            plan.Pages[k].Pieces.Where(pc => pc.IsUnit).ToDictionary(pc => pc.Unit!, pc => (Arrangement.Crop?)Arrangement.UnitCrop(pc.Unit!, imgs[pc.Unit!.P]!)))).ToList();
+    }
+
+    public static void T_Scenario_lots_de_fin_supprimee_total()
+    {
+        var p = EndScenario();
+        Equal("page1,END,page5", string.Join(",", p.Pages.Select(x => x.EndLots ? "END" : x.Id)), "pages");
+        var plan = Arrangement.Build(p);
+        Equal(3, plan.Moving.Count, "trois lots 0 sur la page de fin");
+        Equal(p.Pages[0].Height, ComposeEnd(p)[1].Height, "page de fin à la hauteur du modèle");
     }
 }

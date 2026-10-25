@@ -112,6 +112,41 @@ if (args.Length > 0 && args[0] == "export-arrange")
     }
     return 0;
 }
+if (args.Length > 0 && args[0] == "export-pdf")
+{
+    // PDF des trois pages de test (comparé au PDF de la version iPad).
+    var jpegs = new[] { "page1", "page2", "page5" }.Select(n => File.ReadAllBytes(Path.Combine(Fixtures.Dir, n + ".jpg"))).ToList();
+    File.WriteAllBytes(args[1], RetoucheInventaire.Core.Export.PdfWriter.Build(jpegs, "BEENDHI prisé – modifié"));
+    return 0;
+}
+if (args.Length > 0 && args[0] == "export-fin")
+{
+    // Lots de fin sur une page dédiée, ligne supprimée, ligne TOTAL : .txt et pages composées, pour comparaison avec l'iPad.
+    var project = Tests.EndScenario();
+    var images = Tests.ComposeEnd(project);
+    Directory.CreateDirectory(args[1]);
+    RetoucheInventaire.Core.Export.TxtExporter.Write(project, Path.Combine(args[1], "export.txt"));
+    for (int i = 0; i < images.Count; i++)
+    {
+        Pgm.Write(Path.Combine(args[1], i + ".pgm"), images[i]);
+        Console.WriteLine($"page {i + 1}: {images[i].Width}x{images[i].Height}");
+    }
+    return 0;
+}
+if (args.Length > 0 && args[0] == "export-rows")
+{
+    // Lignes dupliquées et séparées : .txt et pages agrandies (colonne des lots tracée), pour comparaison avec l'iPad.
+    var project = Tests.RowsScenario();
+    Directory.CreateDirectory(args[1]);
+    RetoucheInventaire.Core.Export.TxtExporter.Write(project, Path.Combine(args[1], "export.txt"));
+    foreach (var pg in project.Pages)
+    {
+        var img = RetoucheInventaire.Core.Export.LotColumn.Draw(PageLayout.Stretch(Fixtures.Load(pg.Id).Image, pg), pg);
+        Pgm.Write(Path.Combine(args[1], pg.Id + ".pgm"), img);
+        Console.WriteLine($"{pg.Id}: {img.Width}x{img.Height}");
+    }
+    return 0;
+}
 if (args.Length > 0 && args[0] == "export")
 {
     var project = new InventoryProject();

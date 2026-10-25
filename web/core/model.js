@@ -2,7 +2,7 @@
 // Portage de PageAnalyzer.cs, LineClassifier.cs, PageEdits.cs et Project.cs.
 // Les noms de propriétés sont ceux du JSON de la version Windows (projets compatibles).
 import { Rect } from './geometry.js';
-import { detectGrids } from './rules.js';
+import { detectGrids, mergeThinRows } from './rules.js';
 
 const PAD = 4;
 
@@ -69,11 +69,12 @@ export function upgradePage(page) {
     if (t.HasGrid === false || !(t.ColumnXs?.length >= 2) || !(t.RowYs?.length >= 2)) continue;
     const sizes = t.Rows.flatMap((r) => r.Lines).map((l) => l.Cells[0]?.FontSize ?? 0).filter((v) => v > 0).sort((a, b) => a - b);
     const em = sizes.length > 0 ? sizes[Math.trunc(sizes.length / 2)] : 12;
+    const header = mergeThinRowsOf(t);
     t.Rows.forEach((row, r) => {
       if (row.Lines.length > 0 || r + 1 >= t.RowYs.length) return;
       const rowTop = t.RowYs[r], rowBottom = t.RowYs[r + 1];
       const top = rowTop + PAD, bottom = Math.max(rowTop + PAD + 1, rowBottom - PAD);
-      const line = { Kind: 'Article', KindChosenByUser: false, OutsideTable: false, Cells: [], Lot: '', LotManual: false, NoLot: false, ForceLot: false, Extra: 0, ExtraAt: 0 };
+      const line = { Kind: r === 0 && header ? 'EnTete' : 'Article', KindChosenByUser: false, OutsideTable: false, Cells: [], Lot: '', LotManual: false, NoLot: false, ForceLot: false, Extra: 0, ExtraAt: 0 };
       for (let c = 0; c + 1 < t.ColumnXs.length; c++) {
         const box = cellBox(t.ColumnXs[c], t.ColumnXs[c + 1], rowTop, rowBottom, top, bottom, Rect.empty());
         line.Cells.push(newField({ Id: `${page.Id}-v${n++}`, Column: c, Box: box, Align: c === 0 ? 'Left' : 'Right', Indent: 4, FontSize: Math.min(em, Math.max(6, box.Height / 1.05)) }));
@@ -86,6 +87,30 @@ export function upgradePage(page) {
       for (const l of row.Lines) if (!l.KindChosenByUser && !l.OutsideTable) l.Kind = 'EnTete';
     });
   }
+}
+
+/**
+ * Rangées fines d'une trame lue comme plusieurs filets (projet d'une version précédente) : réunies en une rangée (même règle
+ * que la détection). En-tête du tableau relu en morceaux (texte illisible) : remplacé par des cases vides modifiables,
+ * sauf s'il a été corrigé. Vrai si l'en-tête a été vidé.
+ */
+function mergeThinRowsOf(t) {
+  if (t.RowOrder || t.Rows.some((r) => r.Inserted) || t.Rows.length + 1 !== t.RowYs.length) return false;
+  const keep = mergeThinRows(t.RowYs);
+  if (keep.length === t.RowYs.length) return false;
+  const rows = [];
+  let header = false;
+  t.Rows.forEach((row, r) => {
+    if (keep.includes(t.RowYs[r])) { rows.push({ ...row, Lines: [...row.Lines], n: 1 }); return; }
+    const g = rows[rows.length - 1];
+    g.Lines.push(...row.Lines);
+    g.n++;
+    g.Bounds = Rect.fromEdges(g.Bounds.X, g.Bounds.Y, Math.max(Rect.right(g.Bounds), Rect.right(row.Bounds)), Rect.bottom(row.Bounds));
+  });
+  if (rows[0]?.n > 1 && !rows[0].Lines.some((l) => l.KindChosenByUser || l.Cells.some(isModified))) { rows[0].Lines = []; header = true; }
+  t.Rows = rows.map(({ n, ...row }) => row);
+  t.RowYs = keep;
+  return header;
 }
 
 export function assignIds(page) {
@@ -348,4 +373,42 @@ export const kindLabel = (k) => ({ Article: 'Article', Titre: 'Titre', Total: 'T
 export function findLine(project, field) {
   for (const p of project.Pages) for (const l of allLines(p)) if (l.Cells.includes(field)) return { page: p, line: l };
   return null;
+}
+
+// ---------- Recadrage : ce qui a été fait sur la page est gardé ----------
+
+const keyOf = (s) => (s ?? '').normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim();
+
+/**
+ * Après un recadrage (le texte est relu) : chaque ligne relue reprend, depuis la ligne d'avant de même texte (dans l'ordre),
+ * son numéro de lot, sa case de lot, son type choisi à la main, et les corrections de ses cases (texte, traits, couleurs,
+ * total tapé). Choix des tableaux pour les lots repris dans l'ordre des tableaux. Renvoie le nombre de lignes retrouvées.
+ */
+export function carryOver(old, fresh) {
+  const pool = new Map();
+  for (const l of allLines(old)) {
+    const k = keyOf(l.Cells[0]?.OriginalText);
+    if (!k) continue;
+    if (!pool.has(k)) pool.set(k, []);
+    pool.get(k).push(l);
+  }
+  let found = 0;
+  for (const l of allLines(fresh)) {
+    const k = keyOf(l.Cells[0]?.OriginalText);
+    const o = k ? pool.get(k)?.shift() : null;
+    if (!o) continue;
+    found++;
+    for (const p of ['Lot', 'LotManual', 'LotSlot', 'NoLot', 'ForceLot']) if (o[p] !== undefined) l[p] = o[p];
+    if (o.KindChosenByUser) { l.Kind = o.Kind; l.KindChosenByUser = true; }
+    for (const c of l.Cells) {
+      const oc = o.Cells.find((x) => x.Column === c.Column);
+      if (!oc || keyOf(oc.OriginalText) !== keyOf(c.OriginalText) || c.Locked) continue;
+      if (oc.Text !== oc.OriginalText) c.Text = oc.Text;
+      c.Strikes = (oc.Strikes ?? []).map((x) => ({ ...x }));
+      if (oc.Colors?.length) c.Colors = oc.Colors.map((x) => ({ ...x }));
+      if (oc.Manual) c.Manual = true;
+    }
+  }
+  old.Tables.forEach((t, i) => { if (t.LotsOff && fresh.Tables[i]) fresh.Tables[i].LotsOff = true; });
+  return found;
 }

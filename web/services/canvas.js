@@ -41,7 +41,8 @@ export const font = (size, bold = false) => `${bold ? 'bold ' : ''}${size}px "Ti
 const meter = makeCanvas(1, 1).getContext('2d');
 
 /** Lignes imprimées en gras : totaux et en-têtes (« TOTAL STOCK », « II - STOCK »). */
-export const isBoldLine = (line) => line?.Kind === 'Total' || line?.Kind === 'EnTete';
+/** Gras : totaux et en-têtes imprimés ; ligne TOTAL ajoutée : seulement si « En gras » est coché. */
+export const isBoldLine = (line) => (line?.TotalScope ? !!line.TotalScope.Bold : line?.Kind === 'Total' || line?.Kind === 'EnTete');
 
 export function measure(text, size, bold = false) {
   meter.font = font(size, bold);

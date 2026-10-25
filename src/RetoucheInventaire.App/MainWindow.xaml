@@ -5,7 +5,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Title="Retouche d'inventaire">
 
-    <!-- Même écran que sur iPhone/iPad : tout est en haut (projet, pages, zoom, outils, « Modifier »), rien en bas. -->
+    <!-- Même écran que sur iPhone/iPad : tout est en haut (projet, pages, zoom, outils, « Mise en page »), rien en bas. -->
     <Grid x:Name="Root" Background="#FFEEF0F3">
         <Grid.KeyboardAccelerators>
             <KeyboardAccelerator Modifiers="Control" Key="Z" Invoked="UndoAccelerator_Invoked" />
@@ -89,6 +89,7 @@
                 <ColumnDefinition Width="*" MaxWidth="170" />
                 <ColumnDefinition Width="*" MaxWidth="170" />
                 <ColumnDefinition Width="*" MaxWidth="170" />
+                <ColumnDefinition Width="*" MaxWidth="170" />
             </Grid.ColumnDefinitions>
             <Button x:Name="PhotoButton" Grid.Column="0" Style="{StaticResource AccentTabButton}" Click="Photo_Click"
                     ToolTipService.ToolTip="Photographier un inventaire avec la caméra de la tablette">
@@ -122,10 +123,10 @@
                 </StackPanel>
             </Button>
             <Button x:Name="EditButton" Grid.Column="3" Style="{StaticResource TabButton}"
-                    ToolTipService.ToolTip="Modifier le document : renommer, pages, lots">
+                    ToolTipService.ToolTip="Mise en page : renommer, pages, lots, loupe">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <FontIcon Glyph="&#xE70F;" FontSize="20" />
-                    <TextBlock Text="Modifier" VerticalAlignment="Center" />
+                    <TextBlock Text="Mise en page" VerticalAlignment="Center" />
                 </StackPanel>
                 <Button.Flyout>
                     <MenuFlyout Placement="BottomEdgeAlignedLeft">
@@ -135,33 +136,42 @@
                         <MenuFlyoutItem Text="Liste des pages" Click="PageLabel_Click">
                             <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8FD;" /></MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
-                        <MenuFlyoutItem x:Name="SyncItem" Text="Synchroniser les lots" Click="SyncLots_Click">
+                        <MenuFlyoutItem x:Name="SyncItem" Text="Synchroniser les lots…" Click="SyncLots_Click">
                             <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE895;" /></MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
                         <MenuFlyoutItem x:Name="RemovePageItem" Text="Retirer cette page" Click="RemovePage_Click">
                             <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE74D;" /></MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
                         <MenuFlyoutSeparator />
-                        <MenuFlyoutItem IsEnabled="False" Text="Pour une case : touchez-la, puis Barrer, Couleur, Type, Rétablir en haut" />
+                        <ToggleMenuFlyoutItem x:Name="LoupeItem" Text="Loupe « Original » au-dessus de la case touchée" IsChecked="True" Click="Loupe_Click" />
+                        <MenuFlyoutSeparator />
+                        <MenuFlyoutItem IsEnabled="False" Text="Pour une case : touchez-la, puis Ligne, Barrer, Couleur, Type, Rétablir en haut" />
                     </MenuFlyout>
                 </Button.Flyout>
             </Button>
-            <Button x:Name="CropButton" Grid.Column="4" Style="{StaticResource TabButton}" Click="Crop_Click"
+            <ToggleButton x:Name="MoveToggle" Grid.Column="4" Style="{StaticResource TabToggle}" Checked="MoveToggle_Changed" Unchecked="MoveToggle_Changed"
+                          ToolTipService.ToolTip="Modifier : poignées ⋮⋮ sur toutes les lignes pour les déplacer en les glissant">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon Glyph="&#xE76F;" FontSize="20" />
+                    <TextBlock Text="Modifier" VerticalAlignment="Center" />
+                </StackPanel>
+            </ToggleButton>
+            <Button x:Name="CropButton" Grid.Column="5" Style="{StaticResource TabButton}" Click="Crop_Click"
                     ToolTipService.ToolTip="Recadrer la page affichée">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <FontIcon Glyph="&#xE7A8;" FontSize="20" />
                     <TextBlock Text="Recadrer" VerticalAlignment="Center" />
                 </StackPanel>
             </Button>
-            <ToggleButton x:Name="LockToggle" Grid.Column="5" Style="{StaticResource TabToggle}" Checked="LockToggle_Changed" Unchecked="LockToggle_Changed"
+            <ToggleButton x:Name="LockToggle" Grid.Column="6" Style="{StaticResource TabToggle}" Checked="LockToggle_Changed" Unchecked="LockToggle_Changed"
                           ToolTipService.ToolTip="Tracer une zone (signature, tampon) qui ne pourra pas être modifiée">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <FontIcon Glyph="&#xE72E;" FontSize="20" />
                     <TextBlock Text="Verrouiller" VerticalAlignment="Center" />
                 </StackPanel>
             </ToggleButton>
-            <Button x:Name="ExportButton" Grid.Column="6" Style="{StaticResource AccentTabButton}"
-                    ToolTipService.ToolTip="Images JPEG ou fichier texte">
+            <Button x:Name="ExportButton" Grid.Column="7" Style="{StaticResource AccentTabButton}"
+                    ToolTipService.ToolTip="Images JPEG, document PDF ou fichier texte">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <FontIcon Glyph="&#xE72D;" FontSize="20" />
                     <TextBlock Text="Exporter" VerticalAlignment="Center" />
@@ -174,6 +184,12 @@
                         <MenuFlyoutItem x:Name="ExportOneJpegItem" Text="Image de cette page seulement" Click="ExportOneJpeg_Click">
                             <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE91B;" /></MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
+                        <MenuFlyoutItem x:Name="ExportPdfItem" Text="Document PDF" Click="ExportPdf_Click">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEA90;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem x:Name="ExportOnePdfItem" Text="PDF de cette page seulement" Click="ExportOnePdf_Click">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEA90;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
                         <MenuFlyoutItem x:Name="ExportTxtItem" Text="Fichier texte (.txt)" Click="ExportTxt_Click">
                             <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
@@ -182,7 +198,7 @@
             </Button>
         </Grid>
 
-        <!-- « Modifier » la case sélectionnée : barrer, couleur, type de ligne, rétablir, recalculer. -->
+        <!-- « Modifier » la case sélectionnée : ligne, barrer, couleur, type de ligne, rétablir, recalculer. -->
         <Grid x:Name="EditBar" Grid.Row="2" Padding="12,6" ColumnSpacing="8" Background="White" BorderBrush="#FFDFE2E6" BorderThickness="0,1,0,0"
               Visibility="Collapsed">
             <Grid.ColumnDefinitions>
@@ -191,6 +207,17 @@
             </Grid.ColumnDefinitions>
             <TextBlock x:Name="EditInfo" FontSize="14" Opacity="0.7" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                <!-- Ligne : dupliquer la ligne, séparer ici… (aussi au clic droit ou à l'appui long sur une case). -->
+                <Button x:Name="LineButton" Style="{StaticResource PillButton}" AllowFocusOnInteraction="False"
+                        ToolTipService.ToolTip="Dupliquer la ligne, séparer… (aussi : clic droit ou appui long sur une case)">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE8C8;" FontSize="16" />
+                        <TextBlock Text="Ligne" />
+                    </StackPanel>
+                    <Button.Flyout>
+                        <MenuFlyout x:Name="LineMenu" Placement="BottomEdgeAlignedLeft" Opening="LineMenu_Opening" />
+                    </Button.Flyout>
+                </Button>
                 <!-- Barrer : la sélection (toute la case sans sélection) ; même bouton pour enlever le trait. -->
                 <Button x:Name="StrikeButton" Style="{StaticResource PillButton}" Click="Strike_Click" AllowFocusOnInteraction="False"
                         ToolTipService.ToolTip="Barrer le texte sélectionné (toute la case sans sélection)">

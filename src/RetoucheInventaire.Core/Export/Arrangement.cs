@@ -42,6 +42,10 @@ public static class Arrangement
         public int Top { get; init; }
         public int BodyTop { get; init; }
         public int Bottom { get; init; }
+        /// <summary>« zero » (lot 0 : recollé à la fin) ou « deleted » (ligne supprimée : retirée).</summary>
+        public string Kind { get; init; } = "zero";
+        /// <summary>Page « lots de fin » où il est recollé (-1 : ailleurs).</summary>
+        public int EndPage { get; set; } = -1;
         public Destination Dest { get; set; } = null!;
         public int[] Shift { get; set; } = [];
         public int LotShift { get; set; }
@@ -50,10 +54,12 @@ public static class Arrangement
         public int Height { get; set; }
     }
 
-    /// <summary>Morceau d'une page : recopie des lignes [Y0, Y1[ de la page d'origine, ou rangée refaite d'un lot 0.</summary>
+    /// <summary>Morceau d'une page : recopie des lignes [Y0, Y1[ de la page d'origine, rangée refaite d'un lot 0, ou papier (H lignes).</summary>
     public sealed class Piece
     {
         public bool IsUnit => Unit != null;
+        public bool Paper { get; init; }
+        public bool IsCopy => Unit is null && !Paper;
         public int Y0 { get; set; }
         public int Y1 { get; set; }
         public int Dst { get; set; }
@@ -61,23 +67,25 @@ public static class Arrangement
         public int H { get; init; }
     }
 
-    public sealed record PagePlan(int Height, List<Piece> Pieces);
+    /// <summary>Plan d'une page ; <paramref name="Template"/> : page modèle d'une page « lots de fin » (-1 : aucune), null sinon.</summary>
+    public sealed record PagePlan(int Height, List<Piece> Pieces, int? Template = null);
     public sealed record Erase(int P, int X0, int Y0, int X1, int Y1);
-    public sealed record Plan(List<PagePlan> Pages, List<Unit> Units, Destination? Dest, List<Erase> Erase);
+    /// <summary>Units : tout ce qui quitte sa place (lots 0 recollés et lignes supprimées) ; Moving : les lots 0 recollés.</summary>
+    public sealed record Plan(List<PagePlan> Pages, List<Unit> Units, List<Unit> Moving, Destination? Dest, List<Erase> Erase, int EndNeeded);
 
     private static int R(double v) => (int)Math.Floor(v + 0.5);
-    private static int CutY(double y) => R(y) - Cut;
+    internal static int CutY(double y) => R(y) - Cut;
     private static bool Blank(string? s) => string.IsNullOrWhiteSpace(s);
     private static bool HasValues(PrintedLine l) => l.Cells.Skip(1).Any(c => !Blank(c.Text));
     private static bool GridTable(Table t) => t.HasGrid && t.RowYs.Count >= 2 && t.ColumnXs.Count >= 2;
 
-    private static double LineTop(PrintedLine l)
+    internal static double LineTop(PrintedLine l)
     {
         var ink = l.Cells.Where(c => !c.Ink.IsEmpty).ToList();
         return ink.Count > 0 ? ink.Min(c => c.Ink.Top) : l.Cells.Min(c => PageLayout.BaseBox(l, c).Top);
     }
 
-    private static double LineBottom(PrintedLine l)
+    internal static double LineBottom(PrintedLine l)
     {
         var ink = l.Cells.Where(c => !c.Ink.IsEmpty).ToList();
         double b = ink.Count > 0 ? ink.Max(c => c.Ink.Bottom) : l.Cells.Max(c => PageLayout.BaseBox(l, c).Bottom);
@@ -85,7 +93,7 @@ public static class Arrangement
         return b;
     }
 
-    private static int GapMid(PrintedLine a, PrintedLine b) => (int)Math.Floor((LineBottom(a) + LineTop(b)) / 2);
+    internal static int GapMid(PrintedLine a, PrintedLine b) => (int)Math.Floor((LineBottom(a) + LineTop(b)) / 2);
 
     /// <summary>Titre de la rangée dont les valeurs descendent sur <paramref name="target"/> (comme dans le .txt).</summary>
     private static PrintedLine? CarriedTitle(List<PrintedLine> lines, PrintedLine target)
@@ -102,11 +110,14 @@ public static class Arrangement
         return null;
     }
 
-    /// <summary>Objets au lot 0 à déplacer, dans l'ordre du document.</summary>
-    private static List<Unit> ZeroUnits(InventoryProject project)
+    /// <summary>
+    /// Lignes qui quittent leur place, dans l'ordre du document : « zero » (objet au lot 0 et sa suite, recollé après le dernier lot
+    /// ou sur une page « lots de fin ») ; « deleted » (ligne supprimée et sa suite : retirée, la suite remonte).
+    /// </summary>
+    private static List<Unit> MovedUnits(InventoryProject project)
     {
         var units = new List<Unit>();
-        if (!Lots.IsActive(project)) return units;
+        bool lotsOn = Lots.IsActive(project);
         for (int p = 0; p < project.Pages.Count; p++)
         {
             var page = project.Pages[p];
@@ -118,25 +129,32 @@ public static class Arrangement
                 {
                     if (r + 1 >= table.RowYs.Count) continue;
                     var row = table.Rows[r];
-                    var lines = row.Lines.Where(l => l.Kind != LineKind.Ignoree && l.Cells.Any(c => !Blank(c.Text))).ToList();
-                    var found = new List<(PrintedLine Object, List<PrintedLine> Lines, PrintedLine? Title)>();
+                    var lines = row.Lines.Where(l => l.Kind != LineKind.Ignoree && (l.Cells.Any(c => !Blank(c.Text)) || l.Deleted)).ToList();
+                    var found = new List<(string Kind, PrintedLine Object, List<PrintedLine> Lines, PrintedLine? Title)>();
                     for (int i = 0; i < lines.Count; i++)
                     {
                         var l = lines[i];
-                        if (!Lots.HasCell(l) || !Lots.IsZero(l)) continue;
+                        bool deleted = l.Deleted;
+                        if (!deleted && !(lotsOn && Lots.HasCell(l) && Lots.IsZero(l))) continue;
+                        if (found.Any(u => u.Lines.Contains(l))) continue;
                         var own = new List<PrintedLine> { l };
-                        for (int j = i + 1; j < lines.Count && lines[j].Kind != LineKind.Titre && !Lots.HasCell(lines[j]); j++) own.Add(lines[j]);
-                        found.Add((l, own, HasValues(l) ? null : CarriedTitle(lines, l)));
+                        for (int j = i + 1; j < lines.Count && lines[j].Kind != LineKind.Titre && !Lots.HasCell(lines[j]) && !lines[j].Deleted; j++)
+                        {
+                            // Ligne supprimée : sa suite (texte sans montant), pas un autre objet (« 1 coffre fort… »).
+                            if (deleted && (HasValues(lines[j]) || Analysis.LineClassifier.LooksLikeItem(lines[j].Cells.Count > 0 ? lines[j].Cells[0].Text : ""))) break;
+                            own.Add(lines[j]);
+                        }
+                        found.Add((deleted ? "deleted" : "zero", l, own, HasValues(l) ? null : CarriedTitle(lines, l)));
                     }
                     if (found.Count == 0) continue;
                     var covered = found.SelectMany(u => u.Lines).ToHashSet();
-                    bool whole = lines.All(covered.Contains) && found.All(u => u.Title is null);
+                    bool whole = lines.All(covered.Contains) && found.All(u => u.Title is null) && found.All(u => u.Kind == found[0].Kind);
                     if (whole)
                     {
                         int top = CutY(table.RowYs[r]);
                         units.Add(new Unit
                         {
-                            P = p, Page = page, Ti = ti, Table = table, R = r, Object = found[0].Object, Lines = [.. row.Lines],
+                            P = p, Page = page, Ti = ti, Table = table, R = r, Kind = found[0].Kind, Object = found[0].Object, Lines = [.. row.Lines],
                             Whole = true, Top = top, BodyTop = top + Filet, Bottom = CutY(table.RowYs[r + 1]),
                         });
                         continue;
@@ -149,7 +167,7 @@ public static class Arrangement
                         if (bottom <= top) continue;
                         units.Add(new Unit
                         {
-                            P = p, Page = page, Ti = ti, Table = table, R = r, Object = u.Object, Lines = u.Lines, Title = u.Title,
+                            P = p, Page = page, Ti = ti, Table = table, R = r, Kind = u.Kind, Object = u.Object, Lines = u.Lines, Title = u.Title,
                             Whole = false, Top = top, BodyTop = top, Bottom = bottom,
                         });
                     }
@@ -157,6 +175,73 @@ public static class Arrangement
             }
         }
         return units;
+    }
+
+    /// <summary>Lignes supprimées (et leur suite) : hors du .txt, des totaux et des lots.</summary>
+    public static HashSet<PrintedLine> DeletedLines(InventoryProject project) =>
+        MovedUnits(project).Where(u => u.Kind == "deleted").SelectMany(u => u.Lines).ToHashSet();
+
+    /// <summary>Page modèle des pages « lots de fin » : la dernière page à lots avant elles (sinon celle du dernier lot).</summary>
+    private static Destination? EndTemplate(InventoryProject project)
+    {
+        int first = project.Pages.FindIndex(pg => pg.EndLots);
+        var objects = Lots.ObjectLines(project).ToList();
+        (Page Page, Table Table, int Row, PrintedLine Line)? best = null;
+        foreach (var o in objects)
+        {
+            int p = project.Pages.IndexOf(o.Page);
+            if (!GridTable(o.Table) || (first >= 0 && p > first)) continue;
+            best = o;
+        }
+        if (best is null)
+        {
+            var grid = objects.Where(o => GridTable(o.Table)).ToList();
+            if (grid.Count > 0) best = grid[^1];
+        }
+        if (best is null) return null;
+        var b = best.Value;
+        // Rangée de référence (filet, fond, filets verticaux) : la 1re rangée d'objet du tableau.
+        int r = objects.FirstOrDefault(o => o.Table == b.Table).Line != null ? objects.First(o => o.Table == b.Table).Row : b.Row;
+        return new Destination(project.Pages.IndexOf(b.Page), b.Page.Tables.IndexOf(b.Table), r, b.Table, b.Page);
+    }
+
+    /// <summary>
+    /// Mode page dédiée : crée ou retire les pages « lots de fin » pour qu'il y en ait juste assez (une de plus quand la précédente est
+    /// pleine, aucune sans lot 0). La 1re est placée après la page choisie (<see cref="EndLotsChoice.AfterId"/>). Vrai si les pages ont changé.
+    /// </summary>
+    public static bool SyncEndPages(InventoryProject project)
+    {
+        bool changed = false;
+        for (int guard = 0; guard < 50; guard++)
+        {
+            var plan = Build(project);
+            var ends = project.Pages.Where(pg => pg.EndLots).ToList();
+            int need = project.EndLots?.Mode == "page" ? plan.EndNeeded : 0;
+            if (ends.Count == need)
+            {
+                // Même taille que la page modèle.
+                if (EndTemplate(project) is { } t)
+                    foreach (var pg in ends.Where(pg => pg.Width != t.Page.Width || pg.Height != t.Page.Height)) { pg.Width = t.Page.Width; pg.Height = t.Page.Height; changed = true; }
+                return changed;
+            }
+            changed = true;
+            if (ends.Count > need) { project.Pages.RemoveAt(project.Pages.LastIndexOf(ends[^1])); continue; }
+            int at;
+            if (ends.Count > 0) at = project.Pages.LastIndexOf(ends[^1]) + 1;
+            else
+            {
+                int after = project.Pages.FindIndex(pg => pg.Id == project.EndLots!.AfterId);
+                at = after >= 0 ? after + 1 : project.Pages.Count;
+            }
+            var model = ends.Count > 0 ? ends[0] : project.Pages.FirstOrDefault(pg => !pg.EndLots && pg.Tables.Count > 0) ?? project.Pages.FirstOrDefault();
+            project.Pages.Insert(at, new Page
+            {
+                Id = "fin-" + Guid.NewGuid().ToString("N")[..8], EndLots = true, Source = PageSource.Image,
+                SourceName = ends.Count == 0 ? "Lots de fin" : $"Lots de fin {ends.Count + 1}",
+                Width = model?.Width ?? 1000, Height = model?.Height ?? 1400,
+            });
+        }
+        return changed;
     }
 
     /// <summary>Rangée du dernier objet numéroté (pas au lot 0) : c'est là que les lots 0 sont recollés.</summary>
@@ -182,23 +267,58 @@ public static class Arrangement
         };
     }
 
-    /// <summary>Plan de toutes les pages : morceaux recopiés (dans l'ordre) et rangées des lots 0.</summary>
+    /// <summary>
+    /// Plan de toutes les pages : morceaux recopiés (dans l'ordre), rangées des lots 0, papier. Pages « lots de fin » : composées depuis
+    /// la page modèle (marge, lots 0 en rangées du tableau modèle, filet du bas). EndNeeded : pages « lots de fin » nécessaires.
+    /// </summary>
     public static Plan Build(InventoryProject project)
     {
-        var units = ZeroUnits(project);
-        var dest = units.Count > 0 ? FindDestination(project) : null;
-        var moving = dest != null ? units : [];
+        var all = MovedUnits(project);
+        var zeros = all.Where(u => u.Kind == "zero").ToList();
+        var deleted = all.Where(u => u.Kind == "deleted").ToList();
+        bool endMode = project.EndLots?.Mode == "page";
+        var template = endMode && zeros.Count > 0 ? EndTemplate(project) : null;
+        var endIdx = project.Pages.Select((pg, k) => pg.EndLots ? k : -1).Where(k => k >= 0).ToList();
+        Destination? dest = null;
+        int endNeeded = 0;
+        var moving = new List<Unit>();
         bool lots = Lots.IsActive(project);
-        foreach (var u in moving)
+        void Prepare(Unit u, Destination d)
         {
             TextAlign Align(int c) => c < u.Object.Cells.Count ? u.Object.Cells[c].Align : (c == 0 ? TextAlign.Left : TextAlign.Right);
-            u.Dest = dest!;
-            u.Shift = Enumerable.Range(0, u.Table.ColumnXs.Count - 1).Select(c => ColumnShift(u.Table, dest!.Table, c, Align(c))).ToArray();
-            u.LotShift = R(Lots.TableLeft(dest!.Table)) - R(Lots.TableLeft(u.Table));
+            u.Dest = d;
+            u.Shift = Enumerable.Range(0, u.Table.ColumnXs.Count - 1).Select(c => ColumnShift(u.Table, d.Table, c, Align(c))).ToArray();
+            u.LotShift = R(Lots.TableLeft(d.Table)) - R(Lots.TableLeft(u.Table));
             u.SrcLotWidth = lots ? R(Lots.ColumnWidth(u.Page)) : 0;
-            u.DstLotWidth = lots ? R(Lots.ColumnWidth(dest.Page)) : 0;
+            u.DstLotWidth = lots ? R(Lots.ColumnWidth(d.Page)) : 0;
             u.Height = Filet + (u.Bottom - u.BodyTop);
         }
+        if (template != null)
+        {
+            // Pages dédiées : les lots 0 à la suite, une nouvelle page quand la hauteur du tableau modèle est atteinte.
+            var T = template.Table;
+            int avail = CutY(T.RowYs[^1]) - CutY(T.RowYs[0]), used = 0;
+            var groups = new List<List<Unit>>();
+            foreach (var u in zeros)
+            {
+                int h = Filet + (u.Bottom - u.BodyTop);
+                if (groups.Count == 0 || (used + h > avail && used > 0)) { groups.Add([]); used = 0; }
+                groups[^1].Add(u);
+                used += h;
+            }
+            endNeeded = groups.Count;
+            for (int i = 0; i < groups.Count && i < endIdx.Count; i++) // page pas encore créée : ces lots restent à leur place
+            {
+                foreach (var u in groups[i]) { Prepare(u, template with { P = endIdx[i] }); u.EndPage = endIdx[i]; moving.Add(u); }
+                if (i == 0) dest = new Destination(endIdx[0], -1, -1, template.Table, template.Page);
+            }
+        }
+        else if (zeros.Count > 0)
+        {
+            dest = FindDestination(project);
+            if (dest != null) { moving = zeros; foreach (var u in moving) Prepare(u, dest); }
+        }
+        var cutting = moving.Concat(deleted).ToList();
 
         var pages = new List<PagePlan>();
         for (int p = 0; p < project.Pages.Count; p++)
@@ -210,9 +330,24 @@ public static class Arrangement
             {
                 if (y1 <= y0) return;
                 var last = pieces.LastOrDefault();
-                if (last != null && !last.IsUnit && last.Y1 == y0) { last.Y1 = y1; dst += y1 - y0; return; }
+                if (last != null && last.IsCopy && last.Y1 == y0) { last.Y1 = y1; dst += y1 - y0; return; }
                 pieces.Add(new Piece { Y0 = y0, Y1 = y1, Dst = dst });
                 dst += y1 - y0;
+            }
+            if (page.EndLots)
+            {
+                // Page « lots de fin » : marge du haut (papier), lots 0 en rangées du tableau modèle, filet du bas, papier.
+                if (template is null) { pages.Add(new PagePlan(Math.Max(1, page.Height), [new Piece { Paper = true, Dst = 0, H = Math.Max(1, page.Height) }], -1)); continue; }
+                var T = template.Table;
+                int top = CutY(T.RowYs[0]), bottom = CutY(T.RowYs[^1]);
+                pieces.Add(new Piece { Paper = true, Dst = 0, H = top });
+                dst = top;
+                foreach (var u in moving.Where(u => u.EndPage == p)) { pieces.Add(new Piece { Unit = u, Dst = dst, H = u.Height }); dst += u.Height; }
+                Copy(bottom, bottom + Filet);
+                int H = Math.Max(template.Page.Height, dst);
+                if (H > dst) { pieces.Add(new Piece { Paper = true, Dst = dst, H = H - dst }); dst = H; }
+                pages.Add(new PagePlan(dst, pieces, template.P));
+                continue;
             }
             int cursor = 0;
             var tables = page.Tables.Select((t, ti) => (T: t, Ti: ti)).Where(x => GridTable(x.T)).OrderBy(x => x.T.RowYs[0]).ToList();
@@ -226,11 +361,11 @@ public static class Arrangement
                 {
                     if (r >= n) continue;
                     int s0 = Math.Max(A, CutY(t.RowYs[r])), s1 = Math.Min(B, CutY(t.RowYs[r + 1]));
-                    var cuts = moving.Where(u => u.P == p && u.Ti == ti && u.R == r).OrderBy(u => u.Top).ToList();
+                    var cuts = cutting.Where(u => u.P == p && u.Ti == ti && u.R == r).OrderBy(u => u.Top).ToList();
                     int y = s0;
                     foreach (var u in cuts) { Copy(y, Math.Max(y, u.Top)); y = Math.Max(y, u.Bottom); }
                     Copy(y, s1);
-                    if (dest != null && dest.P == p && dest.Ti == ti && dest.R == r)
+                    if (dest != null && template is null && dest.P == p && dest.Ti == ti && dest.R == r)
                         foreach (var u in moving) { pieces.Add(new Piece { Unit = u, Dst = dst, H = u.Height }); dst += u.Height; }
                 }
                 cursor = B;
@@ -238,14 +373,14 @@ public static class Arrangement
             Copy(cursor, page.Height);
             pages.Add(new PagePlan(Math.Max(1, dst), pieces));
         }
-        // Valeurs d'un titre parties avec son objet : effacées de leur place.
-        var erase = moving.Where(u => u.Title != null).SelectMany(u =>
+        // Valeurs d'un titre parties avec son objet (ou supprimées avec lui) : effacées de leur place.
+        var erase = cutting.Where(u => u.Title != null).SelectMany(u =>
             u.Title!.Cells.Where(c => c.Column > 0 && !Blank(c.Text)).Select(c =>
             {
                 var (x0, y0, x1, y1) = CellRect(u.Table, c);
                 return new Erase(u.P, x0, y0, x1, y1);
             })).ToList();
-        return new Plan(pages, moving, dest, erase);
+        return new Plan(pages, cutting, moving, dest, erase, endNeeded);
     }
 
     /// <summary>Partie d'une case (zone d'édition) à l'intérieur de sa colonne, en pixels entiers.</summary>
@@ -260,8 +395,8 @@ public static class Arrangement
     /// <summary>Ordonnée sur la page affichée d'une ordonnée de la page d'origine (null si ce morceau est parti ailleurs).</summary>
     public static int? MapY(PagePlan plan, int y)
     {
-        foreach (var pc in plan.Pieces) if (!pc.IsUnit && y >= pc.Y0 && y < pc.Y1) return pc.Dst + y - pc.Y0;
-        var last = plan.Pieces.LastOrDefault(pc => !pc.IsUnit);
+        foreach (var pc in plan.Pieces) if (pc.IsCopy && y >= pc.Y0 && y < pc.Y1) return pc.Dst + y - pc.Y0;
+        var last = plan.Pieces.LastOrDefault(pc => pc.IsCopy);
         if (last != null && y >= last.Y1) return last.Dst + (last.Y1 - last.Y0) + (y - last.Y1);
         return null;
     }
@@ -271,8 +406,8 @@ public static class Arrangement
     {
         foreach (var pc in plan.Pieces)
         {
-            int h = pc.IsUnit ? pc.H : pc.Y1 - pc.Y0;
-            if (y >= pc.Dst && y < pc.Dst + h) return pc.IsUnit ? null : pc.Y0 + y - pc.Dst;
+            int h = pc.IsCopy ? pc.Y1 - pc.Y0 : pc.H;
+            if (y >= pc.Dst && y < pc.Dst + h) return pc.IsCopy ? pc.Y0 + y - pc.Dst : null;
         }
         return y;
     }
@@ -281,13 +416,13 @@ public static class Arrangement
     public static bool PageArranged(InventoryProject project, Plan plan, int k)
     {
         var pp = plan.Pages[k];
-        return pp.Pieces.Count != 1 || pp.Pieces[0].IsUnit || pp.Pieces[0].Y0 != 0 || pp.Height != project.Pages[k].Height
+        return pp.Pieces.Count != 1 || !pp.Pieces[0].IsCopy || pp.Pieces[0].Y0 != 0 || pp.Height != project.Pages[k].Height
                || plan.Erase.Any(e => e.P == k);
     }
 
-    /// <summary>Pages dont l'image est nécessaire pour composer la page k (elle-même et celles des lots 0 recollés).</summary>
+    /// <summary>Pages dont l'image est nécessaire pour composer la page k (elle-même ou son modèle, et celles des lots 0 recollés).</summary>
     public static List<int> SourcesOf(Plan plan, int k) =>
-        new[] { k }.Concat(plan.Pages[k].Pieces.Where(pc => pc.IsUnit).Select(pc => pc.Unit!.P)).Distinct().ToList();
+        new[] { plan.Pages[k].Template ?? k }.Concat(plan.Pages[k].Pieces.Where(pc => pc.IsUnit).Select(pc => pc.Unit!.P)).Distinct().ToList();
 
     // ---------- Placement des cases sur la page affichée ----------
 
@@ -368,7 +503,7 @@ public static class Arrangement
                 if (lots && Lots.HasCell(line))
                 {
                     var b = Shift(Lots.NumberBox(u.Table, line, u.SrcLotWidth > 0 ? u.SrcLotWidth : w), 0, dy);
-                    double right = Lots.TableLeft(dt), left = Math.Max(0, right - w);
+                    double right = Lots.TableLeft(dt), left = Math.Max(0, right - (u.DstLotWidth > 0 ? u.DstLotWidth : w));
                     lotBox = new RectD(left + 2, b.Y, Math.Max(4, right - left - 4), b.Height);
                 }
                 lines.Add(new ViewLine
@@ -496,9 +631,15 @@ public static class Arrangement
         int w = image.Width, ch = image.Channels, stride = w * ch;
         var output = new Raster(w, pp.Height, ch, new byte[w * pp.Height * ch]);
         var white = Enumerable.Repeat((byte)255, ch).ToArray();
+        var paper = PaperRow(image, Math.Min(image.Height - 1, 2));
         foreach (var pc in pp.Pieces)
         {
-            if (!pc.IsUnit)
+            if (pc.Paper)
+            {
+                for (int y = pc.Dst; y < Math.Min(output.Height, pc.Dst + pc.H); y++) for (int x = 0; x < w; x++) Paint(output, x, y, paper);
+                continue;
+            }
+            if (pc.IsCopy)
             {
                 int a = Math.Clamp(pc.Y0, 0, image.Height), b = Math.Clamp(pc.Y1, a, image.Height);
                 Array.Copy(image.Data, a * stride, output.Data, pc.Dst * stride, (b - a) * stride);
@@ -509,12 +650,12 @@ public static class Arrangement
         // Valeurs de titre parties avec leur objet : papier à la place.
         foreach (var e in plan.Erase.Where(e => e.P == k))
         {
-            var paper = PaperAround(image, e);
+            var around = PaperAround(image, e);
             for (int y = e.Y0; y < e.Y1; y++)
             {
                 int? my = MapY(pp, y);
                 if (my is null || my < 0 || my >= output.Height) continue;
-                for (int x = Math.Max(0, e.X0); x < Math.Min(w, e.X1); x++) Paint(output, x, my.Value, paper);
+                for (int x = Math.Max(0, e.X0); x < Math.Min(w, e.X1); x++) Paint(output, x, my.Value, around);
             }
         }
         return output;

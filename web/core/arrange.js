@@ -15,23 +15,23 @@ export const FILET = 5;  // hauteur réservée au filet du haut
 export const MARGIN = 3; // marge entre un filet vertical et le contenu recopié d'une case
 
 const R = (v) => Math.floor(v + 0.5);
-const cutY = (y) => R(y) - CUT;
+export const cutY = (y) => R(y) - CUT;
 const blank = (s) => (s ?? '').trim().length === 0;
 const hasValues = (l) => l.Cells.slice(1).some((c) => !blank(c.Text));
 const gridTable = (t) => t.HasGrid !== false && t.RowYs?.length >= 2 && t.ColumnXs?.length >= 2;
 
 /** Haut et bas de l'écriture d'une ligne (bande ajoutée comprise). */
-function lineTop(l) {
+export function lineTop(l) {
   const ink = l.Cells.filter((c) => !Rect.isEmpty(c.Ink));
   return ink.length ? Math.min(...ink.map((c) => c.Ink.Y)) : Math.min(...l.Cells.map((c) => baseBox(l, c).Y));
 }
-function lineBottom(l) {
+export function lineBottom(l) {
   const ink = l.Cells.filter((c) => !Rect.isEmpty(c.Ink));
   let b = ink.length ? Math.max(...ink.map((c) => Rect.bottom(c.Ink))) : Math.max(...l.Cells.map((c) => Rect.bottom(baseBox(l, c))));
   if ((l.Extra ?? 0) > 0) b = Math.max(b, l.ExtraAt + l.Extra);
   return b;
 }
-const gapMid = (a, b) => Math.floor((lineBottom(a) + lineTop(b)) / 2);
+export const gapMid = (a, b) => Math.floor((lineBottom(a) + lineTop(b)) / 2);
 
 /** Titre de la rangée dont les valeurs descendent sur `target` (comme dans le .txt). */
 function carriedTitle(lines, target) {
@@ -46,30 +46,42 @@ function carriedTitle(lines, target) {
   return null;
 }
 
-/** Objets au lot 0 à déplacer, dans l'ordre du document. */
-function zeroUnits(project) {
+const ITEM_START = /^\s*(\+\/-\s*)?\d{1,3}\s+\p{L}/u;
+
+/**
+ * Lignes qui quittent leur place, dans l'ordre du document :
+ *  - kind 'zero' : objet au lot 0 (avec ses lignes de suite) — recollé après le dernier lot ou sur la page « lots de fin » ;
+ *  - kind 'deleted' : ligne supprimée (« Supprimer cette ligne », avec ses lignes de suite) — retirée, la suite remonte.
+ */
+function movedUnits(project) {
   const units = [];
-  if (!lotsActive(project)) return units;
+  const lots = lotsActive(project);
   project.Pages.forEach((page, p) => page.Tables.forEach((table, ti) => {
     if (!gridTable(table)) return;
     for (const r of rowOrder(table)) {
       if (r + 1 >= table.RowYs.length) continue;
       const row = table.Rows[r];
-      const lines = row.Lines.filter((l) => l.Kind !== 'Ignoree' && l.Cells.some((c) => !blank(c.Text)));
+      const lines = row.Lines.filter((l) => l.Kind !== 'Ignoree' && (l.Cells.some((c) => !blank(c.Text)) || l.Deleted));
       const found = [];
       lines.forEach((l, i) => {
-        if (!hasLotCell(l) || !isZeroLot(l)) return;
+        const deleted = !!l.Deleted;
+        if (!deleted && !(lots && hasLotCell(l) && isZeroLot(l))) return;
+        if (found.some((u) => u.lines.includes(l))) return;
         const own = [l];
-        for (let j = i + 1; j < lines.length && lines[j].Kind !== 'Titre' && !hasLotCell(lines[j]); j++) own.push(lines[j]);
-        found.push({ object: l, lines: own, title: hasValues(l) ? null : carriedTitle(lines, l) });
+        for (let j = i + 1; j < lines.length && lines[j].Kind !== 'Titre' && !hasLotCell(lines[j]) && !lines[j].Deleted; j++) {
+          // Ligne supprimée : sa suite (texte sans montant), pas un autre objet (« 1 coffre fort… »).
+          if (deleted && (hasValues(lines[j]) || ITEM_START.test(lines[j].Cells[0]?.Text ?? ''))) break;
+          own.push(lines[j]);
+        }
+        found.push({ kind: deleted ? 'deleted' : 'zero', object: l, lines: own, title: hasValues(l) ? null : carriedTitle(lines, l) });
       });
       if (found.length === 0) continue;
       const covered = new Set(found.flatMap((u) => u.lines));
-      const whole = lines.every((l) => covered.has(l)) && found.every((u) => !u.title);
+      const whole = lines.every((l) => covered.has(l)) && found.every((u) => !u.title) && found.every((u) => u.kind === found[0].kind);
       const base = { p, page, ti, table, r };
       if (whole) {
         const top = cutY(table.RowYs[r]);
-        units.push({ ...base, object: found[0].object, lines: row.Lines.slice(), title: null, whole: true, top, bodyTop: top + FILET, bottom: cutY(table.RowYs[r + 1]) });
+        units.push({ ...base, kind: found[0].kind, object: found[0].object, lines: row.Lines.slice(), title: null, whole: true, top, bodyTop: top + FILET, bottom: cutY(table.RowYs[r + 1]) });
         continue;
       }
       for (const u of found) {
@@ -82,6 +94,27 @@ function zeroUnits(project) {
     }
   }));
   return units;
+}
+
+/** Lignes supprimées (et leur suite) : hors du .txt, des totaux et des lots. */
+export const deletedLines = (project) => new Set(movedUnits(project).filter((u) => u.kind === 'deleted').flatMap((u) => u.lines));
+
+/** Page qui sert de modèle aux pages « lots de fin » : la dernière page à lots avant elles (sinon celle du dernier lot). */
+function endTemplate(project) {
+  const first = project.Pages.findIndex((pg) => pg.EndLots);
+  const objects = [...objectLines(project)];
+  let best = null;
+  for (const o of objects) {
+    const p = project.Pages.indexOf(o.page);
+    if (!gridTable(o.table) || (first >= 0 && p > first)) continue;
+    best = o;
+  }
+  best ??= objects.filter((o) => gridTable(o.table)).pop() ?? null;
+  if (!best) return null;
+  const p = project.Pages.indexOf(best.page);
+  // Rangée de référence (filet, fond, filets verticaux) : la 1re rangée d'objet du tableau.
+  const r = objects.find((o) => o.table === best.table)?.row ?? best.row;
+  return { p, ti: best.page.Tables.indexOf(best.table), r, table: best.table, page: best.page };
 }
 
 /** Rangée du dernier objet numéroté (pas au lot 0) : c'est là que les lots 0 sont recollés. */
@@ -104,22 +137,51 @@ function columnShift(src, dst, c, align) {
 
 /**
  * Plan de toutes les pages : morceaux recopiés (dans l'ordre) et rangées des lots 0.
- * Chaque page : { height, pieces: [{ kind: 'copy', y0, y1, dst } | { kind: 'unit', unit, dst, h }] }.
+ * Chaque page : { height, pieces: [{ kind: 'copy', y0, y1, dst } | { kind: 'unit', unit, dst, h } | { kind: 'paper', dst, h }] }.
+ * Pages « lots de fin » (Page.EndLots) : composées depuis la page modèle (template) : marge, lots 0, filet du bas.
+ * endNeeded : nombre de pages « lots de fin » nécessaires (mode page dédiée).
  */
 export function planArrangement(project) {
-  const units = zeroUnits(project);
-  const dest = units.length ? destination(project) : null;
-  const moving = dest ? units : [];
+  const all = movedUnits(project);
+  const zeros = all.filter((u) => u.kind === 'zero'), deleted = all.filter((u) => u.kind === 'deleted');
+  const endMode = project.EndLots?.Mode === 'page';
+  const template = endMode && zeros.length ? endTemplate(project) : null;
+  const endIdx = project.Pages.map((pg, k) => (pg.EndLots ? k : -1)).filter((k) => k >= 0);
+  let dest = null, endNeeded = 0;
+  const groups = [];
+  let moving = [];
   const lots = lotsActive(project);
-  for (const u of moving) {
+  const prepare = (u, d) => {
     const align = (c) => u.object.Cells[c]?.Align ?? (c === 0 ? 'Left' : 'Right');
-    u.dest = dest;
-    u.shift = u.table.ColumnXs.slice(0, -1).map((_, c) => columnShift(u.table, dest.table, c, align(c)));
-    u.lotShift = R(tableLeft(dest.table)) - R(tableLeft(u.table));
+    u.dest = d;
+    u.shift = u.table.ColumnXs.slice(0, -1).map((_, c) => columnShift(u.table, d.table, c, align(c)));
+    u.lotShift = R(tableLeft(d.table)) - R(tableLeft(u.table));
     u.srcLotWidth = lots ? R(columnWidth(u.page)) : 0;
-    u.dstLotWidth = lots ? R(columnWidth(dest.page)) : 0;
+    u.dstLotWidth = lots ? R(columnWidth(d.page)) : 0;
     u.height = FILET + (u.bottom - u.bodyTop);
+  };
+  if (template) {
+    // Pages dédiées : les lots 0 à la suite, une nouvelle page quand la hauteur du tableau modèle est atteinte.
+    const T = template.table, avail = cutY(T.RowYs[T.RowYs.length - 1]) - cutY(T.RowYs[0]);
+    let used = 0;
+    for (const u of zeros) {
+      const h = FILET + (u.bottom - u.bodyTop);
+      if (groups.length === 0 || (used + h > avail && used > 0)) { groups.push([]); used = 0; }
+      groups[groups.length - 1].push(u);
+      used += h;
+    }
+    endNeeded = groups.length;
+    groups.forEach((g, i) => {
+      if (i >= endIdx.length) return; // page pas encore créée : ces lots restent à leur place
+      const d = { ...template, p: endIdx[i], ti: -1, r: -1, template };
+      for (const u of g) { prepare(u, { ...template, p: endIdx[i] }); u.endPage = endIdx[i]; moving.push(u); }
+      if (i === 0) dest = d;
+    });
+  } else if (zeros.length) {
+    dest = destination(project);
+    if (dest) { moving = zeros; for (const u of moving) prepare(u, dest); }
   }
+  const cutting = [...moving, ...deleted];
   const pages = project.Pages.map((page, p) => {
     const pieces = [];
     let dst = 0;
@@ -130,6 +192,20 @@ export function planArrangement(project) {
       pieces.push({ kind: 'copy', y0, y1, dst });
       dst += y1 - y0;
     };
+    if (page.EndLots) {
+      // Page « lots de fin » : marge du haut (papier), lots 0 en rangées du tableau modèle, filet du bas, papier.
+      const T = template?.table;
+      const mine = moving.filter((u) => u.endPage === p);
+      if (!T) return { height: Math.max(1, page.Height), pieces: [{ kind: 'paper', dst: 0, h: Math.max(1, page.Height) }], template: -1 };
+      const top = cutY(T.RowYs[0]), bottom = cutY(T.RowYs[T.RowYs.length - 1]);
+      pieces.push({ kind: 'paper', dst: 0, h: top });
+      dst = top;
+      for (const u of mine) { pieces.push({ kind: 'unit', unit: u, dst, h: u.height }); dst += u.height; }
+      copy(bottom, bottom + FILET);
+      const H = Math.max(template.page.Height, dst);
+      if (H > dst) { pieces.push({ kind: 'paper', dst, h: H - dst }); dst = H; }
+      return { height: dst, pieces, template: template.p };
+    }
     let cursor = 0;
     const tables = page.Tables.map((t, ti) => ({ t, ti })).filter((x) => gridTable(x.t)).sort((a, b) => a.t.RowYs[0] - b.t.RowYs[0]);
     for (const { t, ti } of tables) {
@@ -140,11 +216,11 @@ export function planArrangement(project) {
       for (const r of rowOrder(t)) {
         if (r >= n) continue;
         const s0 = Math.max(A, cutY(t.RowYs[r])), s1 = Math.min(B, cutY(t.RowYs[r + 1]));
-        const cuts = moving.filter((u) => u.p === p && u.ti === ti && u.r === r).sort((a, b) => a.top - b.top);
+        const cuts = cutting.filter((u) => u.p === p && u.ti === ti && u.r === r).sort((a, b) => a.top - b.top);
         let y = s0;
         for (const u of cuts) { copy(y, Math.max(y, u.top)); y = Math.max(y, u.bottom); }
         copy(y, s1);
-        if (dest && dest.p === p && dest.ti === ti && dest.r === r)
+        if (dest && !template && dest.p === p && dest.ti === ti && dest.r === r)
           for (const u of moving) { pieces.push({ kind: 'unit', unit: u, dst, h: u.height }); dst += u.height; }
       }
       cursor = B;
@@ -152,10 +228,10 @@ export function planArrangement(project) {
     copy(cursor, page.Height);
     return { height: Math.max(1, dst), pieces };
   });
-  // Valeurs d'un titre parties avec son objet : effacées de leur place.
-  const erase = moving.filter((u) => u.title).flatMap((u) =>
+  // Valeurs d'un titre parties avec son objet (ou supprimées avec lui) : effacées de leur place.
+  const erase = cutting.filter((u) => u.title).flatMap((u) =>
     u.title.Cells.filter((c) => c.Column > 0 && !blank(c.Text)).map((c) => ({ p: u.p, rect: cellRect(u.table, c) })));
-  return { pages, units: moving, dest, erase };
+  return { pages, units: cutting, moving, dest, erase, endNeeded };
 }
 
 /** Partie d'une case (zone d'édition) à l'intérieur de sa colonne, en pixels entiers. */
@@ -224,7 +300,7 @@ export function viewOf(project, plan, k) {
       let lotBox = null;
       if (lots && hasLotCell(line)) {
         const b = shiftRect(numberBox(u.table, line, u.srcLotWidth || w), 0, dy);
-        const right = tableLeft(dt), left = Math.max(0, right - w);
+        const right = tableLeft(dt), left = Math.max(0, right - (u.dstLotWidth || w));
         lotBox = Rect.make(left + 2, b.Y, Math.max(4, right - left - 4), b.Height);
       }
       out.lines.push({ line, page: u.page, table: u.table, cells, dy, moved: true, unit: u, lotBox });
@@ -283,8 +359,46 @@ export function pageArranged(project, plan, k) {
     || plan.erase.some((e) => e.p === k);
 }
 
-/** Pages dont l'image est nécessaire pour composer la page k (elle-même et celles des lots 0 recollés). */
-export const sourcesOf = (plan, k) => [...new Set([k, ...plan.pages[k].pieces.filter((pc) => pc.kind === 'unit').map((pc) => pc.unit.p)])];
+/** Pages dont l'image est nécessaire pour composer la page k (elle-même ou son modèle, et celles des lots 0 recollés). */
+export const sourcesOf = (plan, k) => [...new Set([plan.pages[k].template ?? k, ...plan.pages[k].pieces.filter((pc) => pc.kind === 'unit').map((pc) => pc.unit.p)])];
+
+// ---------- Pages « lots de fin » ----------
+
+let endCounter = 0;
+/**
+ * Mode page dédiée : crée ou retire les pages « lots de fin » pour qu'il y en ait juste assez (une de plus quand la
+ * précédente est pleine, aucune s'il n'y a plus de lot 0). La 1re est placée après la page choisie (EndLots.AfterId).
+ * Renvoie vrai si des pages ont été ajoutées ou retirées.
+ */
+export function syncEndPages(project) {
+  let changed = false;
+  for (let guard = 0; guard < 50; guard++) {
+    const plan = planArrangement(project);
+    const ends = project.Pages.filter((pg) => pg.EndLots);
+    const need = project.EndLots?.Mode === 'page' ? plan.endNeeded : 0;
+    if (ends.length === need) {
+      // Même taille que la page modèle.
+      const t = endTemplate(project);
+      if (t) for (const pg of ends) if (pg.Width !== t.page.Width || pg.Height !== t.page.Height) { pg.Width = t.page.Width; pg.Height = t.page.Height; changed = true; }
+      return changed;
+    }
+    changed = true;
+    if (ends.length > need) { project.Pages.splice(project.Pages.lastIndexOf(ends[ends.length - 1]), 1); continue; }
+    const tpl = ends.length ? ends[0] : null;
+    let at;
+    if (ends.length) at = project.Pages.indexOf(ends[ends.length - 1]) + 1;
+    else {
+      const after = project.Pages.findIndex((pg) => pg.Id === project.EndLots.AfterId);
+      at = after >= 0 ? after + 1 : project.Pages.length;
+    }
+    const model = tpl ?? project.Pages.find((pg) => !pg.EndLots && pg.Tables.length) ?? project.Pages[0];
+    project.Pages.splice(at, 0, {
+      Id: `fin-${Date.now().toString(36)}-${endCounter++}`, EndLots: true, Source: 'Image', SourceName: 'Lots de fin', SourceEntry: null,
+      Width: model?.Width ?? 1000, Height: model?.Height ?? 1400, QuarterTurns: 0, Crop: null, Skew: 0, Tables: [], LooseLines: [], LockZones: [],
+    });
+  }
+  return changed;
+}
 
 /** Morceau d'image utile d'un lot 0 (de quoi recomposer sa rangée), pris sur l'image de sa page. */
 export function unitCrop(unit, image) {
@@ -350,7 +464,12 @@ export function composePage(project, plan, k, image, crops) {
   const w = image.w, ch = image.ch;
   const out = { w, h: pp.height, ch, data: new Uint8ClampedArray(w * pp.height * ch) };
   const stride = w * ch;
+  const paper = paperRow(image, Math.min(image.h - 1, 2));
   for (const pc of pp.pieces) {
+    if (pc.kind === 'paper') {
+      for (let y = pc.dst; y < Math.min(out.h, pc.dst + pc.h); y++) for (let x = 0; x < w; x++) paint(out, x, y, paper);
+      continue;
+    }
     if (pc.kind === 'copy') {
       const a = Math.min(Math.max(pc.y0, 0), image.h), b = Math.min(Math.max(pc.y1, a), image.h);
       out.data.set(image.data.subarray(a * stride, b * stride), pc.dst * stride);
