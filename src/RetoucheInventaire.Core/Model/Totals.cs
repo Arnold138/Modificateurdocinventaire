@@ -111,9 +111,11 @@ public static partial class Totals
         var changed = new List<Field>();
         static IEnumerable<Field> Cols(PrintedLine l) => l.Cells.Where(c => c.Column > 0);
         static Field? CellOf(PrintedLine l, int c) => l.Cells.FirstOrDefault(x => x.Column == c);
+        // Ligne dupliquée (rangée ajoutée) : ses montants ne sont pas dans le total imprimé, ils comptent en entier.
+        var copied = lines.Where(l => l.Copy).SelectMany(l => l.Cells).ToHashSet();
         long Delta(Field f)
         {
-            long o = ParseAmount(f.OriginalText) ?? 0;
+            long o = copied.Contains(f) ? 0 : ParseAmount(f.OriginalText) ?? 0;
             if (removed.Contains(f)) return -o;
             return (ParseAmount(f.Text) ?? 0) - o;
         }

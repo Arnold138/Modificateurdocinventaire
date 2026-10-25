@@ -15,23 +15,23 @@ export const FILET = 5;  // hauteur réservée au filet du haut
 export const MARGIN = 3; // marge entre un filet vertical et le contenu recopié d'une case
 
 const R = (v) => Math.floor(v + 0.5);
-const cutY = (y) => R(y) - CUT;
+export const cutY = (y) => R(y) - CUT;
 const blank = (s) => (s ?? '').trim().length === 0;
 const hasValues = (l) => l.Cells.slice(1).some((c) => !blank(c.Text));
 const gridTable = (t) => t.HasGrid !== false && t.RowYs?.length >= 2 && t.ColumnXs?.length >= 2;
 
 /** Haut et bas de l'écriture d'une ligne (bande ajoutée comprise). */
-function lineTop(l) {
+export function lineTop(l) {
   const ink = l.Cells.filter((c) => !Rect.isEmpty(c.Ink));
   return ink.length ? Math.min(...ink.map((c) => c.Ink.Y)) : Math.min(...l.Cells.map((c) => baseBox(l, c).Y));
 }
-function lineBottom(l) {
+export function lineBottom(l) {
   const ink = l.Cells.filter((c) => !Rect.isEmpty(c.Ink));
   let b = ink.length ? Math.max(...ink.map((c) => Rect.bottom(c.Ink))) : Math.max(...l.Cells.map((c) => Rect.bottom(baseBox(l, c))));
   if ((l.Extra ?? 0) > 0) b = Math.max(b, l.ExtraAt + l.Extra);
   return b;
 }
-const gapMid = (a, b) => Math.floor((lineBottom(a) + lineTop(b)) / 2);
+export const gapMid = (a, b) => Math.floor((lineBottom(a) + lineTop(b)) / 2);
 
 /** Titre de la rangée dont les valeurs descendent sur `target` (comme dans le .txt). */
 function carriedTitle(lines, target) {

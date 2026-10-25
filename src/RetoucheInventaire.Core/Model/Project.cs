@@ -91,6 +91,12 @@ public sealed class PrintedLine
     /// <summary>Ordonnée (page agrandie) où la bande ajoutée commence : un interligne propre sous le texte d'origine.</summary>
     public int ExtraAt { get; set; }
 
+    /// <summary>
+    /// Ligne dupliquée (« Dupliquer la ligne ») : ses montants ne sont pas dans le total imprimé, ils y sont ajoutés en entier.
+    /// Voir <see cref="Rows"/>.
+    /// </summary>
+    public bool Copy { get; set; }
+
     [JsonIgnore] public RectD Bounds => Cells.Aggregate(RectD.Empty, (r, f) => r.Union(f.Box));
     [JsonIgnore] public string FirstText => Cells.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c.Text))?.Text.Trim() ?? "";
 }
@@ -100,6 +106,39 @@ public sealed class Row
 {
     public RectD Bounds { get; set; }
     public List<PrintedLine> Lines { get; set; } = [];
+    /// <summary>Rangée ajoutée par l'utilisateur : identifiant de sa bande (<see cref="Page.Inserts"/>), null pour une rangée imprimée.</summary>
+    public string? Inserted { get; set; }
+}
+
+/// <summary>
+/// Morceau d'une bande insérée : rangées de pixels recopiées de l'image d'origine (page redressée) ou, avec <see cref="Gap"/>,
+/// interligne propre : filets verticaux (entre X0 et X1) de la rangée la plus nette parmi [Src, Src + Span[, papier ailleurs.
+/// </summary>
+public sealed class BandPart
+{
+    public int Src { get; set; }
+    public int Height { get; set; }
+    public bool Gap { get; set; }
+    public int Span { get; set; }
+    /// <summary>Abscisses (arrondies) des filets verticaux du tableau.</summary>
+    public List<int> Cols { get; set; } = [];
+    public int X0 { get; set; }
+    public int X1 { get; set; }
+}
+
+/// <summary>
+/// Bande insérée dans la page pour une rangée ajoutée (<see cref="Rows"/>) : filet du haut et, pour une ligne dupliquée,
+/// les pixels de la ligne recopiés ; tout ce qui est en dessous descend de <see cref="Height"/>.
+/// </summary>
+public sealed class InsertedBand
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N")[..8];
+    /// <summary>« Copy » (ligne dupliquée) ou « Split » (« Séparer ici » : filet seul).</summary>
+    public string Kind { get; set; } = "Copy";
+    /// <summary>Ordonnée (page agrandie) où la bande commence.</summary>
+    public int At { get; set; }
+    public int Height { get; set; }
+    public List<BandPart> Parts { get; set; } = [];
 }
 
 public sealed class Table
@@ -135,6 +174,8 @@ public sealed class Page
     public List<Table> Tables { get; set; } = [];
     public List<PrintedLine> LooseLines { get; set; } = [];
     public List<RectD> LockZones { get; set; } = [];
+    /// <summary>Bandes insérées (rangées ajoutées), voir <see cref="Rows"/>.</summary>
+    public List<InsertedBand> Inserts { get; set; } = [];
 
     public IEnumerable<PrintedLine> AllLines() =>
         Tables.SelectMany(t => t.Rows).SelectMany(r => r.Lines).Concat(LooseLines);

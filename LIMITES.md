@@ -51,6 +51,18 @@
 - **Retour en arrière** : 30 actions, pendant la session (pas après avoir fermé l'app). Le texte tapé dans une case compte pour une seule action jusqu'à ce qu'on change de case.
 - **Orthographe** : correcteur de l'appareil (iPhone/iPad, Windows), en français si le clavier est en français. Il n'est actif que dans la désignation.
 
+## Lignes ajoutées (Dupliquer, Séparer ici)
+
+- **Dupliquer** ajoute la copie **sous toute la rangée** de la ligne : si la rangée imprimée contient plusieurs lignes, la copie vient après la dernière. Seule la ligne touchée est copiée (pas ses lignes de suite).
+- La copie reprend les **pixels** de la ligne (de l'interligne au-dessus à celui d'en dessous) : si la lecture avait mal découpé deux lignes collées, un bout de la ligne voisine peut apparaître en haut ou en bas de la copie. Retaper la case le masque.
+- La **case de lot** de la copie est vide : la remplir à la main ou « Synchroniser » (les autres numéros ne changent pas tout seuls).
+- Les **montants de la copie s'ajoutent** aux totaux (ils n'étaient pas dans le total imprimé) : en partageant un objet en deux (« 2 doseuses » → 1 + 1), corriger aussi le prix de l'original.
+- **Séparer ici** trace le filet au milieu de l'interligne au-dessus de la ligne, recopié du filet du haut de la rangée ; impossible sur la 1re ligne d'une rangée (rien à séparer).
+- Le .txt garde une ligne par ligne : séparer ne change rien au .txt (sauf les numéros de lot) ; un titre avec valeurs séparé de son article garde ses valeurs sur sa propre ligne.
+- Tableaux sans filets : ni copie ni séparation (il n'y a pas de rangées à tracer).
+- **Recadrer** une page relit le texte : ses lignes ajoutées sont perdues (comme les agrandissements).
+- Une page avec des lignes ajoutées est exportée **redressée** (comme une page agrandie).
+
 ## Texte sur plusieurs lignes
 
 - Seule la **désignation** (1re colonne) passe à la ligne ; une valeur trop longue est encore réduite pour tenir sur une ligne.

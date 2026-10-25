@@ -16,6 +16,7 @@ import { toggleStrike, isStruck, setColor, RED, BLACK, TEXT_COLORS } from './cor
 import { planArrangement, viewOf, composePage, unitCrop, pageArranged, mapY, unmapY } from './core/arrange.js';
 import { recomputeTotals, isComputedCell, computedValue } from './core/totals.js';
 import { frameSignature, lotFrameEnabled } from './core/lotcolumn.js';
+import { canCopyLine, canSplit, addedRowOf, copyLine, splitAt, splitTypedText, removeAddedRow } from './core/rows.js';
 import { decodeImage, pdfPages, isImageName, mimeOf } from './services/decode.js';
 import { recognize, warmUp } from './services/ocr.js';
 import { rasterToCanvas, canvasToBlob, renderEdits, freeCanvas, lineExtra, pageRaster } from './services/canvas.js';
@@ -101,6 +102,7 @@ function updateEditBar() {
   $('kindLabel').textContent = kindLabel(hit.line.Kind);
   $('btnRevert').disabled = state.busy || !isModified(f);
   $('btnKind').disabled = state.busy;
+  $('btnLine').disabled = state.busy;
   const computed = isComputedCell(hit.line, f);
   $('btnRecalc').hidden = !computed || !f.Manual;
   const t = firstText(hit.line);
@@ -366,6 +368,7 @@ async function showPage(n, { flat = null, fit = true, keepScroll = false } = {})
       status('Case de lot ajoutée : tapez le numéro.');
       scheduleSave();
     },
+    onLineMenu: (v, f, at) => { if (!state.busy) lineMenu(f, at); },
     onMoveRow: (v, table, from, before) => {
       pushUndo();
       const order = rowOrder(table).filter((r) => r !== from);
@@ -403,6 +406,113 @@ async function redraw(view = state.view) {
   const display = await displayOf(k);
   if (state.view !== view) return;
   view.relayout(viewOf(state.project, state.plan, k), display);
+}
+
+// ---------- Lignes ajoutées : menu « Ligne » (bouton, clic droit, appui long) ----------
+
+const short = (t) => (t.length > 40 ? t.slice(0, 40) + '…' : t);
+
+/** Ligne de texte (dans la désignation tapée sur plusieurs lignes) où se trouve le curseur. */
+function caretLine(view, f) {
+  if (f.Column !== 0 || !f.Text.includes('\n')) return 0;
+  const sel = view?.selectionFor(f) ?? { start: 0 };
+  return f.Text.slice(0, sel.start).split('\n').length - 1;
+}
+
+/** Ce que le menu propose pour la case touchée. */
+function lineChoices(f) {
+  const hit = f ? findLine(state.project, f) : null;
+  if (!hit) return null;
+  const { page, line } = hit;
+  const items = [];
+  const typed = caretLine(state.view, f);
+  const typedRest = typed > 0 ? f.Text.replace(/\r\n?/g, '\n').split('\n').slice(typed).join(' ').trim() : '';
+  if (canCopyLine(page, line))
+    items.push({ act: 'copy', icon: 'i-copy', label: 'Dupliquer la ligne', hint: 'Copie juste en dessous (texte et prix), à corriger. La suite descend.' });
+  if (typedRest && canCopyLine(page, line))
+    items.push({ act: 'typed', from: typed, icon: 'i-split', label: 'Séparer ici', hint: `« ${short(typedRest)} » passe dans sa propre ligne, juste en dessous.` });
+  else if (canSplit(page, line))
+    items.push({ act: 'split', icon: 'i-split', label: 'Séparer ici', hint: 'Cette ligne devient une rangée à part, avec sa case de lot et ses prix.' });
+  const added = addedRowOf(page, line);
+  if (added?.band.Kind === 'Split' && added.row.Lines[0] === line)
+    items.push({ act: 'merge', icon: 'i-merge', label: 'Remettre dans la rangée du dessus', hint: 'Annule « Séparer ici » : le trait ajouté disparaît.' });
+  if (added?.band.Kind === 'Copy')
+    items.push({ act: 'remove', icon: 'i-trash', label: 'Supprimer cette ligne ajoutée', hint: 'La ligne copiée disparaît, la suite remonte.', danger: true });
+  return { page, line, items };
+}
+
+const hideLineMenu = () => { $('lineMenu').hidden = true; };
+
+/** Affiche le menu « Ligne » près du doigt / de la souris, ou sous le bouton. */
+function lineMenu(f, at = null) {
+  hidePalette();
+  const c = lineChoices(f);
+  if (!c) return;
+  state.field = f;
+  updateEditBar();
+  const menu = $('lineMenu');
+  const t = firstText(c.line);
+  menu.innerHTML = `<div class="title">Ligne « ${escapeHtml(short(t || '(vide)'))} »</div>` + (c.items.length
+    ? c.items.map((it, i) => `<button role="menuitem" data-i="${i}" class="${it.danger ? 'danger' : ''}"><svg><use href="#${it.icon}"/></svg><b>${escapeHtml(it.label)}</b><small>${escapeHtml(it.hint)}</small></button>`).join('')
+    : '<div class="none">Rien à faire ici : choisissez une ligne d\'article du tableau (pas un en-tête, un total ou un texte hors tableau).</div>');
+  for (const b of menu.querySelectorAll('button')) {
+    b.addEventListener('pointerdown', (e) => e.preventDefault()); // garde la case et son curseur
+    b.onclick = () => { hideLineMenu(); run(() => lineAction(c.items[+b.dataset.i], f)); };
+  }
+  menu.hidden = false;
+  const w = menu.offsetWidth, h = menu.offsetHeight;
+  let x, y;
+  if (at) { x = at.x + 4; y = at.y + 4; }
+  else { const r = $('btnLine').getBoundingClientRect(); x = r.left; y = r.bottom + 6; }
+  Object.assign(menu.style, { left: Math.max(8, Math.min(x, innerWidth - w - 8)) + 'px', top: Math.max(8, Math.min(y, innerHeight - h - 8)) + 'px' });
+  menu.querySelector('button')?.focus({ preventScroll: true });
+}
+
+/** Exécute un choix du menu « Ligne » ; une seule action à annuler (↶). */
+async function lineAction(item, f) {
+  const hit = findLine(state.project, f);
+  if (!hit || !item) return;
+  const { page, line } = hit;
+  const name = short(firstText(line));
+  pushUndo();
+  let show = null, msg = '';
+  if (item.act === 'copy') {
+    show = copyLine(page, line);
+    if (show) setExtra(page, show, lineExtra(show));
+    msg = `« ${name} » dupliquée juste en dessous : corrigez la quantité et le prix. Case de lot vide : tapez le numéro ou « Synchroniser ».`;
+  } else if (item.act === 'typed') {
+    show = splitTypedText(page, line, item.from);
+    if (show) { setExtra(page, line, lineExtra(line)); setExtra(page, show, lineExtra(show)); }
+    msg = `« ${short(firstText(show ?? line))} » est maintenant sur sa propre ligne : tapez ses prix et son numéro de lot.`;
+  } else if (item.act === 'split') {
+    show = splitAt(page, line) ? line : null;
+    msg = `« ${name} » est maintenant une rangée à part, avec sa case de lot et ses prix.`;
+  } else if (item.act === 'merge') {
+    removeAddedRow(page, line);
+    msg = `« ${name} » est remise dans la rangée du dessus.`;
+  } else if (item.act === 'remove') {
+    removeAddedRow(page, line);
+    msg = 'Ligne ajoutée supprimée, la suite est remontée.';
+  }
+  if ((item.act === 'copy' || item.act === 'typed' || item.act === 'split') && !show) {
+    state.undo.pop();
+    updateButtons();
+    status('Impossible ici : choisissez une ligne d\'article d\'un tableau.');
+    return;
+  }
+  resyncLots(state.project);
+  replan();
+  recomputeAll();
+  state.editSession = null;
+  await refreshView();
+  if (show && state.view) {
+    state.view.flashLine(show);
+    const target = item.act === 'split' ? f : show.Cells[0];
+    if (state.view.inputs.has(target)) { state.field = target; state.view.focus(target); }
+  }
+  updateEditBar();
+  status(msg + ' ↶ pour annuler.');
+  scheduleSave();
 }
 
 /** « Synchroniser automatiquement » : le logiciel remplit toutes les cases (les numéros tapés restent des repères). */
@@ -875,7 +985,7 @@ async function lotsDialog() {
 async function editDialog() {
   const page = currentPage();
   const choice = await dialog('Modifier', `<p>Le document <b>${escapeHtml(state.project.Name)}</b>${page ? `, page ${state.index + 1} sur ${pages().length}` : ''}.</p>
-    <p class="muted">Pour une case : touchez-la, puis en haut <b>Barrer</b>, <b>Couleur</b>, <b>Type de ligne</b>, <b>Rétablir</b> (et <b>Recalculer</b> pour un total). Sélectionnez quelques mots pour ne barrer ou colorer qu'eux.</p>`, [
+    <p class="muted">Pour une case : touchez-la, puis en haut <b>Ligne</b> (dupliquer la ligne, séparer ici ; aussi au clic droit ou à l'appui long sur la case), <b>Barrer</b>, <b>Couleur</b>, <b>Type de ligne</b>, <b>Rétablir</b> (et <b>Recalculer</b> pour un total). Sélectionnez quelques mots pour ne barrer ou colorer qu'eux.</p>`, [
     { label: 'Renommer le document', value: 'rename', className: 'accent' },
     { label: 'Liste des pages', value: 'pages' },
     ...(lotsActive(state.project) ? [{ label: 'Synchroniser les lots', value: 'sync' }] : []),
@@ -964,8 +1074,17 @@ function initButtons() {
     scheduleSave();
   };
 
+  $('btnLine').onclick = () => {
+    if (!$('lineMenu').hidden) return hideLineMenu();
+    if (state.field && !state.busy) lineMenu(state.field);
+  };
+  document.addEventListener('pointerdown', (e) => { if (!e.target.closest?.('#lineMenu, #btnLine')) hideLineMenu(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideLineMenu(); });
+  window.addEventListener('resize', hideLineMenu);
+  $('viewport').addEventListener('scroll', hideLineMenu, { passive: true });
+
   // Barrer : sur la sélection (toute la case sans sélection) ; même bouton pour enlever le trait.
-  for (const id of ['btnStrike', 'btnStrikeColor', 'btnColor', 'btnRevert', 'btnKind', 'btnRecalc'])
+  for (const id of ['btnLine', 'btnStrike', 'btnStrikeColor', 'btnColor', 'btnRevert', 'btnKind', 'btnRecalc'])
     $(id).addEventListener('pointerdown', (e) => e.preventDefault()); // garde la case active et sa sélection
   const showColor = () => $('btnStrikeColor').classList.toggle('black', state.strikeColor === BLACK);
   try { state.strikeColor = localStorage.getItem('strikeColor') === BLACK ? BLACK : RED; } catch { state.strikeColor = RED; }

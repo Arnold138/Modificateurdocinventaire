@@ -66,18 +66,18 @@ public static class Arrangement
     public sealed record Plan(List<PagePlan> Pages, List<Unit> Units, Destination? Dest, List<Erase> Erase);
 
     private static int R(double v) => (int)Math.Floor(v + 0.5);
-    private static int CutY(double y) => R(y) - Cut;
+    internal static int CutY(double y) => R(y) - Cut;
     private static bool Blank(string? s) => string.IsNullOrWhiteSpace(s);
     private static bool HasValues(PrintedLine l) => l.Cells.Skip(1).Any(c => !Blank(c.Text));
     private static bool GridTable(Table t) => t.HasGrid && t.RowYs.Count >= 2 && t.ColumnXs.Count >= 2;
 
-    private static double LineTop(PrintedLine l)
+    internal static double LineTop(PrintedLine l)
     {
         var ink = l.Cells.Where(c => !c.Ink.IsEmpty).ToList();
         return ink.Count > 0 ? ink.Min(c => c.Ink.Top) : l.Cells.Min(c => PageLayout.BaseBox(l, c).Top);
     }
 
-    private static double LineBottom(PrintedLine l)
+    internal static double LineBottom(PrintedLine l)
     {
         var ink = l.Cells.Where(c => !c.Ink.IsEmpty).ToList();
         double b = ink.Count > 0 ? ink.Max(c => c.Ink.Bottom) : l.Cells.Max(c => PageLayout.BaseBox(l, c).Bottom);
@@ -85,7 +85,7 @@ public static class Arrangement
         return b;
     }
 
-    private static int GapMid(PrintedLine a, PrintedLine b) => (int)Math.Floor((LineBottom(a) + LineTop(b)) / 2);
+    internal static int GapMid(PrintedLine a, PrintedLine b) => (int)Math.Floor((LineBottom(a) + LineTop(b)) / 2);
 
     /// <summary>Titre de la rangée dont les valeurs descendent sur <paramref name="target"/> (comme dans le .txt).</summary>
     private static PrintedLine? CarriedTitle(List<PrintedLine> lines, PrintedLine target)

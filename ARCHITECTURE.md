@@ -23,7 +23,7 @@ src/RetoucheInventaire.Core    Logique métier, sans Windows : testable partout
   Import/     TXT, CSV, XLSX → page tableau
   Storage/    fichier projet .inventaire
 src/RetoucheInventaire.App     WinUI 3 : l'écran, OCR Windows, PDF Windows, décodage d'images
-tests/                         42 tests sur les pages fournies (+ 29 côté iPad, dont la comparaison avec Windows)
+tests/                         47 tests sur les pages fournies (+ 36 côté iPad, dont la comparaison avec Windows)
 ```
 
 ## L'écran (unique)
@@ -32,7 +32,7 @@ Tout est en haut, rien en bas (Surface, iPad, iPhone) :
 
 - **Barre du haut** : projet (nouveau, ouvrir, enregistrer, renommer) · ↶ · ◀ 3 / 10 ▶ · zoom − ⟷ + · enregistrement.
 - **Outils** (gros boutons) : Photo · Importer · Lots · Modifier (renommer, pages, synchroniser, retirer la page) · Recadrer · Verrouiller · Exporter.
-- **Case touchée** : texte d'origine ou montant calculé · Barrer · couleur du trait · Couleur du texte · Type de ligne · Rétablir · Recalculer (totaux).
+- **Case touchée** : texte d'origine ou montant calculé · Ligne (dupliquer, séparer ici ; aussi au clic droit / appui long sur la case) · Barrer · couleur du trait · Couleur du texte · Type de ligne · Rétablir · Recalculer (totaux).
 - **Ligne d'état** fine et progression.
 - **La page**, une seule à la fois, zoom au pincement ; à sa gauche, hors de la page : poignées ⋮⋮, badges (**T**, **Σ**, **E**, **×**), poubelle / « + » des lots.
 - **Recadrage** (par-dessus l'écran, à la demande) : 4 poignées, Pivoter, Détection auto, Page entière, Valider.
@@ -42,17 +42,18 @@ Tout est en haut, rien en bas (Surface, iPad, iPhone) :
 ```
 InventoryProject
 └─ Page                 source (image ou données), recadrage (4 coins), inclinaison, quarts de tour, zones verrouillées
+   │                    Inserts : bandes insérées pour les rangées ajoutées (Id, Kind Copy | Split, At, Height, Parts)
    ├─ Table             bords de colonnes et de rangées (pixels de page)
    │  │                 RowOrder : ordre d'affichage des rangées (rangées déplacées à la main)
-   │  └─ Row            entre deux filets horizontaux
-   │     └─ PrintedLine type : Article | Titre | Total | EnTete | Ignoree
+   │  └─ Row            entre deux filets horizontaux ; Inserted : bande de la rangée ajoutée (null : imprimée)
+   │     └─ PrintedLine type : Article | Titre | Total | EnTete | Ignoree ; Copy : ligne dupliquée
    │        └─ Field    une case de la ligne : Text, OriginalText, Ink (encre d'origine),
    │                    Box (zone d'édition, jamais hors de la case), alignement, retrait, taille de police, Locked,
    │                    Strikes (traits), Colors (couleurs), Manual (total tapé à la main)
    └─ LooseLines        texte hors tableau (n° de page, signature, tampon) : verrouillé, non exporté
 ```
 
-La géométrie est figée à l'analyse ; l'édition ne change que `Text`. C'est ce qui garantit que rien ne bouge (vérifié par un test).
+La géométrie est figée à l'analyse ; l'édition ne change que `Text`. C'est ce qui garantit que rien ne bouge (vérifié par un test). Seules exceptions, explicites : la rangée qui s'agrandit et les rangées ajoutées, qui décalent d'un bloc tout ce qui est en dessous (et reviennent exactement à l'origine quand on les défait, vérifié par des tests).
 
 ## Flux import → édition → export texte
 
@@ -82,6 +83,16 @@ Application web installable (« Sur l'écran d'accueil »), sans étape de compi
 - `SetExtra` décale tout ce qui est sous la bande (cases, encre, filets `RowYs`, rangées, tableaux, zones verrouillées, autres bandes) et allonge la page ; revenir à 0 rend exactement la géométrie d'origine.
 - `Stretch` produit l'image agrandie depuis l'image redressée d'origine (hauteur `BaseHeight`) : dans le tableau, pixels sombres de l'interligne (filets verticaux) prolongés, papier ailleurs. Identique à l'octet entre Windows et iPhone/iPad (vérifié avec la colonne des lots).
 - Export JPEG d'une page agrandie : la page redressée (plus de recomposition dans la photo d'origine).
+
+## Rangées ajoutées : « Dupliquer la ligne », « Séparer ici » (`Model/Rows.cs`, `web/core/rows.js`)
+
+- Une rangée ajoutée est une **vraie rangée** du tableau (`Rows`, `RowYs`, `RowOrder`) : lots, lots 0, poignées ⋮⋮, totaux, .txt et JPEG fonctionnent sans cas particulier.
+- **Dupliquer** : nouvelle rangée juste sous celle de la ligne (copie de la ligne, `Copy = true`, case de lot vide). Bande insérée à `CutY` du filet suivant : filet du haut de la rangée + pixels de la ligne (de l'interligne au-dessus à celui d'en dessous) + sous le texte autant d'espace qu'au-dessus (morceau `Gap`). Les montants d'une ligne copiée ne sont pas dans le total imprimé : ils comptent en entier (`Totals`).
+- **Séparer ici** : bande de 5 px (le filet du haut de la rangée, recopié) insérée au milieu de l'interligne au-dessus de la ligne ; la ligne et les suivantes forment la nouvelle rangée.
+- **Texte tapé sur plusieurs lignes** : « Séparer ici » au curseur → rangée ajoutée **vierge** (filets seuls, `Gap`), désignation = suite du texte, valeurs vides.
+- `PageLayout.ShiftBelow` décale tout ce qui est sous la bande (le même code sert à la rangée qui s'agrandit) ; `RemoveAdded` défait exactement (copie supprimée ou rangée remise dans celle du dessus).
+- Image : `PageLayout.Pieces` décrit la page agrandie de haut en bas (rangées de l'image d'origine, bandes insérées, bandes d'interligne, y compris une bande d'interligne à l'intérieur d'une rangée ajoutée) ; `Stretch` la dessine. Les morceaux recopiés sont des rangées entières de l'image d'origine (`Src`, coordonnées d'origine : copier une copie fonctionne) ; un morceau `Gap` prolonge les filets verticaux de la rangée la plus nette de la ligne copiée (`CleanRow`, choisie sur l'image). Entiers : même image à l'octet près sur les deux versions (vérifié à chaque compilation, avec le .txt).
+- Écran : bouton « Ligne » de la case ; clic droit / appui long sur une case (Windows : en tête du menu Couper / Copier / Coller ; iPad : appui long sur une case pas encore ouverte). Au clic droit, la case réellement appuyée est retenue (la barre de la case qui apparaît décale la page sous le pointeur).
 
 ## Texte barré (`Model/Strikes.cs`, `Model/TextPlacement.cs`, `web/core/strikes.js`)
 

@@ -112,6 +112,20 @@ if (args.Length > 0 && args[0] == "export-arrange")
     }
     return 0;
 }
+if (args.Length > 0 && args[0] == "export-rows")
+{
+    // Lignes dupliquées et séparées : .txt et pages agrandies (colonne des lots tracée), pour comparaison avec l'iPad.
+    var project = Tests.RowsScenario();
+    Directory.CreateDirectory(args[1]);
+    RetoucheInventaire.Core.Export.TxtExporter.Write(project, Path.Combine(args[1], "export.txt"));
+    foreach (var pg in project.Pages)
+    {
+        var img = RetoucheInventaire.Core.Export.LotColumn.Draw(PageLayout.Stretch(Fixtures.Load(pg.Id).Image, pg), pg);
+        Pgm.Write(Path.Combine(args[1], pg.Id + ".pgm"), img);
+        Console.WriteLine($"{pg.Id}: {img.Width}x{img.Height}");
+    }
+    return 0;
+}
 if (args.Length > 0 && args[0] == "export")
 {
     var project = new InventoryProject();

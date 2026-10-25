@@ -142,7 +142,7 @@
                             <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE74D;" /></MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
                         <MenuFlyoutSeparator />
-                        <MenuFlyoutItem IsEnabled="False" Text="Pour une case : touchez-la, puis Barrer, Couleur, Type, Rétablir en haut" />
+                        <MenuFlyoutItem IsEnabled="False" Text="Pour une case : touchez-la, puis Ligne, Barrer, Couleur, Type, Rétablir en haut" />
                     </MenuFlyout>
                 </Button.Flyout>
             </Button>
@@ -182,7 +182,7 @@
             </Button>
         </Grid>
 
-        <!-- « Modifier » la case sélectionnée : barrer, couleur, type de ligne, rétablir, recalculer. -->
+        <!-- « Modifier » la case sélectionnée : ligne, barrer, couleur, type de ligne, rétablir, recalculer. -->
         <Grid x:Name="EditBar" Grid.Row="2" Padding="12,6" ColumnSpacing="8" Background="White" BorderBrush="#FFDFE2E6" BorderThickness="0,1,0,0"
               Visibility="Collapsed">
             <Grid.ColumnDefinitions>
@@ -191,6 +191,17 @@
             </Grid.ColumnDefinitions>
             <TextBlock x:Name="EditInfo" FontSize="14" Opacity="0.7" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                <!-- Ligne : dupliquer la ligne, séparer ici… (aussi au clic droit ou à l'appui long sur une case). -->
+                <Button x:Name="LineButton" Style="{StaticResource PillButton}" AllowFocusOnInteraction="False"
+                        ToolTipService.ToolTip="Dupliquer la ligne, séparer… (aussi : clic droit ou appui long sur une case)">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE8C8;" FontSize="16" />
+                        <TextBlock Text="Ligne" />
+                    </StackPanel>
+                    <Button.Flyout>
+                        <MenuFlyout x:Name="LineMenu" Placement="BottomEdgeAlignedLeft" Opening="LineMenu_Opening" />
+                    </Button.Flyout>
+                </Button>
                 <!-- Barrer : la sélection (toute la case sans sélection) ; même bouton pour enlever le trait. -->
                 <Button x:Name="StrikeButton" Style="{StaticResource PillButton}" Click="Strike_Click" AllowFocusOnInteraction="False"
                         ToolTipService.ToolTip="Barrer le texte sélectionné (toute la case sans sélection)">

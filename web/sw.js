@@ -16,6 +16,7 @@ const ASSETS = [
   'core/lots.js',
   'core/model.js',
   'core/ocrprep.js',
+  'core/rows.js',
   'core/rules.js',
   'core/store.js',
   'core/strikes.js',

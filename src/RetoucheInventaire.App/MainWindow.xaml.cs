@@ -416,6 +416,7 @@ public sealed partial class MainWindow : Window
             SetStatus("Rangée déplacée. ↶ pour annuler.");
             ScheduleAutosave();
         };
+        view.LineCommands = LineCommandsFor;
         view.SetLockMode(LockToggle.IsChecked == true);
         _view = view;
         PagesPanel.Children.Add(header);
@@ -582,7 +583,7 @@ public sealed partial class MainWindow : Window
         var f = _currentField!;
         KindButtonText.Text = PageEdits.Label(hit.Line.Kind);
         RevertButton.IsEnabled = !_busy && f.IsModified;
-        KindButton.IsEnabled = StrikeButton.IsEnabled = ColorButton.IsEnabled = !_busy;
+        KindButton.IsEnabled = StrikeButton.IsEnabled = ColorButton.IsEnabled = LineButton.IsEnabled = !_busy;
         _ = StrikeColor;
         bool computed = Totals.IsComputedCell(hit.Line, f);
         RecalcButton.Visibility = computed && f.Manual ? Visibility.Visible : Visibility.Collapsed;
@@ -595,6 +596,126 @@ public sealed partial class MainWindow : Window
             EditInfo.Text = f.IsModified
                 ? $"Original : « {(f.OriginalText.Length > 0 ? f.OriginalText : "(vide)")} »"
                 : $"« {text} »";
+    }
+
+    // ---------- Lignes ajoutées : menu « Ligne » (bouton, clic droit, appui long) ----------
+
+    private static string Short(string t) => t.Length > 40 ? t[..40] + "…" : t;
+
+    /// <summary>Ligne de texte (dans la désignation tapée sur plusieurs lignes) où se trouve le curseur.</summary>
+    private int CaretLine(Field f)
+    {
+        if (f.Column != 0 || !f.Text.Contains('\n') || _view is null) return 0;
+        int start = Math.Clamp(_view.SelectionFor(f).Start, 0, f.Text.Length);
+        return f.Text[..start].Count(c => c == '\n');
+    }
+
+    /// <summary>Ce que le menu « Ligne » propose pour la case touchée.</summary>
+    private List<PageView.LineCommand> LineCommandsFor(Field f)
+    {
+        var list = new List<PageView.LineCommand>();
+        if (_busy || PageEdits.FindLine(_project, f) is not { } hit) return list;
+        var (page, line) = hit;
+        int typed = CaretLine(f);
+        string rest = typed > 0 ? string.Join(" ", f.Text.Replace("\r\n", "\n").Split('\n').Skip(typed)).Trim() : "";
+        bool canCopy = Rows.CanCopy(page, line);
+        if (canCopy)
+            list.Add(new("Dupliquer la ligne", "Copie juste en dessous (texte et prix), à corriger. La suite descend.", "\uE8C8",
+                () => _ = LineActionAsync("copy", 0, f)));
+        if (rest.Length > 0 && canCopy)
+            list.Add(new("Séparer ici", $"« {Short(rest)} » passe dans sa propre ligne, juste en dessous.", "\uE8C6",
+                () => _ = LineActionAsync("typed", typed, f)));
+        else if (Rows.CanSplit(page, line))
+            list.Add(new("Séparer ici", "Cette ligne devient une rangée à part, avec sa case de lot et ses prix.", "\uE8C6",
+                () => _ = LineActionAsync("split", 0, f)));
+        if (Rows.AddedRowOf(page, line) is { } added)
+        {
+            if (added.Band.Kind == "Split" && added.At.Row.Lines.Count > 0 && added.At.Row.Lines[0] == line)
+                list.Add(new("Remettre dans la rangée du dessus", "Annule « Séparer ici » : le trait ajouté disparaît.", "\uE74A",
+                    () => _ = LineActionAsync("merge", 0, f)));
+            if (added.Band.Kind == "Copy")
+                list.Add(new("Supprimer cette ligne ajoutée", "La ligne copiée disparaît, la suite remonte.", "\uE74D",
+                    () => _ = LineActionAsync("remove", 0, f), Danger: true));
+        }
+        return list;
+    }
+
+    /// <summary>Bouton « Ligne » : mêmes actions que le clic droit, pour la case sélectionnée.</summary>
+    private void LineMenu_Opening(object sender, object e)
+    {
+        LineMenu.Items.Clear();
+        var commands = _currentField is null ? new List<PageView.LineCommand>() : LineCommandsFor(_currentField);
+        foreach (var c in commands)
+        {
+            var item = new MenuFlyoutItem { Text = c.Label, Icon = new FontIcon { Glyph = c.Glyph } };
+            if (c.Danger) item.Foreground = new SolidColorBrush(ColorHelper.FromArgb(255, 180, 40, 40));
+            ToolTipService.SetToolTip(item, c.Hint);
+            item.Click += (_, _) => c.Run();
+            LineMenu.Items.Add(item);
+        }
+        if (commands.Count == 0)
+            LineMenu.Items.Add(new MenuFlyoutItem { Text = "Rien à faire ici : choisissez une ligne d'article du tableau", IsEnabled = false });
+    }
+
+    /// <summary>Exécute une action du menu « Ligne » ; une seule action à annuler (↶).</summary>
+    private async Task LineActionAsync(string act, int from, Field f)
+    {
+        if (_busy || PageEdits.FindLine(_project, f) is not { } hit) return;
+        var (page, line) = hit;
+        string name = Short(line.FirstText);
+        PushUndo();
+        PrintedLine? show = null;
+        string msg = "";
+        switch (act)
+        {
+            case "copy":
+                show = Rows.Copy(page, line);
+                if (show != null) PageLayout.SetExtra(page, show, PageView.LineExtra(show));
+                msg = $"« {name} » dupliquée juste en dessous : corrigez la quantité et le prix. Case de lot vide : tapez le numéro ou « Synchroniser ».";
+                break;
+            case "typed":
+                show = Rows.SplitTypedText(page, line, from);
+                if (show != null)
+                {
+                    PageLayout.SetExtra(page, line, PageView.LineExtra(line));
+                    PageLayout.SetExtra(page, show, PageView.LineExtra(show));
+                }
+                msg = $"« {Short((show ?? line).FirstText)} » est maintenant sur sa propre ligne : tapez ses prix et son numéro de lot.";
+                break;
+            case "split":
+                show = Rows.Split(page, line) ? line : null;
+                msg = $"« {name} » est maintenant une rangée à part, avec sa case de lot et ses prix.";
+                break;
+            case "merge":
+                Rows.RemoveAdded(page, line);
+                msg = $"« {name} » est remise dans la rangée du dessus.";
+                break;
+            case "remove":
+                Rows.RemoveAdded(page, line);
+                msg = "Ligne ajoutée supprimée, la suite est remontée.";
+                break;
+        }
+        if ((act is "copy" or "typed" or "split") && show is null)
+        {
+            _undo.RemoveAt(_undo.Count - 1);
+            UpdateCommands();
+            SetStatus("Impossible ici : choisissez une ligne d'article d'un tableau.");
+            return;
+        }
+        Lots.Resync(_project);
+        Replan();
+        RecomputeTotals();
+        _editSession = null;
+        await RefreshViewAsync();
+        if (show != null && _view != null)
+        {
+            _view.FlashLine(show);
+            var target = act == "split" ? f : show.Cells[0];
+            if (_view.Shows(target)) { _currentField = target; _view.Focus(target); }
+        }
+        UpdateEditBar();
+        SetStatus(msg + " ↶ pour annuler.");
+        ScheduleAutosave();
     }
 
     private string ComputedText(Field f)

@@ -77,8 +77,10 @@ export function recomputeTotals(project, plan = null) {
   const removed = removedCells(project, lines, plan);
   const changed = [];
   const cols = (l) => l.Cells.filter((c) => c.Column > 0);
+  // Ligne dupliquée (rangée ajoutée) : ses montants ne sont pas dans le total imprimé, ils comptent en entier.
+  const copied = new Set(lines.filter((l) => l.Copy).flatMap((l) => l.Cells));
   const delta = (f) => {
-    const o = parseAmount(f.OriginalText) ?? 0;
+    const o = copied.has(f) ? 0 : parseAmount(f.OriginalText) ?? 0;
     if (removed.has(f)) return -o;
     return (parseAmount(f.Text) ?? 0) - o;
   };

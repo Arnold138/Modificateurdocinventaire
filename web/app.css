@@ -123,6 +123,20 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 .palette button { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 56px; min-height: 52px; border-radius: 10px; font-size: 13px; }
 .palette button:active, .palette button:hover { background: var(--accent-soft); }
 .palette i { width: 22px; height: 22px; border-radius: 11px; display: block; }
+/* Menu « Ligne » (bouton, clic droit, appui long) */
+.linemenu { position: fixed; z-index: 30; display: flex; flex-direction: column; gap: 2px; width: min(340px, calc(100vw - 16px)); padding: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.2); }
+.linemenu[hidden] { display: none; }
+.linemenu .title { font-size: 13px; color: var(--muted); padding: 4px 10px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.linemenu button { display: grid; grid-template-columns: 28px 1fr; column-gap: 10px; align-items: center; text-align: left; min-height: 52px; padding: 6px 10px; border-radius: 10px; }
+.linemenu button svg { width: 24px; height: 24px; grid-row: span 2; }
+.linemenu button b { font-weight: 600; font-size: 16px; }
+.linemenu button small { color: var(--muted); font-size: 13px; line-height: 1.25; }
+.linemenu button:hover, .linemenu button:focus-visible { background: var(--accent-soft); outline: none; }
+.linemenu button.danger b { color: #b42828; }
+.linemenu .none { padding: 8px 10px 10px; color: var(--muted); font-size: 14px; }
+/* Rangée ajoutée ou séparée : repère bref */
+.rowflash { position: absolute; pointer-events: none; border-radius: 4px; box-shadow: 0 0 0 3px var(--accent); background: var(--accent-soft); opacity: 0; animation: rowflash 1.8s ease-out; }
+@keyframes rowflash { 0% { opacity: .9; } 70% { opacity: .6; } 100% { opacity: 0; } }
 .field.computed:focus { outline-color: #107c10; }
 .pill { display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 14px; border-radius: 22px; background: var(--accent-soft); color: var(--accent); font-weight: 600; white-space: nowrap; }
 .pill svg { width: 20px; height: 20px; }

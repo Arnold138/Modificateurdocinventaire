@@ -93,6 +93,18 @@ public sealed class PageView
     /// <summary>Rangée glissée : (tableau, rangée déplacée, rangée devant laquelle la poser ou null pour la fin).</summary>
     public event Action<PageView, Table, int, int?>? RowMoved;
 
+    /// <summary>Une action du menu « Ligne » (clic droit, appui long ou bouton « Ligne ») : dupliquer, séparer…</summary>
+    public sealed record LineCommand(string Label, string Hint, string Glyph, Action Run, bool Danger = false);
+
+    /// <summary>Actions proposées pour une case, ajoutées en tête du menu Couper / Copier / Coller de la case.</summary>
+    public Func<Field, IReadOnlyList<LineCommand>>? LineCommands { get; set; }
+
+    private const string LineTag = "ligne";
+    /// <summary>Menu de toutes les cases de la page (Couper, Copier, Coller… et les actions « Ligne »).</summary>
+    private readonly TextCommandBarFlyout _textMenu = new() { AlwaysExpanded = true };
+    /// <summary>Case appuyée au bouton droit (la barre de la case qui apparaît peut décaler la page sous le pointeur).</summary>
+    private (Field Field, long At)? _rightPress;
+
     public PageView(Arrangement.ViewPage view, Raster? display, Func<bool> lotsActive, Func<int, int?> mapY, Func<int, int?> unmapY)
     {
         _view = view;
@@ -131,6 +143,7 @@ public sealed class PageView
         Root.Children.Add(_overlayLayer);
         Root.Children.Add(_inputLayer);
 
+        _textMenu.Opening += OnTextMenuOpening;
         _inputLayer.PointerPressed += OnLockPressed;
         _inputLayer.PointerMoved += OnLockMoved;
         _inputLayer.PointerReleased += OnLockReleased;
@@ -581,7 +594,56 @@ public sealed class PageView
                 e.Handled = true;
                 FocusNextInColumn(f);
             };
+        // Clic droit ou appui long : menu de la case (Couper, Copier, Coller) avec, en tête, les actions « Ligne ».
+        tb.ContextFlyout = _textMenu;
+        tb.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, e) =>
+        {
+            if (e.GetCurrentPoint(tb).Properties.IsRightButtonPressed) _rightPress = (f, Environment.TickCount64);
+        }), handledEventsToo: true);
         _fieldLayer.Children.Add(tb);
+    }
+
+    /// <summary>Ouverture du menu d'une case : les actions « Ligne » sont mises à jour pour cette case.</summary>
+    private void OnTextMenuOpening(object? sender, object e)
+    {
+        if (sender is not CommandBarFlyout menu) return;
+        foreach (var old in menu.SecondaryCommands.Where(c => (c as FrameworkElement)?.Tag as string == LineTag).ToList())
+            menu.SecondaryCommands.Remove(old);
+        Field? f = _boxes.FirstOrDefault(kv => ReferenceEquals(kv.Value, menu.Target)).Key;
+        if (_rightPress is { } press && Environment.TickCount64 - press.At < 1500) f = press.Field;
+        _rightPress = null;
+        if (f is null || LineCommands is null) return;
+        int at = 0;
+        foreach (var c in LineCommands(f))
+        {
+            var button = new AppBarButton { Label = c.Label, Icon = new FontIcon { Glyph = c.Glyph }, Tag = LineTag };
+            if (c.Danger) button.Foreground = TrashInk;
+            ToolTipService.SetToolTip(button, c.Hint);
+            button.Click += (_, _) => { menu.Hide(); c.Run(); };
+            menu.SecondaryCommands.Insert(at++, button);
+        }
+        if (at > 0) menu.SecondaryCommands.Insert(at, new AppBarSeparator { Tag = LineTag });
+    }
+
+    /// <summary>Repère bref sur une ligne (rangée ajoutée ou séparée).</summary>
+    public void FlashLine(PrintedLine line)
+    {
+        var entry = _view.Lines.FirstOrDefault(e => e.Line == line);
+        if (entry is null || entry.Cells.Count == 0) return;
+        var box = entry.Cells.Aggregate(RectD.Empty, (r, c) => r.Union(c.Box));
+        var mark = new Rectangle
+        {
+            Width = box.Width + 6, Height = box.Height + 6, RadiusX = 4, RadiusY = 4, Stroke = Accent, StrokeThickness = 3,
+            Fill = new SolidColorBrush(ColorHelper.FromArgb(40, 10, 102, 194)),
+        };
+        Canvas.SetLeft(mark, box.X - 3);
+        Canvas.SetTop(mark, box.Y - 3);
+        _overlayLayer.Children.Add(mark);
+        var timer = _overlayLayer.DispatcherQueue.CreateTimer();
+        timer.Interval = TimeSpan.FromMilliseconds(1800);
+        timer.IsRepeating = false;
+        timer.Tick += (_, _) => _overlayLayer.Children.Remove(mark);
+        timer.Start();
     }
 
     /// <summary>Retours à la ligne : « \n » dans le projet (comme sur iPhone/iPad), « \r » dans les champs Windows.</summary>

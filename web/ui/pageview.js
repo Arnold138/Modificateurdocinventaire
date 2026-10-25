@@ -19,7 +19,7 @@ const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '
 export class PageView {
   /**
    * @param view ce qu'affiche la page (viewOf) ; @param display image affichée (null pour TXT/CSV/XLSX) ;
-   * cb : rappels (onFocus, onEdited, onLot, onLotRemove, onLotAdd, onMoveRow, onLocks, beforeEdit, beforeChange),
+   * cb : rappels (onFocus, onEdited, onLot, onLotRemove, onLotAdd, onMoveRow, onLocks, onLineMenu, beforeEdit, beforeChange),
    * lotsActive, zoom, mapY / unmapY (zones verrouillées : page d'origine ↔ écran).
    */
   constructor(view, display, cb) {
@@ -384,6 +384,48 @@ export class PageView {
         e.preventDefault();
         this.focusNextInColumn(f);
       });
+    this.initLineMenu(input, f, remember);
+  }
+
+  /**
+   * Menu « Ligne » : clic droit (souris, pavé tactile) ou appui long au doigt sur une case.
+   * Avec du texte sélectionné dans la case, le clic droit garde le menu habituel (copier, coller).
+   */
+  initLineMenu(input, f, remember) {
+    input.addEventListener('contextmenu', (e) => {
+      // La case vient de prendre le focus : la barre de la case est apparue et a pu décaler la page sous le pointeur.
+      // On garde la case réellement appuyée (bouton droit), pas celle qui se trouve maintenant sous le pointeur.
+      const press = this.rightPress && performance.now() - this.rightPress.t < 1500 ? this.rightPress : null;
+      this.rightPress = null;
+      const target = press?.f ?? f, el = this.inputs.get(target) ?? input;
+      if ((el.selectionEnd ?? 0) > (el.selectionStart ?? 0) && document.activeElement === el) return;
+      e.preventDefault();
+      if (target === f) remember();
+      this.cb.onLineMenu?.(this, target, { x: e.clientX, y: e.clientY });
+    });
+    let timer = null, start = null;
+    const cancel = () => { clearTimeout(timer); timer = null; start = null; };
+    input.addEventListener('pointerdown', (e) => {
+      if (e.button === 2) this.rightPress = { f, t: performance.now() };
+      if (e.pointerType === 'mouse' || document.activeElement === input) return; // case en cours de frappe : sélection du texte
+      start = { x: e.clientX, y: e.clientY };
+      timer = setTimeout(() => {
+        const at = start;
+        cancel();
+        this.cb.onLineMenu?.(this, f, at);
+      }, 550);
+    });
+    input.addEventListener('pointermove', (e) => { if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 10) cancel(); });
+    for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) input.addEventListener(ev, cancel);
+  }
+
+  /** Repère bref sur une ligne (rangée ajoutée ou séparée). */
+  flashLine(line) {
+    const entry = this.view.lines.find((e) => e.line === line);
+    if (!entry || entry.cells.length === 0) return;
+    const box = entry.cells.reduce((r, c) => Rect.union(r, c.box), Rect.empty());
+    const d = px(el('div', 'rowflash', this.overlay), Rect.inflate(box, 2, 2));
+    setTimeout(() => d.remove(), 1900);
   }
 
   /** Place le champ sur sa case : même taille d'écriture que l'imprimé, 1re ligne à la place du texte d'origine. */

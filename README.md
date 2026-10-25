@@ -9,7 +9,7 @@ Application Windows pour tablette Surface, au doigt, **sans Internet** : on impo
 
 ## Utilisation
 
-L'écran est le même sur la Surface, l'iPad et l'iPhone, et **tout est en haut** (rien en bas) : le projet, ↶, les pages (◀ 3 / 10 ▶) et le zoom (− ⟷ +) ; dessous les outils (Photo, Importer, Lots, Modifier, Recadrer, Verrouiller, Exporter) ; quand une case est touchée, les outils de la case (Barrer, Couleur, Type, Rétablir, Recalculer).
+L'écran est le même sur la Surface, l'iPad et l'iPhone, et **tout est en haut** (rien en bas) : le projet, ↶, les pages (◀ 3 / 10 ▶) et le zoom (− ⟷ +) ; dessous les outils (Photo, Importer, Lots, Modifier, Recadrer, Verrouiller, Exporter) ; quand une case est touchée, les outils de la case (Ligne, Barrer, Couleur, Type, Rétablir, Recalculer).
 
 1. **Photo** (caméra de l'appareil) ou **Importer** une ou plusieurs photos, PDF, TXT, CSV, XLSX, un projet `.inventaire`, **un dossier entier** ou un **.zip** (pris dans l'ordre des noms : page 2 avant page 10). Les photos sont redressées automatiquement. Une barre de progression indique la page en cours, et chaque page est enregistrée dès qu'elle est lue.
 2. **Changer de page** : ◀ ▶ en haut, ou toucher « 3 / 10 » pour la liste des pages. Une seule page est affichée à la fois.
@@ -24,13 +24,18 @@ L'écran est le même sur la Surface, l'iPad et l'iPhone, et **tout est en haut*
    - **0** = objet absent : sa ligne **quitte sa place tout de suite** (ce qui suit remonte) et passe **juste après le dernier lot numéroté** (après le 120 : la ligne « 0 » arrive en 121e position), même si c'est sur une autre page, dans une rangée refaite aux colonnes du tableau d'arrivée. Si l'objet partage sa rangée avec un titre (« VESTIAIRE HOMME : 80 / 40 » puis « 2 vestiaires… »), il part seul avec les valeurs ; le titre reste à sa place. **Retaper un numéro le remet à sa place.** Pareil sur le JPEG et dans le .txt ; ses montants sont retirés des totaux.
    - **⋮⋮** à gauche d'une rangée : la glisser pour la monter ou la descendre dans son tableau (écran, JPEG, .txt).
    - **Poubelle** : ce n'est pas un objet, sa case disparaît (les autres numéros ne bougent pas). **+** : ajouter une case.
-8. **Totaux** : les totaux (TOTAL STOCK…) se recalculent tout seuls quand une valeur change ou qu'un lot passe à 0 (total imprimé + écarts), ainsi que le récapitulatif (« II - STOCK ») et le TOTAL GENERAL. On peut aussi les taper à la main : ils ne bougent plus, l'écart avec le calcul s'affiche en haut, et **Recalculer** les remet en automatique. Une rangée de total que la lecture n'avait pas lue (fond gris) a quand même ses cases à toucher.
-9. **Modifier** : renommer le document, liste des pages, synchroniser les lots, retirer la page affichée.
-10. **Verrouiller** : tracer un rectangle au doigt sur une signature ou un tampon (le texte hors tableau est déjà verrouillé). Toucher une zone orange la retire.
-11. **Exporter** → **images JPEG** (toutes, ou seulement la page affichée) : « nom - modifié.jpg », identique à l'original sauf les cases modifiées et les numéros de lot. Une page dont des rangées ont bougé (lot 0, rangée déplacée, rangée agrandie) est exportée redressée. → **Fichier texte (.txt)**.
-12. **↶** : annule la dernière action, jusqu'à 30 fois. Sur PC, aussi Ctrl+Z en dehors d'une case.
-13. **Orthographe** : dans la désignation, le correcteur de l'appareil souligne les fautes (sur iPhone/iPad, aussi « Outils d'écriture » en sélectionnant du texte). Rien n'est corrigé automatiquement.
-14. Tout est enregistré en continu. Sur la Surface, menu du projet (en haut à gauche) → **Enregistrer sous…** une fois pour choisir le fichier projet.
+8. **Ligne** (en haut quand une case est touchée, ou **clic droit** / **appui long** sur la case — sur PC, en tête du menu Couper / Copier / Coller) :
+   - **Dupliquer la ligne** : une copie de la ligne (texte et prix, telle qu'imprimée) est ajoutée **juste en dessous**, dans une vraie rangée du tableau ; tout ce qui suit descend. On corrige ce qui change (« 2 doseuses » → « 1 doseuse », le prix de chacune). Sa case de lot est vide : taper le numéro, ou **Synchroniser**. Ses montants s'ajoutent aux totaux.
+   - **Séparer ici** : la ligne touchée (et celles qui la suivent dans sa rangée) devient une rangée à part, avec un trait au-dessus, sa case de lot et ses cases de prix. Si la désignation a été tapée sur plusieurs lignes (Entrée), placer le curseur sur la ligne voulue : la suite du texte part dans sa propre ligne, juste en dessous.
+   - Sur une ligne ajoutée : **Supprimer cette ligne ajoutée** ; sur une ligne séparée : **Remettre dans la rangée du dessus**. ↶ annule aussi.
+   - Rien d'autre ne bouge : les autres cases, numéros de lot et la mise en page restent tels quels. Pareil sur le JPEG et dans le .txt.
+9. **Totaux** : les totaux (TOTAL STOCK…) se recalculent tout seuls quand une valeur change ou qu'un lot passe à 0 (total imprimé + écarts), ainsi que le récapitulatif (« II - STOCK ») et le TOTAL GENERAL. On peut aussi les taper à la main : ils ne bougent plus, l'écart avec le calcul s'affiche en haut, et **Recalculer** les remet en automatique. Une rangée de total que la lecture n'avait pas lue (fond gris) a quand même ses cases à toucher.
+10. **Modifier** : renommer le document, liste des pages, synchroniser les lots, retirer la page affichée.
+11. **Verrouiller** : tracer un rectangle au doigt sur une signature ou un tampon (le texte hors tableau est déjà verrouillé). Toucher une zone orange la retire.
+12. **Exporter** → **images JPEG** (toutes, ou seulement la page affichée) : « nom - modifié.jpg », identique à l'original sauf les cases modifiées et les numéros de lot. Une page dont des rangées ont bougé (lot 0, rangée déplacée, rangée agrandie, ligne ajoutée ou séparée) est exportée redressée. → **Fichier texte (.txt)**.
+13. **↶** : annule la dernière action, jusqu'à 30 fois. Sur PC, aussi Ctrl+Z en dehors d'une case.
+14. **Orthographe** : dans la désignation, le correcteur de l'appareil souligne les fautes (sur iPhone/iPad, aussi « Outils d'écriture » en sélectionnant du texte). Rien n'est corrigé automatiquement.
+15. Tout est enregistré en continu. Sur la Surface, menu du projet (en haut à gauche) → **Enregistrer sous…** une fois pour choisir le fichier projet.
 
 ## Version iPad (application web, hors ligne)
 
