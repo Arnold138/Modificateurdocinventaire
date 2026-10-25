@@ -18,7 +18,10 @@ import { toggleStrike, isStruck, adjustStrikes, setColor, colorRuns } from '../c
 import { planArrangement, composePage, unitCrop, viewOf, pageArranged } from '../core/arrange.js';
 import { recomputeTotals, parseAmount, formatAmount } from '../core/totals.js';
 import { isZeroLot } from '../core/lots.js';
-import { copyLine, splitAt, splitTypedText, removeAddedRow, canCopyLine, canSplit, addedRowOf } from '../core/rows.js';
+import { copyLine, splitAt, splitTypedText, removeAddedRow, canCopyLine, canSplit, addedRowOf, addBlankLine } from '../core/rows.js';
+import { lotTables, tableHasObjects, setLotTables } from '../core/lots.js';
+import { carryOver, allLines as linesOf } from '../core/model.js';
+import { detectPage } from '../core/imaging.js';
 import { totalExtra, baseHeight } from '../core/layout.js';
 
 const FIX = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tests', 'fixtures');
@@ -556,6 +559,7 @@ function rowsScenario() {
   const vest = findLine(a, '2 vestiaires avec 1 porte en métal');
   vest.Cells[0].Text = '2 vestiaires avec 1 porte en métal\nLOT 6 : 1 table de travail';
   splitTypedText(a, vest, 1).Cells[1].Text = '20';
+  addBlankLine(a, findLine(a, '1 diable à plateau à roulettes'), true).Cells[0].Text = 'Ajoutée au-dessus';
   createEmptyLots(p);
   fillLotsAutomatically(p);
   recomputeTotals(p, planArrangement(p));
@@ -570,6 +574,96 @@ test('Lignes ajoutées : scénario complet cohérent', () => {
     for (const t of page.Tables) if (t.HasGrid) eq(t.Rows.length + 1, t.RowYs.length, 'filets');
   }
   eq('52 550', findLine(p.Pages[1], 'TOTAL STOCK').Cells[1].Text, 'total : 16 000 partagé en 8 000 + 8 000, plus la copie de la copie');
+});
+
+test('Ligne vide au-dessus / en dessous : rangée complète, case de lot vide, défaite exactement', () => {
+  const p = fromPages(['page5']);
+  const page = p.Pages[0];
+  const before = roundJson(page);
+  const produits = findLine(page, 'PRODUITS FINIS'), total = findLine(page, 'TOTAL STOCK');
+  const t = page.Tables.find((x) => x.Rows.some((r) => r.Lines.includes(produits)));
+  const n = t.Rows.length;
+  const below = addBlankLine(page, produits);
+  eq(n + 1, t.Rows.length, 'une rangée de plus');
+  const rb = t.Rows.findIndex((r) => r.Lines.includes(below));
+  check(t.Rows[rb - 1].Lines.includes(produits) && t.Rows[rb + 1].Lines.includes(total), 'entre PRODUITS FINIS et TOTAL STOCK');
+  check(below.Cells.every((c) => c.Text === '' && c.OriginalText === ''), 'cases vides');
+  createEmptyLots(p);
+  check(below.LotSlot, 'case de lot (vide) sur la ligne vide');
+  check(!total.LotSlot, 'pas sur le total');
+  const above = addBlankLine(page, produits, true);
+  const ra = t.Rows.findIndex((r) => r.Lines.includes(above));
+  check(t.Rows[ra + 1].Lines.includes(produits), 'juste au-dessus');
+  resyncLots(p);
+  check(above.LotSlot, 'case de lot au-dessus aussi');
+  fillLotsAutomatically(p);
+  eq(+produits.Lot - 1, +above.Lot, 'numérotée avant');
+  eq(+produits.Lot + 1, +below.Lot, 'numérotée après');
+  below.Cells[1].Text = '1 000';
+  recomputeTotals(p);
+  eq('45 550', total.Cells[1].Text, 'prix tapé ajouté au total');
+  check(!addBlankLine(page, findLine(page, 'II - STOCK')), 'pas sur l\'en-tête');
+  const img = load('page5').n.image, big = stretch(img, page);
+  eq(page.Height, big.h, 'image');
+  clearLots(p);
+  below.Cells[1].Text = '';
+  removeAddedRow(page, above); removeAddedRow(page, below);
+  recomputeTotals(p);
+  eq(before, roundJson({ ...page, Inserts: undefined }).replace(',"Inserts":[]', '').replace(/,"LotsOff":false/g, ''), 'page revenue à l\'origine');
+});
+
+test('Lots page par page : seules les pages cochées ont des numéros', () => {
+  const p = threePages();
+  p.Pages.push(buildDataPage('signature.csv', [['Fait à Valence', 'le 23/03/26'], ['Signature', '']]));
+  const choices = p.Pages.map((pg) => lotTables(pg));
+  check(choices[0].some((x) => x.objects) && choices[2].some((x) => x.objects), 'pages d\'objets proposées');
+  const chosen = new Set(choices[0].map((x) => x.table));
+  setLotTables(p, chosen);
+  createEmptyLots(p);
+  fillLotsAutomatically(p);
+  const pagesWith = new Set([...objectLines(p)].map((o) => p.Pages.indexOf(o.page)));
+  eq('0', [...pagesWith].join(','), 'seulement la page 1');
+  check([...linesOf(p.Pages[1])].every((l) => !l.LotSlot && !l.Lot), 'page 2 sans case');
+  const l1 = lines(p);
+  check(l1.some((x) => x.startsWith('1\t')), 'numéros dans le .txt');
+  // Ajouter la page 3 (un seul de ses tableaux) : les numéros déjà tapés restent.
+  const first = [...objectLines(p)][0].line.Lot;
+  chosen.add(choices[2][0].table);
+  setLotTables(p, chosen);
+  eq(first, [...objectLines(p)][0].line.Lot, 'numéros gardés');
+  check([...objectLines(p)].some((o) => o.page === p.Pages[2]) && [...objectLines(p)].every((o) => o.page !== p.Pages[2] || o.table === choices[2][0].table), 'un seul tableau de la page 3');
+  setLotTables(p, new Set());
+  check(!lotsActive(p), 'plus aucun lot');
+});
+
+test('Recadrer garde les numéros de lot et les corrections des lignes retrouvées', () => {
+  const p = fromPages(['page1']);
+  createEmptyLots(p);
+  fillLotsAutomatically(p);
+  const old = p.Pages[0];
+  const rolls = findLine(old, '2 rolls en métal');
+  setLot(p, rolls, '42');
+  rolls.Cells[1].Text = '70';
+  const fresh = analyzePage('page1');
+  const kept = carryOver(old, fresh);
+  check(kept > 25, `lignes retrouvées (${kept})`);
+  p.Pages[0] = fresh;
+  resyncLots(p);
+  const again = findLine(fresh, '2 rolls en métal');
+  eq('42', again.Lot, 'numéro gardé');
+  eq('70', again.Cells[1].Text, 'correction gardée');
+  eq(findLine(old, '1 table pliante').Lot, findLine(fresh, '1 table pliante').Lot, 'les autres numéros aussi');
+});
+
+test('Cadrage : un scan dont le tableau touche les bords reste en page entière', () => {
+  const w = 800, h = 1100, img = raster(w, h, 1, new Uint8ClampedArray(w * h).fill(250));
+  const line = (x0, y0, x1, y1) => { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) img.data[y * w + x] = 20; };
+  for (let y = 60; y < h; y += 40) line(40, y, w - 1, y + 1);            // rangées jusqu'au bas de la feuille
+  for (const x of [40, 600, 700, w - 3]) line(x, 60, x + 1, h - 1);       // filets jusqu'au bord droit
+  const q = detectPage(img);
+  eq(`0,0 ${w - 1},${h - 1}`, `${q.TopLeft.X},${q.TopLeft.Y} ${q.BottomRight.X},${q.BottomRight.Y}`, 'page entière');
+  const photo = load('page1');
+  check(photo.n.crop.TopLeft.X > 5, 'une photo sur fond sombre est toujours recadrée');
 });
 
 test('Couleur du texte : sur la sélection, suit la saisie, .txt inchangé', () => {

@@ -5,18 +5,18 @@ import { Quad } from './core/geometry.js';
 import { normalize, render, rotate90 } from './core/imaging.js';
 import { detectGrids } from './core/rules.js';
 import { prepare, mapBack, emptyFieldsWithInk, prepareCell, applyCellWords } from './core/ocrprep.js';
-import { newPage, newProject, analyze, reclassify, allFields, isModified, cycleKind, kindLabel, findLine, firstText, upgradePage } from './core/model.js';
+import { newPage, newProject, analyze, reclassify, allFields, isModified, cycleKind, kindLabel, findLine, firstText, upgradePage, carryOver, allLines } from './core/model.js';
 import { buildTxt, txtBlob, composeIntoSource, outputName } from './core/exports.js';
 import { decodeText, parseDelimited, readXlsx, buildDataPage } from './core/importers.js';
 import { packProject, unpackProject, EXTENSION } from './core/store.js';
-import { objectLines, lotsActive, numberLots, clearLots, setLot, resyncLots, removeLot, addLot, repairName, naturalCompare, createEmptyLots, fillLotsAutomatically, emptyLots, isZeroLot, rowOrder } from './core/lots.js';
+import { objectLines, lotsActive, numberLots, clearLots, setLot, resyncLots, removeLot, addLot, repairName, naturalCompare, createEmptyLots, fillLotsAutomatically, emptyLots, isZeroLot, rowOrder, lotTables, defaultLotChoice, setLotTables } from './core/lots.js';
 import { unzipSync } from './vendor/fflate.js';
 import { stretch, setExtra, baseHeight, totalExtra } from './core/layout.js';
 import { toggleStrike, isStruck, setColor, RED, BLACK, TEXT_COLORS } from './core/strikes.js';
 import { planArrangement, viewOf, composePage, unitCrop, pageArranged, mapY, unmapY } from './core/arrange.js';
 import { recomputeTotals, isComputedCell, computedValue } from './core/totals.js';
 import { frameSignature, lotFrameEnabled } from './core/lotcolumn.js';
-import { canCopyLine, canSplit, addedRowOf, copyLine, splitAt, splitTypedText, removeAddedRow } from './core/rows.js';
+import { canCopyLine, canSplit, addedRowOf, copyLine, addBlankLine, locate, splitAt, splitTypedText, removeAddedRow } from './core/rows.js';
 import { decodeImage, pdfPages, isImageName, mimeOf } from './services/decode.js';
 import { recognize, warmUp } from './services/ocr.js';
 import { rasterToCanvas, canvasToBlob, renderEdits, freeCanvas, lineExtra, pageRaster } from './services/canvas.js';
@@ -427,8 +427,12 @@ function lineChoices(f) {
   const items = [];
   const typed = caretLine(state.view, f);
   const typedRest = typed > 0 ? f.Text.replace(/\r\n?/g, '\n').split('\n').slice(typed).join(' ').trim() : '';
-  if (canCopyLine(page, line))
+  if (canCopyLine(page, line)) {
+    items.push({ act: 'blankBelow', icon: 'i-addbelow', label: 'Ajouter une ligne vide en dessous', hint: 'Rangée complète (case de lot, désignation, prix) sous cette rangée. La suite descend.' });
+    if (locate(page, line)?.r > 0)
+      items.push({ act: 'blankAbove', icon: 'i-addabove', label: 'Ajouter une ligne vide au-dessus', hint: 'Rangée complète (case de lot, désignation, prix) au-dessus de cette rangée.' });
     items.push({ act: 'copy', icon: 'i-copy', label: 'Dupliquer la ligne', hint: 'Copie juste en dessous (texte et prix), à corriger. La suite descend.' });
+  }
   if (typedRest && canCopyLine(page, line))
     items.push({ act: 'typed', from: typed, icon: 'i-split', label: 'Séparer ici', hint: `« ${short(typedRest)} » passe dans sa propre ligne, juste en dessous.` });
   else if (canSplit(page, line))
@@ -476,7 +480,10 @@ async function lineAction(item, f) {
   const name = short(firstText(line));
   pushUndo();
   let show = null, msg = '';
-  if (item.act === 'copy') {
+  if (item.act === 'blankBelow' || item.act === 'blankAbove') {
+    show = addBlankLine(page, line, item.act === 'blankAbove');
+    msg = `Ligne vide ajoutée ${item.act === 'blankAbove' ? 'au-dessus de' : 'sous'} « ${name} » : tapez la désignation et les prix. Case de lot vide : tapez le numéro ou « Synchroniser ».`;
+  } else if (item.act === 'copy') {
     show = copyLine(page, line);
     if (show) setExtra(page, show, lineExtra(show));
     msg = `« ${name} » dupliquée juste en dessous : corrigez la quantité et le prix. Case de lot vide : tapez le numéro ou « Synchroniser ».`;
@@ -494,7 +501,7 @@ async function lineAction(item, f) {
     removeAddedRow(page, line);
     msg = 'Ligne ajoutée supprimée, la suite est remontée.';
   }
-  if ((item.act === 'copy' || item.act === 'typed' || item.act === 'split') && !show) {
+  if (['copy', 'typed', 'split', 'blankBelow', 'blankAbove'].includes(item.act) && !show) {
     state.undo.pop();
     updateButtons();
     status('Impossible ici : choisissez une ligne d\'article d\'un tableau.');
@@ -921,13 +928,54 @@ async function exportDialog() {
  * Bouton « Lots » : la 1re fois, la colonne est créée tout de suite, cases vides (on tape les numéros soi-même).
  * Ensuite : synchroniser (remplir tout d'un coup), renuméroter, vider, enlever.
  */
+/**
+ * Pages (et tableaux) qui reçoivent les lots : une case à cocher par page, et par tableau quand la page en a plusieurs.
+ * Proposé : les tableaux qui contiennent des objets (pas une page de garde, une signature, un récapitulatif).
+ * Renvoie l'ensemble des tableaux cochés, ou null (Annuler).
+ */
+async function chooseLotTables() {
+  const list = pages().map((p, i) => ({ i, tables: lotTables(p) }));
+  const item = (i, tables) => {
+    if (tables.length === 0) return `<li class="off"><label><input type="checkbox" disabled> Page ${i + 1} <small>pas de tableau</small></label></li>`;
+    const all = tables.every((x) => defaultLotChoice(state.project, x.table));
+    const sub = tables.length > 1 ? `<ul>${tables.map((x) => `<li><label><input type="checkbox" data-p="${i}" data-t="${x.index}" ${defaultLotChoice(state.project, x.table) ? 'checked' : ''}> ${escapeHtml(short(x.name))}${x.objects ? '' : ' <small>(sans objet)</small>'}</label></li>`).join('')}</ul>` : '';
+    const one = tables.length === 1 ? `data-t="${tables[0].index}"` : '';
+    return `<li><label><input type="checkbox" data-page="${i}" data-p="${i}" ${one} ${all ? 'checked' : ''}> <b>Page ${i + 1}</b> <small>${escapeHtml(short(tables[0].name))}${tables.length > 1 ? ` · ${tables.length} tableaux` : ''}</small></label>${sub}</li>`;
+  };
+  const html = `<p>Cochez les pages qui reçoivent des <b>numéros de lot</b>. Les autres pages ne changent pas.</p>
+    <ul class="list lotpages">${list.map((x) => item(x.i, x.tables)).join('')}</ul>`;
+  const body = () => $('dialogBody');
+  const shown = dialog('Lots : quelles pages ?', html, [{ label: 'Annuler', value: null }, { label: 'OK', value: 'ok', className: 'accent' }], (e) => {
+    const box = e.target.closest?.('input[type=checkbox]');
+    if (!box) return;
+    const p = box.dataset.p;
+    if (box.dataset.page !== undefined) for (const c of body().querySelectorAll(`input[data-p="${p}"][data-t]`)) c.checked = box.checked;
+    else { const subs = [...body().querySelectorAll(`ul ul input[data-p="${p}"]`)]; const head = body().querySelector(`input[data-page="${p}"]`); if (head && subs.length) head.checked = subs.some((c) => c.checked); }
+  });
+  if ((await shown) !== 'ok') return null;
+  const chosen = new Set();
+  for (const c of body().querySelectorAll('input[data-t]')) {
+    if (!c.checked) continue;
+    const page = pages()[+c.dataset.p];
+    if (c.dataset.page !== undefined && page && lotTables(page).length > 1) continue; // la page : ses tableaux sont cochés un par un
+    const t = page?.Tables[+c.dataset.t];
+    if (t) chosen.add(t);
+  }
+  return chosen;
+}
+
 async function lotsDialog() {
   if (!lotsActive(state.project)) {
+    const chosen = await chooseLotTables();
+    if (!chosen) return;
+    if (chosen.size === 0) return status('Aucune page cochée : pas de numéros de lot.');
     pushUndo();
+    setLotTables(state.project, chosen);
     createEmptyLots(state.project);
     const n = [...objectLines(state.project)].length;
+    const pagesOn = new Set([...objectLines(state.project)].map((o) => pages().indexOf(o.page) + 1));
     await refreshView();
-    status(`Colonne des lots créée : ${n} cases vides. Touchez une case pour taper un numéro (0 = absent : la ligne passe après le dernier lot).`);
+    status(`Colonne des lots créée sur ${pagesOn.size > 1 ? 'les pages' : 'la page'} ${[...pagesOn].join(', ')} : ${n} cases vides. Touchez une case pour taper un numéro (0 = absent : la ligne passe après le dernier lot).`);
     scheduleSave();
     return;
   }
@@ -943,6 +991,7 @@ async function lotsDialog() {
     <label>Renuméroter à partir de <input id="lotStart" type="number" inputmode="numeric" min="0" value="${/^\d+$/.test(first) ? first : 1}"></label>`;
   const shown = dialog('Numéros de lot', html, [
     { label: 'Synchroniser automatiquement', value: 'sync', className: 'accent' },
+    { label: 'Pages et tableaux…', value: 'pages' },
     { label: 'Renuméroter tout', value: 'number' },
     { label: 'Vider les cases', value: 'empty' },
     { label: 'Enlever la colonne', value: 'clear', className: 'danger' },
@@ -956,7 +1005,15 @@ async function lotsDialog() {
     scheduleSave();
   };
   const choice = await shown;
-  if (choice === 'number') {
+  if (choice === 'pages') {
+    const chosen = await chooseLotTables();
+    if (!chosen) return frameChanged && refreshView();
+    pushUndo();
+    setLotTables(state.project, chosen);
+    if (!lotsActive(state.project) && chosen.size > 0) createEmptyLots(state.project);
+    const pagesOn = new Set([...objectLines(state.project)].map((o) => pages().indexOf(o.page) + 1));
+    status(pagesOn.size ? `Lots sur ${pagesOn.size > 1 ? 'les pages' : 'la page'} ${[...pagesOn].join(', ')} (les numéros déjà tapés restent).` : 'Plus aucune page avec des lots.');
+  } else if (choice === 'number') {
     pushUndo();
     const start = parseInt($('lotStart')?.value ?? '1', 10);
     numberLots(state.project, Number.isFinite(start) ? start : 1);
@@ -1173,18 +1230,22 @@ function initButtons() {
     if (!src) return;
     const result = await cropDialog(src, page.Crop);
     if (!result) return status('Recadrage annulé.');
-    if ([...allFields(page)].some(isModified) && !(await confirmDialog('Recadrer la page ?', 'Le texte de cette page va être relu : ses modifications seront perdues.'))) return;
+    if ([...allFields(page)].some(isModified) && !(await confirmDialog('Recadrer la page ?', 'Le texte de cette page va être relu. Les numéros de lot et les corrections des lignes retrouvées sont gardés ; les lignes ajoutées sont perdues.'))) return;
     const fresh = newPage({ Id: page.Id, Source: 'Image', SourceName: page.SourceName, SourceEntry: page.SourceEntry, QuarterTurns: (page.QuarterTurns + result.turns) % 4 });
     const { flat } = await processImage(fresh, result.source, result.quad, (f, text) => { progress(f); status(`Recadrage : ${text}`); });
     const i = pages().indexOf(page);
     if (i < 0) return;
     pushUndo();
+    const kept = carryOver(page, fresh);
+    for (const l of allLines(fresh)) setExtra(fresh, l, lineExtra(l)); // désignations tapées sur plusieurs lignes
     pages()[i] = fresh;
     state.flats.delete(page); state.oriented.delete(page);
     remember(state.oriented, fresh, result.source, 1);
     resyncLots(state.project);
+    replan();
+    recomputeAll();
     await showPage(i, { flat });
-    status('Page recadrée et relue. Vérifiez les zones à verrouiller.');
+    status(`Page recadrée et relue : ${kept} ligne(s) retrouvée(s) avec leur numéro de lot et leurs corrections. Vérifiez les zones à verrouiller.`);
     scheduleSave();
   });
 

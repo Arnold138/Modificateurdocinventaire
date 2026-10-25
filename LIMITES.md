@@ -12,6 +12,8 @@
 - **Ombres, éclairage inégal** : le seuil adaptatif les atténue. Une ombre qui coupe un filet peut faire perdre une rangée (deux rangées fusionnées).
 - **Feuille courbée, pliée, pas à plat** : la perspective corrige un plan, pas une courbure ; des filets courbes peuvent ne pas être détectés.
 - **Feuille claire sur fond clair** : les coins ne sont pas trouvés → « Recadrer » et placer les 4 poignées à la main.
+- **Scan, PDF** : quand le papier touche les quatre bords de l'image, la page entière est gardée (sinon une grande case blanche d'un tableau qui touche les bords pouvait être prise pour la feuille : page 6 de « BEENDHI prisé »). Une photo de feuille posée sur un fond clair qui remplit toute l'image est donc aussi gardée entière : « Recadrer » si besoin.
+- **Recadrer** relit le texte : chaque ligne relue reprend le numéro de lot et les corrections de la ligne d'avant **de même texte lu**. Une ligne lue différemment après recadrage perd les siens (à retaper) ; les lignes ajoutées sont perdues.
 - **Reflets, flash** : zone illisible, à ressaisir à la main.
 
 ## Tableaux
@@ -37,6 +39,9 @@
 
 ## Numéros de lot
 
+- **Pages et tableaux** : seuls les tableaux cochés ont des lots ; « Synchroniser » ne numérote qu'eux. La proposition (tableaux d'objets) écarte les cadres à une colonne, les récapitulatifs (« I - … », « II - … ») et les tableaux sans objet ; elle se corrige d'un toucher. Le nom affiché d'un tableau est sa 1re ligne d'objet telle qu'elle a été lue.
+- **Lignes illisibles** (bandes grisées des en-têtes et totaux lues comme du charabia) : pas d'objet sans montant lisible (chiffres ou « mémoire ») ni début d'objet (« 1 … », « +/- 20 … ») ni texte lisible. Une rangée d'en-tête ou de total n'a jamais d'objet. Une ligne réelle écartée à tort : « + ».
+
 - **Un objet = la ligne d'article qui porte les valeurs** (ou la première ligne de la rangée) : les lignes de suite (« CD3+ +/- 14130 heures ») n'ont pas de numéro. Si une rangée imprimée contient en réalité deux objets, l'un des deux n'aura pas de numéro : corriger le type de ligne ou taper le numéro voulu.
 - **La colonne tient dans la marge gauche** : le tableau n'est jamais déplacé. Marge étroite (photo recadrée au ras de la feuille, tableau près du bord) → colonne étroite et numéros réduits. Sous 8 pixels de marge, pas de colonne tracée.
 - **Où est la colonne** : de l'en-tête au dernier objet de chaque tableau ; rien sur les totaux, le récapitulatif (« I - … », « II - … », TOTAL GENERAL) ni sous le dernier objet. Une ligne de récapitulatif est reconnue à son numéro romain suivi d'un tiret.
@@ -51,7 +56,9 @@
 - **Retour en arrière** : 30 actions, pendant la session (pas après avoir fermé l'app). Le texte tapé dans une case compte pour une seule action jusqu'à ce qu'on change de case.
 - **Orthographe** : correcteur de l'appareil (iPhone/iPad, Windows), en français si le clavier est en français. Il n'est actif que dans la désignation.
 
-## Lignes ajoutées (Dupliquer, Séparer ici)
+## Lignes ajoutées (Ligne vide, Dupliquer, Séparer ici)
+
+- **Ligne vide** : même hauteur que la ligne touchée (une ligne de texte), filets du tableau prolongés depuis cette rangée ; sa case de lot existe même vide. Pas au-dessus de l'en-tête.
 
 - **Dupliquer** ajoute la copie **sous toute la rangée** de la ligne : si la rangée imprimée contient plusieurs lignes, la copie vient après la dernière. Seule la ligne touchée est copiée (pas ses lignes de suite).
 - La copie reprend les **pixels** de la ligne (de l'interligne au-dessus à celui d'en dessous) : si la lecture avait mal découpé deux lignes collées, un bout de la ligne voisine peut apparaître en haut ou en bas de la copie. Retaper la case le masque.

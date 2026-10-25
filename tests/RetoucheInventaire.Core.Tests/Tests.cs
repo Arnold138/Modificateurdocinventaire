@@ -905,6 +905,7 @@ public static class Tests
         var vest = FindLine(a, "2 vestiaires avec 1 porte en métal");
         vest.Cells[0].Text = "2 vestiaires avec 1 porte en métal\nLOT 6 : 1 table de travail";
         Rows.SplitTypedText(a, vest, 1)!.Cells[1].Text = "20";
+        Rows.AddBlank(a, FindLine(a, "1 diable à plateau à roulettes"), above: true)!.Cells[0].Text = "Ajoutée au-dessus";
         Lots.CreateEmpty(p);
         Lots.FillAutomatically(p);
         Totals.Recompute(p, Arrangement.Build(p));
@@ -925,6 +926,85 @@ public static class Tests
         ProjectStore.Save(path, p, new Dictionary<string, byte[]>());
         var back = ProjectStore.Load(path).Project;
         Equal(RoundJson(p.Pages[1]), RoundJson(back.Pages[1]), "relu à l'identique");
+    }
+
+    public static void T_Ligne_vide_au_dessus_en_dessous()
+    {
+        var p = new InventoryProject();
+        p.Pages.Add(Fixtures.Analyze("page5"));
+        var page = p.Pages[0];
+        string before = RoundJson(page);
+        var produits = FindLine(page, "PRODUITS FINIS");
+        var total = FindLine(page, "TOTAL STOCK");
+        var t = page.Tables.First(x => x.Rows.Any(r => r.Lines.Contains(produits)));
+        var below = Rows.AddBlank(page, produits)!;
+        int rb = t.Rows.FindIndex(r => r.Lines.Contains(below));
+        Check(t.Rows[rb - 1].Lines.Contains(produits) && t.Rows[rb + 1].Lines.Contains(total), "entre PRODUITS FINIS et TOTAL STOCK");
+        Check(below.Cells.All(c => c.Text == "" && c.OriginalText == ""), "cases vides");
+        Lots.CreateEmpty(p);
+        Check(below.LotSlot && !total.LotSlot, "case de lot vide sur la ligne vide, pas sur le total");
+        var above = Rows.AddBlank(page, produits, above: true)!;
+        Check(t.Rows[t.Rows.FindIndex(r => r.Lines.Contains(above)) + 1].Lines.Contains(produits), "juste au-dessus");
+        Lots.FillAutomatically(p);
+        Equal(int.Parse(produits.Lot) - 1, int.Parse(above.Lot), "numérotée avant");
+        Equal(int.Parse(produits.Lot) + 1, int.Parse(below.Lot), "numérotée après");
+        Check(Rows.AddBlank(page, FindLine(page, "II - STOCK")) is null, "pas sur l'en-tête");
+        Equal(page.Height, PageLayout.Stretch(Fixtures.Load("page5").Image, page).Height, "image");
+        Lots.Clear(p);
+        Rows.RemoveAdded(page, above);
+        Rows.RemoveAdded(page, below);
+        Equal(before, RoundJson(page), "page revenue à l'origine");
+    }
+
+    public static void T_Lots_page_par_page()
+    {
+        var p = ThreePages();
+        var choices = p.Pages.Select(Lots.LotTables).ToList();
+        Check(choices[0].Any(x => x.Objects) && choices[2].Any(x => x.Objects), "pages d'objets proposées");
+        var chosen = choices[0].Select(x => x.Table).ToHashSet();
+        Lots.SetTables(p, chosen);
+        Lots.CreateEmpty(p);
+        Lots.FillAutomatically(p);
+        Equal("0", string.Join(",", Lots.ObjectLines(p).Select(o => p.Pages.IndexOf(o.Page)).Distinct()), "seulement la page 1");
+        Check(p.Pages[1].AllLines().All(l => !l.LotSlot && l.Lot.Length == 0), "page 2 sans case");
+        string first = Lots.ObjectLines(p).First().Line.Lot;
+        chosen.Add(choices[2][0].Table);
+        Lots.SetTables(p, chosen);
+        Equal(first, Lots.ObjectLines(p).First().Line.Lot, "numéros gardés");
+        Check(Lots.ObjectLines(p).Any(o => o.Page == p.Pages[2]) && Lots.ObjectLines(p).All(o => o.Page != p.Pages[2] || o.Table == choices[2][0].Table), "un seul tableau de la page 3");
+        Lots.SetTables(p, new HashSet<Table>());
+        Check(!Lots.IsActive(p), "plus aucun lot");
+    }
+
+    public static void T_Recadrer_garde_lots_et_corrections()
+    {
+        var p = new InventoryProject();
+        p.Pages.Add(Fixtures.Analyze("page1"));
+        Lots.CreateEmpty(p);
+        Lots.FillAutomatically(p);
+        var old = p.Pages[0];
+        var rolls = FindLine(old, "2 rolls en métal");
+        Lots.Set(p, rolls, "42");
+        rolls.Cells[1].Text = "70";
+        var fresh = Fixtures.Analyze("page1");
+        int kept = PageEdits.CarryOver(old, fresh);
+        Check(kept > 25, $"lignes retrouvées ({kept})");
+        p.Pages[0] = fresh;
+        Lots.Resync(p);
+        Equal("42", FindLine(fresh, "2 rolls en métal").Lot, "numéro gardé");
+        Equal("70", FindLine(fresh, "2 rolls en métal").Cells[1].Text, "correction gardée");
+        Equal(FindLine(old, "1 table pliante").Lot, FindLine(fresh, "1 table pliante").Lot, "les autres numéros aussi");
+    }
+
+    public static void T_Cadrage_scan_qui_touche_les_bords()
+    {
+        int w = 800, h = 1100;
+        var data = Enumerable.Repeat((byte)250, w * h).ToArray();
+        void Line(int x0, int y0, int x1, int y1) { for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) data[y * w + x] = 20; }
+        for (int y = 60; y < h; y += 40) Line(40, y, w - 1, y + 1);
+        foreach (int x in new[] { 40, 600, 700, w - 3 }) Line(x, 60, x + 1, h - 1);
+        var q = PageDetector.Detect(new Raster(w, h, 1, data));
+        Equal($"0,0 {w - 1},{h - 1}", $"{q.TopLeft.X},{q.TopLeft.Y} {q.BottomRight.X},{q.BottomRight.Y}", "page entière");
     }
 
     // ---------- Repli sans filets ----------

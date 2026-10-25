@@ -165,6 +165,9 @@ export function detectPage(image) {
   let brightCount = 0;
   for (let i = 0; i < bright.length; i++) if (small.data[i] > thr) { bright[i] = 1; brightCount++; }
   if (brightCount > 0.97 * w * h) return full;
+  // Scan, PDF, capture : le papier touche les quatre bords de l'image (une photo a un fond sombre autour).
+  // Sans ce garde-fou, une grande case blanche d'un tableau qui touche les bords était prise pour la feuille.
+  if (paperTouchesEdges(bright, w, h)) return full;
 
   const label = new Int32Array(w * h), queue = new Int32Array(w * h);
   let bestLabel = 0, bestSize = 0, current = 0;
@@ -204,6 +207,15 @@ export function detectPage(image) {
   const fp = Quad.points(full);
   const nearFull = Quad.points(quad).every((p, i) => Math.hypot(p.X - fp[i].X, p.Y - fp[i].Y) < tol);
   return nearFull ? full : quad;
+}
+
+/** Les quatre bords (à 2 px du bord de l'image réduite) sont clairs à 90 % au moins. */
+export function paperTouchesEdges(bright, w, h) {
+  if (w < 8 || h < 8) return false;
+  const d = 2;
+  const side = (n, at) => { let c = 0; for (let i = 0; i < n; i++) c += bright[at(i)]; return c * 10 >= n * 9; };
+  return side(w, (x) => d * w + x) && side(w, (x) => (h - 1 - d) * w + x)
+    && side(h, (y) => y * w + d) && side(h, (y) => y * w + (w - 1 - d));
 }
 
 function inset(q, d) {

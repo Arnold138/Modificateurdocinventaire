@@ -1,3 +1,4 @@
+using System.Text;
 namespace RetoucheInventaire.Core.Model;
 
 /// <summary>
@@ -19,18 +20,67 @@ public static class Lots
 
     public static IEnumerable<Row> OrderedRows(Table table) => RowOrder(table).Select(r => table.Rows[r]);
 
-    /// <summary>Lignes d'objet, dans l'ordre d'affichage (pages, tableaux, rangées déplacées à la main).</summary>
+    /// <summary>Lignes d'objet, dans l'ordre d'affichage (pages, tableaux, rangées déplacées à la main), sur les tableaux choisis.</summary>
     public static IEnumerable<(Page Page, Table Table, int Row, PrintedLine Line)> ObjectLines(InventoryProject project)
     {
         foreach (var page in project.Pages)
             foreach (var table in page.Tables)
+            {
+                if (table.LotsOff) continue;
                 foreach (var r in RowOrder(table))
                 {
                     var row = table.Rows[r];
-                    var pick = DefaultPick(row);
+                    var pick = PickOf(row);
                     foreach (var line in row.Lines)
                         if (IsObject(line, pick)) yield return (page, table, r, line);
                 }
+            }
+    }
+
+    /// <summary>Objet d'une rangée : la règle, ou la 1re ligne d'une rangée ajoutée ou séparée (même vide : « Ajouter une ligne vide »).</summary>
+    private static PrintedLine? PickOf(Row row) =>
+        DefaultPick(row) ?? (row.Inserted != null ? row.Lines.FirstOrDefault(l => l.Kind == LineKind.Article && !l.NoLot && (l.Copy || l.FirstText.Length > 0)) : null);
+
+    // ---------- Lots page par page, tableau par tableau ----------
+
+    /// <summary>« II - STOCK », « [- MOBILIER » (lecture abîmée) : rubrique numérotée d'un récapitulatif.</summary>
+    private static readonly System.Text.RegularExpressions.Regex RecapLike = new(@"^\W{0,2}[IVXLliJj1|!{\[]{1,5}\s*[-–.]\s+\S");
+
+    /// <summary>
+    /// Le tableau est un tableau d'objets (proposé pour les lots) : au moins deux colonnes de montants et des objets selon la
+    /// règle ; pas un cadre de texte (en-tête de l'étude, signature), ni un récapitulatif (« I - MOBILIER… 148 760 »).
+    /// </summary>
+    public static bool TableHasObjects(Table table)
+    {
+        if (!table.HasGrid || table.RowYs.Count < 2 || table.ColumnXs.Count < 4) return false;
+        var withValues = table.Rows.SelectMany(r => r.Lines).Where(l => l.Kind != LineKind.EnTete && l.Cells.Skip(1).Any(c => !string.IsNullOrWhiteSpace(c.Text))).ToList();
+        if (withValues.Count > 0 && withValues.Count(l => RecapLike.IsMatch(l.FirstText)) * 2 >= withValues.Count) return false;
+        return table.Rows.Any(row => { var pick = PickOf(row); return row.Lines.Any(l => IsObject(l, pick)); });
+    }
+
+    public sealed record LotTable(Table Table, int Index, string Name, bool Objects);
+
+    /// <summary>Tableaux d'une page qui peuvent recevoir des lots (avec leur nom : 1re ligne d'en-tête ou de texte).</summary>
+    public static List<LotTable> LotTables(Page page) =>
+        page.Tables.Select((t, i) => (t, i))
+            .Where(x => x.t.Rows.Any(r => r.Lines.Any(l => l.FirstText.Length > 0)))
+            .Select(x =>
+            {
+                // Nom : la 1re ligne d'objet (bien lue), sinon l'en-tête ou la 1re ligne de texte.
+                var lines = x.t.Rows.SelectMany(r => r.Lines).ToList();
+                var head = x.t.Rows.Select(PickOf).FirstOrDefault(l => l != null && l.FirstText.Length > 0)
+                    ?? lines.FirstOrDefault(l => l.Kind == LineKind.EnTete && l.FirstText.Length > 0) ?? lines.FirstOrDefault(l => l.FirstText.Length > 0);
+                return new LotTable(x.t, x.i, head?.FirstText ?? $"Tableau {x.i + 1}", TableHasObjects(x.t));
+            }).ToList();
+
+    /// <summary>Choix proposé : les tableaux qui contiennent des objets (déjà choisis si les lots existent).</summary>
+    public static bool DefaultChoice(InventoryProject project, Table table) => IsActive(project) ? !table.LotsOff : TableHasObjects(table);
+
+    /// <summary>Applique le choix (tableaux cochés) : les autres n'ont plus de case ni de numéro ; rien d'autre ne change.</summary>
+    public static void SetTables(InventoryProject project, ISet<Table> chosen)
+    {
+        foreach (var page in project.Pages) foreach (var t in page.Tables) t.LotsOff = !chosen.Contains(t);
+        Resync(project);
     }
 
     /// <summary>
@@ -39,10 +89,29 @@ public static class Lots
     /// </summary>
     private static PrintedLine? DefaultPick(Row row)
     {
+        // Rangée d'en-tête ou de total (souvent sur fond grisé, où la lecture invente des lignes) : jamais d'objet.
+        if (row.Lines.Any(l => l.Kind is LineKind.EnTete or LineKind.Total)) return null;
         var articles = row.Lines.Where(l => l.Kind == LineKind.Article && !l.OutsideTable && !Analysis.LineClassifier.IsRomanHeading(l.FirstText)).ToList();
         if (articles.Count == 0) return null;
         var line = articles.FirstOrDefault(l => l.Cells.Skip(1).Any(c => !string.IsNullOrWhiteSpace(c.Text))) ?? articles[0];
-        return line.Cells.All(c => string.IsNullOrWhiteSpace(c.Text)) ? null : line;
+        if (line.Cells.All(c => string.IsNullOrWhiteSpace(c.Text))) return null;
+        // Lecture parasite (fond grisé, traits lus comme du texte) : ni montant lisible, ni début d'objet (« 1 … », « +/- 20 … »).
+        if (!row.Lines.Any(l => l.Cells.Skip(1).Any(c => AmountLike.IsMatch(c.Text))) && !ItemStartPick.IsMatch(line.FirstText) && !PlainText(line.FirstText)) return null;
+        return line;
+    }
+
+    /// <summary>Montant (« 25 000 », « 1 500,50 », « mémoire ») : au moins un chiffre, rien d'autre que des chiffres et séparateurs.</summary>
+    private static readonly System.Text.RegularExpressions.Regex AmountLike = new(@"^\s*(?:m[ée]moire|[+-]?\d[\d\s\u00A0\u202F.,]*)\s*€?\s*$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    private static readonly System.Text.RegularExpressions.Regex ItemStartPick = new(@"^\s*(\+/-\s*)?\d{1,3}\s+\p{L}");
+    private static readonly System.Text.RegularExpressions.Regex PlainWord = new(@"^\p{L}{3,}[\p{L}'’.,:-]*$");
+
+    /// <summary>Texte lisible : au moins deux mots de trois lettres ou plus, et plus de lettres que de signes.</summary>
+    private static bool PlainText(string t)
+    {
+        int words = t.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Count(w => PlainWord.IsMatch(w));
+        var runes = t.EnumerateRunes().ToList();
+        int letters = runes.Count(Rune.IsLetter), signs = runes.Count(r => !Rune.IsLetter(r) && !Rune.IsDigit(r) && !Rune.IsWhiteSpace(r));
+        return words >= 2 && letters > 3 * signs;
     }
 
     private static bool IsObject(PrintedLine line, PrintedLine? pick) =>

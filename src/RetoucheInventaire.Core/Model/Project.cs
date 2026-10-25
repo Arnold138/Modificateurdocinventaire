@@ -151,6 +151,8 @@ public sealed class Table
     public List<Row> Rows { get; set; } = [];
     /// <summary>Ordre d'affichage des rangées (rangées déplacées à la main), null : l'ordre imprimé.</summary>
     public List<int>? RowOrder { get; set; }
+    /// <summary>Pas de numéros de lot dans ce tableau (lots activés page par page, tableau par tableau).</summary>
+    public bool LotsOff { get; set; }
 }
 
 public sealed class Page

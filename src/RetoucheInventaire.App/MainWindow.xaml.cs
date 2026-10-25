@@ -620,8 +620,15 @@ public sealed partial class MainWindow : Window
         string rest = typed > 0 ? string.Join(" ", f.Text.Replace("\r\n", "\n").Split('\n').Skip(typed)).Trim() : "";
         bool canCopy = Rows.CanCopy(page, line);
         if (canCopy)
+        {
+            list.Add(new("Ajouter une ligne vide en dessous", "Rangée complète (case de lot, désignation, prix) sous cette rangée. La suite descend.", "\uE710",
+                () => _ = LineActionAsync("blankBelow", 0, f)));
+            if (Rows.Locate(page, line) is { R: > 0 })
+                list.Add(new("Ajouter une ligne vide au-dessus", "Rangée complète (case de lot, désignation, prix) au-dessus de cette rangée.", "\uE710",
+                    () => _ = LineActionAsync("blankAbove", 0, f)));
             list.Add(new("Dupliquer la ligne", "Copie juste en dessous (texte et prix), à corriger. La suite descend.", "\uE8C8",
                 () => _ = LineActionAsync("copy", 0, f)));
+        }
         if (rest.Length > 0 && canCopy)
             list.Add(new("Séparer ici", $"« {Short(rest)} » passe dans sa propre ligne, juste en dessous.", "\uE8C6",
                 () => _ = LineActionAsync("typed", typed, f)));
@@ -668,6 +675,11 @@ public sealed partial class MainWindow : Window
         string msg = "";
         switch (act)
         {
+            case "blankBelow":
+            case "blankAbove":
+                show = Rows.AddBlank(page, line, above: act == "blankAbove");
+                msg = $"Ligne vide ajoutée {(act == "blankAbove" ? "au-dessus de" : "sous")} « {name} » : tapez la désignation et les prix. Case de lot vide : tapez le numéro ou « Synchroniser ».";
+                break;
             case "copy":
                 show = Rows.Copy(page, line);
                 if (show != null) PageLayout.SetExtra(page, show, PageView.LineExtra(show));
@@ -695,7 +707,7 @@ public sealed partial class MainWindow : Window
                 msg = "Ligne ajoutée supprimée, la suite est remontée.";
                 break;
         }
-        if ((act is "copy" or "typed" or "split") && show is null)
+        if ((act is "copy" or "typed" or "split" or "blankBelow" or "blankAbove") && show is null)
         {
             _undo.RemoveAt(_undo.Count - 1);
             UpdateCommands();
@@ -842,15 +854,86 @@ public sealed partial class MainWindow : Window
     /// Bouton « Lots » : la 1re fois, la colonne est créée tout de suite, cases vides (on tape les numéros soi-même).
     /// Ensuite : synchroniser (remplir tout d'un coup), renuméroter, vider, enlever.
     /// </summary>
+    /// <summary>« la page 4 » / « les pages 4, 5, 6 » : pages qui ont des cases de lot.</summary>
+    private string PagesWithLots()
+    {
+        var pages = Lots.ObjectLines(_project).Select(o => _project.Pages.IndexOf(o.Page) + 1).Distinct().ToList();
+        return (pages.Count > 1 ? "les pages " : "la page ") + string.Join(", ", pages);
+    }
+
+    /// <summary>
+    /// Pages (et tableaux) qui reçoivent les lots : une case à cocher par page, et par tableau quand la page en a plusieurs.
+    /// Proposé : les tableaux qui contiennent des objets (pas une page de garde, une signature, un récapitulatif).
+    /// Renvoie les tableaux cochés, ou null (Annuler).
+    /// </summary>
+    private async Task<HashSet<Table>?> ChooseLotTablesAsync()
+    {
+        var list = new StackPanel { Spacing = 4 };
+        list.Children.Add(new TextBlock { Text = "Cochez les pages qui reçoivent des numéros de lot. Les autres pages ne changent pas.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) });
+        var boxes = new List<(CheckBox Box, Table Table)>();
+        for (int i = 0; i < _project.Pages.Count; i++)
+        {
+            var tables = Lots.LotTables(_project.Pages[i]);
+            if (tables.Count == 0)
+            {
+                list.Children.Add(new CheckBox { Content = $"Page {i + 1} — pas de tableau", IsEnabled = false, MinHeight = 40 });
+                continue;
+            }
+            var pageBox = new CheckBox
+            {
+                MinHeight = 40,
+                Content = new TextBlock
+                {
+                    Inlines =
+                    {
+                        new Microsoft.UI.Xaml.Documents.Run { Text = $"Page {i + 1}  ", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold },
+                        new Microsoft.UI.Xaml.Documents.Run { Text = Short(tables[0].Name) + (tables.Count > 1 ? $" · {tables.Count} tableaux" : "") },
+                    },
+                },
+                IsChecked = tables.All(x => Lots.DefaultChoice(_project, x.Table)),
+            };
+            list.Children.Add(pageBox);
+            if (tables.Count == 1) { boxes.Add((pageBox, tables[0].Table)); continue; }
+            var subs = new List<CheckBox>();
+            foreach (var x in tables)
+            {
+                var sub = new CheckBox
+                {
+                    Content = Short(x.Name) + (x.Objects ? "" : " (sans objet)"), MinHeight = 36, Margin = new Thickness(32, 0, 0, 0),
+                    IsChecked = Lots.DefaultChoice(_project, x.Table),
+                };
+                subs.Add(sub);
+                boxes.Add((sub, x.Table));
+                list.Children.Add(sub);
+            }
+            bool syncing = false;
+            pageBox.Click += (_, _) => { syncing = true; foreach (var c in subs) c.IsChecked = pageBox.IsChecked == true; syncing = false; };
+            foreach (var c in subs) c.Click += (_, _) => { if (!syncing) pageBox.IsChecked = subs.Any(x => x.IsChecked == true); };
+        }
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot, Title = "Lots : quelles pages ?",
+            Content = new ScrollViewer { Content = list, MaxHeight = 520 },
+            PrimaryButtonText = "OK", CloseButtonText = "Annuler", DefaultButton = ContentDialogButton.Primary,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return null;
+        return boxes.Where(b => b.Box.IsChecked == true).Select(b => b.Table).ToHashSet();
+    }
+
     private async void Lots_Click(object sender, RoutedEventArgs e)
     {
         if (_busy || _project.Pages.Count == 0) return;
         if (!Lots.IsActive(_project))
         {
+            var chosen = await ChooseLotTablesAsync();
+            if (chosen is null) return;
+            if (chosen.Count == 0) { SetStatus("Aucune page cochée : pas de numéros de lot."); return; }
             PushUndo();
+            Lots.SetTables(_project, chosen);
             Lots.CreateEmpty(_project);
+            Replan();
             await RefreshViewAsync();
-            SetStatus($"Colonne des lots créée : {Lots.ObjectLines(_project).Count()} cases vides. Touchez une case pour taper un numéro (0 = absent : la ligne passe après le dernier lot).");
+            SetStatus($"Colonne des lots créée sur {PagesWithLots()} : {Lots.ObjectLines(_project).Count()} cases vides. Touchez une case pour taper un numéro (0 = absent : la ligne passe après le dernier lot).");
             ScheduleAutosave();
             return;
         }
@@ -902,6 +985,9 @@ public sealed partial class MainWindow : Window
         ContentDialog? dialog = null;
         string choice = "";
         var extra = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        var pagesButton = new Button { Content = "Pages et tableaux…", MinHeight = 44 };
+        pagesButton.Click += (_, _) => { choice = "pages"; dialog?.Hide(); };
+        extra.Children.Add(pagesButton);
         var empty = new Button { Content = "Vider les cases", MinHeight = 44 };
         empty.Click += (_, _) => { choice = "empty"; dialog?.Hide(); };
         var clear = new Button { Content = "Enlever la colonne", MinHeight = 44, Foreground = new SolidColorBrush(ColorHelper.FromArgb(255, 180, 40, 40)) };
@@ -925,6 +1011,15 @@ public sealed partial class MainWindow : Window
                 PushUndo();
                 SyncLots();
                 return;
+            case "pages":
+                var chosen = await ChooseLotTablesAsync();
+                if (chosen is null) break;
+                PushUndo();
+                Lots.SetTables(_project, chosen);
+                if (!Lots.IsActive(_project) && chosen.Count > 0) Lots.CreateEmpty(_project);
+                SetStatus(Lots.ObjectLines(_project).Any() ? $"Lots sur {PagesWithLots()} (les numéros déjà tapés restent)." : "Plus aucune page avec des lots.");
+                frameChanged = true;
+                break;
             case "empty":
                 if (!await ConfirmAsync("Vider les cases ?", "Tous les numéros seront effacés (les 0 aussi) ; vous les taperez vous-même (bouton ↶ pour revenir en arrière).", "Vider")) break;
                 PushUndo();
@@ -1376,7 +1471,7 @@ public sealed partial class MainWindow : Window
     {
         if (_cropPage is not { } page || _cropSource is not { } source) return;
         if (page.AllFields().Any(f => f.IsModified)
-            && !await ConfirmAsync("Recadrer la page ?", "Le texte de cette page va être relu : ses modifications seront perdues.")) return;
+            && !await ConfirmAsync("Recadrer la page ?", "Le texte de cette page va être relu. Les numéros de lot et les corrections des lignes retrouvées sont gardés ; les lignes ajoutées sont perdues.")) return;
 
         CropOverlay.Visibility = Visibility.Collapsed;
         var quad = new Quad(_corners[0], _corners[1], _corners[2], _corners[3]);
@@ -1395,12 +1490,16 @@ public sealed partial class MainWindow : Window
             int index = _project.Pages.IndexOf(page);
             if (index < 0) return; // page retirée entre-temps
             PushUndo();
+            int kept = PageEdits.CarryOver(page, fresh);
+            foreach (var l in fresh.AllLines().ToList()) PageLayout.SetExtra(fresh, l, PageView.LineExtra(l)); // désignations sur plusieurs lignes
             _project.Pages[index] = fresh;
             Forget(page);
             Remember(_oriented, fresh, source, 2);
             Lots.Resync(_project);
+            Replan();
+            RecomputeTotals();
             await ShowPageAsync(index, image);
-            SetStatus("Page recadrée et relue. Vérifiez les zones à verrouiller.");
+            SetStatus($"Page recadrée et relue : {kept} ligne(s) retrouvée(s) avec leur numéro de lot et leurs corrections. Vérifiez les zones à verrouiller.");
             ScheduleAutosave();
         });
         _cropPage = null;

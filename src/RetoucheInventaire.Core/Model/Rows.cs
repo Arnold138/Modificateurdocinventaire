@@ -85,13 +85,15 @@ public static class Rows
         for (int i = 0; i < t.Rows.Count && i + 1 < t.RowYs.Count; i++) t.Rows[i].Bounds = RectD.FromEdges(l, t.RowYs[i], r, t.RowYs[i + 1]);
     }
 
-    /// <summary>Ordre d'affichage : la rangée <paramref name="index"/> (nouvelle) se place juste après <paramref name="after"/>.</summary>
-    private static void OrderInsert(Table t, int index, int after)
+    /// <summary>Ordre d'affichage : la rangée <paramref name="index"/> (nouvelle) se place juste après (ou avant) la rangée <paramref name="anchor"/> (indice d'avant).</summary>
+    private static void OrderInsert(Table t, int index, int anchor, bool before = false)
     {
         if (t.RowOrder is null) return;
         var old = new Table { Rows = t.Rows.Take(t.Rows.Count - 1).ToList(), RowOrder = t.RowOrder };
-        var o = Lots.RowOrder(old).Select(x => x >= index ? x + 1 : x).ToList();
-        o.Insert(o.IndexOf(after) + 1, index);
+        int Shift(int x) => x >= index ? x + 1 : x;
+        var o = Lots.RowOrder(old).Select(Shift).ToList();
+        int k = o.IndexOf(Shift(anchor));
+        o.Insert(before ? k : k + 1, index);
         t.RowOrder = o;
     }
 
@@ -113,13 +115,14 @@ public static class Rows
 
     /// <summary>
     /// « Dupliquer la ligne » : rangée ajoutée juste sous la rangée de la ligne, avec une copie de la ligne.
-    /// <paramref name="blank"/> : rangée vierge de même hauteur (filets du tableau seulement) et cases vides, sans texte d'origine.
+    /// <paramref name="blank"/> : rangée vierge de même structure (filets du tableau, case de lot vide, désignation et prix vides).
+    /// <paramref name="above"/> : la rangée est posée juste au-dessus de celle de la ligne (sinon juste en dessous).
     /// Renvoie la nouvelle ligne (la hauteur de son texte sur plusieurs lignes est à recalculer par l'écran).
     /// </summary>
-    public static PrintedLine? Copy(Page page, PrintedLine line, bool blank = false)
+    public static PrintedLine? Copy(Page page, PrintedLine line, bool blank = false, bool above = false)
     {
         var at = Locate(page, line);
-        if (at is null || !CanCopy(page, line)) return null;
+        if (at is null || !CanCopy(page, line) || (above && at.R == 0)) return null;
         var (t, r, _, _) = at;
         var (top, bottom) = LineBand(at, line);
         int filetTop = Arrangement.CutY(t.RowYs[r]);
@@ -135,38 +138,40 @@ public static class Rows
         // Sous le texte, autant d'espace qu'au-dessus (la ligne copiée peut venir d'une rangée de plusieurs lignes) :
         // un interligne propre, filets verticaux prolongés depuis la rangée la plus nette de la ligne copiée.
         double inkTop = Arrangement.LineTop(line), inkBottom = InkBottom(line);
-        double above = inkTop - top, below = bodyH - (inkBottom - top);
-        int pad = Math.Min(40, Math.Max(0, (int)Math.Ceiling(above - below)));
+        double spaceAbove = inkTop - top, below = bodyH - (inkBottom - top);
+        int pad = Math.Min(40, Math.Max(0, (int)Math.Ceiling(spaceAbove - below)));
         if (pad > 0 && longest is not null)
             parts.Add(new BandPart { Src = longest.Src, Height = pad, Gap = true, Span = longest.Height, Cols = cols, X0 = x0, X1 = x1 });
-        int y = Arrangement.CutY(t.RowYs[r + 1]);
+        int y = Arrangement.CutY(t.RowYs[above ? r : r + 1]);
+        // Cases de la ligne, relevées avant que la bande ne décale la page.
+        var src = line.Cells.Select(f => (F: f, B: PageLayout.BaseBox(line, f), Ink: f.Ink)).ToList();
         var band = PageLayout.InsertBand(page, y, parts, "Copy");
         // Ligne recopiée : mêmes cases, posées dans la nouvelle rangée (même place par rapport à leur rangée).
         int dy = y + Arrangement.Filet - top;
         var copy = new PrintedLine
         {
-            Kind = line.Kind, KindChosenByUser = line.KindChosenByUser, Copy = true,
-            Cells = line.Cells.Select(f =>
+            Kind = blank ? LineKind.Article : line.Kind, KindChosenByUser = !blank && line.KindChosenByUser, Copy = true,
+            Cells = src.Select(c => new Field
             {
-                var b = PageLayout.BaseBox(line, f);
-                return new Field
-                {
-                    Id = $"{page.Id}-{band.Id}-{f.Column}", Column = f.Column,
-                    OriginalText = blank ? "" : f.OriginalText, Text = blank ? "" : f.Text,
-                    Box = b with { Y = b.Y + dy }, Ink = f.Ink.IsEmpty || blank ? RectD.Empty : f.Ink with { Y = f.Ink.Y + dy },
-                    Align = f.Align, Indent = f.Indent, FontSize = f.FontSize, Manual = !blank && f.Manual,
-                    Strikes = blank ? [] : f.Strikes.Select(s => new Strike { Start = s.Start, Length = s.Length, Color = s.Color }).ToList(),
-                    Colors = blank ? [] : f.Colors.Select(s => new Strike { Start = s.Start, Length = s.Length, Color = s.Color }).ToList(),
-                };
+                Id = $"{page.Id}-{band.Id}-{c.F.Column}", Column = c.F.Column,
+                OriginalText = blank ? "" : c.F.OriginalText, Text = blank ? "" : c.F.Text,
+                Box = c.B with { Y = c.B.Y + dy }, Ink = c.Ink.IsEmpty || blank ? RectD.Empty : c.Ink with { Y = c.Ink.Y + dy },
+                Align = c.F.Align, Indent = c.F.Indent, FontSize = c.F.FontSize, Manual = !blank && c.F.Manual,
+                Strikes = blank ? [] : c.F.Strikes.Select(s => new Strike { Start = s.Start, Length = s.Length, Color = s.Color }).ToList(),
+                Colors = blank ? [] : c.F.Colors.Select(s => new Strike { Start = s.Start, Length = s.Length, Color = s.Color }).ToList(),
             }).ToList(),
         };
-        t.RowYs.Insert(r + 1, y + Arrangement.Cut);
-        t.Rows.Insert(r + 1, new Row { Lines = [copy], Inserted = band.Id });
-        OrderInsert(t, r + 1, r);
+        int index = above ? r : r + 1;
+        t.RowYs.Insert(index, y + Arrangement.Cut);
+        t.Rows.Insert(index, new Row { Lines = [copy], Inserted = band.Id });
+        OrderInsert(t, index, r, above);
         RowBounds(t);
         PageEdits.ApplyLocks(page);
         return copy;
     }
+
+    /// <summary>« Ajouter une ligne vide » au-dessus ou en dessous de la rangée de la ligne.</summary>
+    public static PrintedLine? AddBlank(Page page, PrintedLine line, bool above = false) => Copy(page, line, blank: true, above: above);
 
     /// <summary>« Séparer ici » : la ligne et ce qui la suit dans sa rangée forment une rangée à part (filet tracé au-dessus).</summary>
     public static bool Split(Page page, PrintedLine line)

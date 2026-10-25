@@ -412,7 +412,7 @@ public sealed class PageView
             if (line.OutsideTable || entry.CarriedOnly || line.Cells.Count == 0) continue;
             if (LineBand(entry) is not RectD b) continue;
             AddBadge(line, b.CenterY);
-            if (!active) continue;
+            if (!active || entry.Table.LotsOff) continue;
             bool has = Lots.HasCell(line);
             if (!has && !Lots.CanAdd(line, entry.Table.Rows.FirstOrDefault(r => r.Lines.Contains(line)))) continue;
             double h = Math.Max(26, Math.Min(40, b.Height + 6));

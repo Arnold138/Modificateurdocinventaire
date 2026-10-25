@@ -349,3 +349,41 @@ export function findLine(project, field) {
   for (const p of project.Pages) for (const l of allLines(p)) if (l.Cells.includes(field)) return { page: p, line: l };
   return null;
 }
+
+// ---------- Recadrage : ce qui a été fait sur la page est gardé ----------
+
+const keyOf = (s) => (s ?? '').normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim();
+
+/**
+ * Après un recadrage (le texte est relu) : chaque ligne relue reprend, depuis la ligne d'avant de même texte (dans l'ordre),
+ * son numéro de lot, sa case de lot, son type choisi à la main, et les corrections de ses cases (texte, traits, couleurs,
+ * total tapé). Choix des tableaux pour les lots repris dans l'ordre des tableaux. Renvoie le nombre de lignes retrouvées.
+ */
+export function carryOver(old, fresh) {
+  const pool = new Map();
+  for (const l of allLines(old)) {
+    const k = keyOf(l.Cells[0]?.OriginalText);
+    if (!k) continue;
+    if (!pool.has(k)) pool.set(k, []);
+    pool.get(k).push(l);
+  }
+  let found = 0;
+  for (const l of allLines(fresh)) {
+    const k = keyOf(l.Cells[0]?.OriginalText);
+    const o = k ? pool.get(k)?.shift() : null;
+    if (!o) continue;
+    found++;
+    for (const p of ['Lot', 'LotManual', 'LotSlot', 'NoLot', 'ForceLot']) if (o[p] !== undefined) l[p] = o[p];
+    if (o.KindChosenByUser) { l.Kind = o.Kind; l.KindChosenByUser = true; }
+    for (const c of l.Cells) {
+      const oc = o.Cells.find((x) => x.Column === c.Column);
+      if (!oc || keyOf(oc.OriginalText) !== keyOf(c.OriginalText) || c.Locked) continue;
+      if (oc.Text !== oc.OriginalText) c.Text = oc.Text;
+      c.Strikes = (oc.Strikes ?? []).map((x) => ({ ...x }));
+      if (oc.Colors?.length) c.Colors = oc.Colors.map((x) => ({ ...x }));
+      if (oc.Manual) c.Manual = true;
+    }
+  }
+  old.Tables.forEach((t, i) => { if (t.LotsOff && fresh.Tables[i]) fresh.Tables[i].LotsOff = true; });
+  return found;
+}

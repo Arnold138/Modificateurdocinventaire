@@ -49,6 +49,19 @@ export class PageView {
     this.overlay = el('div', 'layer overlay', this.root);
     this.lockpad = el('div', 'layer lockpad', this.root);
     this.initLockPad();
+    // Clic droit : la case qui vient de prendre le focus fait apparaître la barre de la case et la loupe, qui peuvent
+    // se trouver sous le pointeur au moment du menu ; on retient donc la case réellement appuyée (bouton droit).
+    this.onContext = (e) => {
+      const press = this.rightPress && performance.now() - this.rightPress.t < 1500 ? this.rightPress : null;
+      this.rightPress = null;
+      const direct = [...this.inputs].find(([, i]) => i === e.target)?.[0] ?? null;
+      const target = press?.f ?? direct;
+      if (!target || press?.selected) return; // texte déjà sélectionné : menu habituel (copier, coller)
+      e.preventDefault();
+      this.rememberSel?.get(target)?.();
+      this.cb.onLineMenu?.(this, target, { x: e.clientX, y: e.clientY });
+    };
+    document.addEventListener('contextmenu', this.onContext);
     this.build();
   }
 
@@ -69,6 +82,7 @@ export class PageView {
 
   /** Libère la mémoire de l'image (important sur iPhone/iPad). */
   dispose() {
+    document.removeEventListener('contextmenu', this.onContext);
     freeCanvas(this.canvas);
     this.row.remove();
   }
@@ -235,7 +249,7 @@ export class PageView {
         d.style.background = badge[1];
         d.style.top = Rect.cy(b) - 12 + 'px';
       }
-      if (!active) continue;
+      if (!active || entry.table.LotsOff) continue;
       const has = hasLotCell(line);
       if (!has && !canAddLot(line, entry.table.Rows?.find((r) => r.Lines.includes(line)))) continue;
       const btn = el('button', has ? 'gbtn trash' : 'gbtn add', this.gutter);
@@ -392,21 +406,13 @@ export class PageView {
    * Avec du texte sélectionné dans la case, le clic droit garde le menu habituel (copier, coller).
    */
   initLineMenu(input, f, remember) {
-    input.addEventListener('contextmenu', (e) => {
-      // La case vient de prendre le focus : la barre de la case est apparue et a pu décaler la page sous le pointeur.
-      // On garde la case réellement appuyée (bouton droit), pas celle qui se trouve maintenant sous le pointeur.
-      const press = this.rightPress && performance.now() - this.rightPress.t < 1500 ? this.rightPress : null;
-      this.rightPress = null;
-      const target = press?.f ?? f, el = this.inputs.get(target) ?? input;
-      if ((el.selectionEnd ?? 0) > (el.selectionStart ?? 0) && document.activeElement === el) return;
-      e.preventDefault();
-      if (target === f) remember();
-      this.cb.onLineMenu?.(this, target, { x: e.clientX, y: e.clientY });
-    });
+    this.rememberSel ??= new Map();
+    this.rememberSel.set(f, remember);
     let timer = null, start = null;
     const cancel = () => { clearTimeout(timer); timer = null; start = null; };
     input.addEventListener('pointerdown', (e) => {
-      if (e.button === 2) this.rightPress = { f, t: performance.now() };
+      if (e.button === 2)
+        this.rightPress = { f, t: performance.now(), selected: document.activeElement === input && (input.selectionEnd ?? 0) > (input.selectionStart ?? 0) };
       if (e.pointerType === 'mouse' || document.activeElement === input) return; // case en cours de frappe : sélection du texte
       start = { x: e.clientX, y: e.clientY };
       timer = setTimeout(() => {

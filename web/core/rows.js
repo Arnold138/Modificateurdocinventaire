@@ -71,11 +71,13 @@ function rowBounds(t) {
   t.Rows.forEach((row, i) => { if (i + 1 < t.RowYs.length) row.Bounds = Rect.fromEdges(l, t.RowYs[i], r, t.RowYs[i + 1]); });
 }
 
-/** Ordre d'affichage : la rangée `index` (nouvelle) se place juste après `after`. */
-function orderInsert(t, index, after) {
+/** Ordre d'affichage : la rangée `index` (nouvelle) se place juste après (ou avant) la rangée `anchor` (indice d'avant). */
+function orderInsert(t, index, anchor, before = false) {
   if (!Array.isArray(t.RowOrder)) return;
-  const o = rowOrder({ ...t, Rows: t.Rows.slice(0, -1) }).map((x) => (x >= index ? x + 1 : x));
-  o.splice(o.indexOf(after) + 1, 0, index);
+  const shift = (x) => (x >= index ? x + 1 : x);
+  const o = rowOrder({ ...t, Rows: t.Rows.slice(0, -1) }).map(shift);
+  const k = o.indexOf(shift(anchor));
+  o.splice(before ? k : k + 1, 0, index);
   t.RowOrder = o;
 }
 
@@ -100,12 +102,13 @@ function inkBottomOf(l) {
 
 /**
  * « Dupliquer la ligne » : rangée ajoutée juste sous la rangée de la ligne, avec une copie de la ligne.
- * `blank` : rangée vierge de même hauteur (filets du tableau seulement) et cases vides, sans texte d'origine.
+ * `blank` : rangée vierge de même structure (filets du tableau, case de lot vide, désignation et prix vides).
+ * `above` : la rangée est posée juste au-dessus de celle de la ligne (sinon juste en dessous).
  * Renvoie la nouvelle ligne (la hauteur de son texte sur plusieurs lignes est à recalculer par l'écran).
  */
-export function copyLine(page, line, blank = false) {
+export function copyLine(page, line, blank = false, above = false) {
   const at = locate(page, line);
-  if (!at || !canCopyLine(page, line)) return null;
+  if (!at || !canCopyLine(page, line) || (above && at.r === 0)) return null;
   const { table: t, r } = at;
   const { top, bottom } = lineBand(at, line);
   const filetTop = cutY(t.RowYs[r]);
@@ -118,34 +121,37 @@ export function copyLine(page, line, blank = false) {
   // Sous le texte, autant d'espace qu'au-dessus (la ligne copiée peut venir d'une rangée de plusieurs lignes) :
   // un interligne propre, filets verticaux prolongés depuis la rangée la plus nette de la ligne copiée.
   const inkTop = lineTop(line), inkBottom = inkBottomOf(line);
-  const above = inkTop - top, below = bodyH - (inkBottom - top);
-  const pad = Math.min(40, Math.max(0, Math.ceil(above - below)));
+  const spaceAbove = inkTop - top, below = bodyH - (inkBottom - top);
+  const pad = Math.min(40, Math.max(0, Math.ceil(spaceAbove - below)));
   if (pad > 0 && longest) parts.push({ Src: longest.Src, Height: pad, Gap: true, Span: longest.Height, Cols: cols, X0: x0, X1: x1 });
-  const y = cutY(t.RowYs[r + 1]);
+  const y = cutY(t.RowYs[above ? r : r + 1]);
+  // Cases de la ligne, relevées avant que la bande ne décale la page.
+  const src = line.Cells.map((f) => ({ f, b: baseBox(line, f), ink: f.Ink }));
   const band = insertBand(page, y, parts, 'Copy');
   // Ligne recopiée : mêmes cases, posées dans la nouvelle rangée (même place par rapport à leur rangée).
   const dy = y + FILET - top;
   const copy = {
-    Kind: line.Kind, KindChosenByUser: !!line.KindChosenByUser, OutsideTable: false,
+    Kind: blank ? 'Article' : line.Kind, KindChosenByUser: !blank && !!line.KindChosenByUser, OutsideTable: false,
     Lot: '', LotManual: false, LotSlot: false, NoLot: false, ForceLot: false, Extra: 0, ExtraAt: 0, Copy: true,
-    Cells: line.Cells.map((f) => {
-      const b = baseBox(line, f);
-      return {
-        ...f, Id: `${page.Id}-${band.Id}-${f.Column}`, Locked: false,
-        Box: { ...b, Y: b.Y + dy },
-        Ink: Rect.isEmpty(f.Ink) || blank ? Rect.empty() : { ...f.Ink, Y: f.Ink.Y + dy },
-        ...(blank ? { OriginalText: '', Text: '', Manual: false } : {}),
-        Strikes: blank ? [] : (f.Strikes ?? []).map((s) => ({ ...s })), Colors: blank ? [] : (f.Colors ?? []).map((s) => ({ ...s })),
-      };
-    }),
+    Cells: src.map(({ f, b, ink }) => ({
+      ...f, Id: `${page.Id}-${band.Id}-${f.Column}`, Locked: false,
+      Box: { ...b, Y: b.Y + dy },
+      Ink: Rect.isEmpty(ink) || blank ? Rect.empty() : { ...ink, Y: ink.Y + dy },
+      ...(blank ? { OriginalText: '', Text: '', Manual: false } : {}),
+      Strikes: blank ? [] : (f.Strikes ?? []).map((s) => ({ ...s })), Colors: blank ? [] : (f.Colors ?? []).map((s) => ({ ...s })),
+    })),
   };
-  t.RowYs.splice(r + 1, 0, y + CUT);
-  t.Rows.splice(r + 1, 0, { Bounds: Rect.empty(), Lines: [copy], Inserted: band.Id });
-  orderInsert(t, r + 1, r);
+  const index = above ? r : r + 1;
+  t.RowYs.splice(index, 0, y + CUT);
+  t.Rows.splice(index, 0, { Bounds: Rect.empty(), Lines: [copy], Inserted: band.Id });
+  orderInsert(t, index, r, above);
   rowBounds(t);
   applyLocks(page);
   return copy;
 }
+
+/** « Ajouter une ligne vide » au-dessus ou en dessous de la rangée de la ligne. */
+export const addBlankLine = (page, line, above = false) => copyLine(page, line, true, above);
 
 /** « Séparer ici » : la ligne et ce qui la suit dans sa rangée forment une rangée à part (filet tracé au-dessus). */
 export function splitAt(page, line) {

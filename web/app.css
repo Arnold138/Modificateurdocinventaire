@@ -202,3 +202,11 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 .layer.colors { pointer-events: none; }
 .colortext { position: absolute; white-space: pre; overflow: hidden; box-sizing: border-box; }
 .colortext.multi { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Lots : choix des pages et tableaux */
+.lotpages li { display: block; padding: 6px 4px; }
+.lotpages label { display: flex; align-items: center; gap: 10px; min-height: 40px; }
+.lotpages input[type=checkbox] { width: 22px; height: 22px; flex: none; }
+.lotpages small { color: var(--muted); }
+.lotpages ul { margin: 2px 0 0 32px; padding: 0; list-style: none; }
+.lotpages li.off { opacity: .5; }
