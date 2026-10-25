@@ -90,7 +90,7 @@ public static class Lots
     private static PrintedLine? DefaultPick(Row row)
     {
         // Rangée d'en-tête ou de total (souvent sur fond grisé, où la lecture invente des lignes) : jamais d'objet.
-        if (row.Lines.Any(l => l.Kind is LineKind.EnTete or LineKind.Total)) return null;
+        if (row.Lines.Any(l => l.Kind == LineKind.EnTete || Analysis.LineClassifier.LooksLikeTotal(l))) return null;
         var articles = row.Lines.Where(l => l.Kind == LineKind.Article && !l.OutsideTable && !Analysis.LineClassifier.IsRomanHeading(l.FirstText)).ToList();
         if (articles.Count == 0) return null;
         var line = articles.FirstOrDefault(l => l.Cells.Skip(1).Any(c => !string.IsNullOrWhiteSpace(c.Text))) ?? articles[0];
@@ -212,6 +212,7 @@ public static class Lots
     {
         line.Lot = value.Trim();
         line.LotManual = line.Lot.Length > 0;
+        if (!IsZero(line)) line.EndAt = null; // remis dans la vente : l'endroit choisi pour son lot 0 est oublié
         Resync(project);
     }
 

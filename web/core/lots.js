@@ -1,6 +1,6 @@
 // Numéros de lot : un par objet, continus d'une page à l'autre ; poubelle et « + » par ligne. Portage de Lots.cs.
 import { Rect } from './geometry.js';
-import { allLines, lineBounds, firstText, isRomanHeading } from './model.js';
+import { allLines, lineBounds, firstText, isRomanHeading, looksLikeTotal } from './model.js';
 
 const blank = (s) => s.trim().length === 0;
 
@@ -16,7 +16,7 @@ export const orderedRows = (table) => rowOrder(table).map((r) => table.Rows[r]);
 /** L'objet de la rangée selon la règle : la ligne d'article qui porte les valeurs, sinon la première (pas les récapitulatifs « II - STOCK »). */
 function defaultPick(row) {
   // Rangée d'en-tête ou de total (souvent sur fond grisé, où la lecture invente des lignes) : jamais d'objet.
-  if (row.Lines.some((l) => l.Kind === 'EnTete' || l.Kind === 'Total')) return null;
+  if (row.Lines.some((l) => l.Kind === 'EnTete' || looksLikeTotal(l))) return null;
   const articles = row.Lines.filter((l) => l.Kind === 'Article' && !l.OutsideTable && !isRomanHeading(firstText(l)));
   if (articles.length === 0) return null;
   const line = articles.find((l) => l.Cells.slice(1).some((c) => !blank(c.Text))) ?? articles[0];
@@ -180,6 +180,7 @@ export function clearLots(project) {
 /** Numéro tapé à la main : seule cette case change (les autres ne bougent jamais toutes seules). */
 export function setLot(project, line, value) {
   line.Lot = value.trim();
+  if (!isZeroLot(line)) delete line.EndAt; // remis dans la vente : l'endroit choisi pour son lot 0 est oublié
   line.LotManual = line.Lot.length > 0;
   resyncLots(project);
 }

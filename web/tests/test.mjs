@@ -22,7 +22,7 @@ import { recomputeTotals, parseAmount, formatAmount } from '../core/totals.js';
 import { isZeroLot } from '../core/lots.js';
 import { copyLine, splitAt, splitTypedText, removeAddedRow, canCopyLine, canSplit, addedRowOf, addBlankLine, splitBelow, canSplitBelow, addTotalLine, lastObjectLine, rowTrimOf, trimRow, untrimRow, trimsOf } from '../core/rows.js';
 import { lotTables, tableHasObjects, setLotTables } from '../core/lots.js';
-import { carryOver, allLines as linesOf } from '../core/model.js';
+import { carryOver, allLines as linesOf, looksLikeTotal } from '../core/model.js';
 import { detectPage } from '../core/imaging.js';
 import { totalExtra, baseHeight } from '../core/layout.js';
 
@@ -293,12 +293,13 @@ test('Lots à 0 : pas de numéro, après le dernier lot dans le .txt', () => {
   numberLots(p, 1);
   eq('4', objs[4].Lot, 'Renuméroter tout : le 0 ne prend pas de numéro');
   let l = lines(p);
-  eq('0\t2 rolls en métal\t60\t30', l[l.length - 1], 'en fin');
+  const tot = () => l.findIndex((x) => x.includes('TOTAL STOCK'));
+  eq('0\t2 rolls en métal\t60\t30', l[tot() - 1], 'à la fin de sa partie, juste avant TOTAL STOCK');
   eq(1, l.filter((x) => x.includes('2 rolls en métal')).length, 'retiré de sa place');
   const comp = p.Pages[0].Tables[0].Rows.flatMap((r) => r.Lines).find((x) => x.Cells[0].Text.startsWith('1 compresseur'));
   setLot(p, comp, '0');
   l = lines(p);
-  check(l[l.length - 2].startsWith('0\t1 compresseur') && l[l.length - 1] === '\tCD3+ +/- 14130 heures', 'objet et sa suite');
+  check(l[tot() - 2].startsWith('0\t1 compresseur') && l[tot() - 1] === '\tCD3+ +/- 14130 heures', 'objet et sa suite');
 });
 
 test('Rangée qui grandit puis revient', () => {
@@ -377,11 +378,11 @@ function composeAll(p, imageOf) {
     new Map(plan.pages[k].pieces.filter((x) => x.kind === 'unit').map((x) => [x.unit, unitCrop(x.unit, imgs[x.unit.p])])))) };
 }
 
-test('Lot 0 : la ligne quitte sa place et passe après le dernier lot (écran et image)', () => {
+test('Lot 0 : la ligne quitte sa place et passe à la fin de sa partie, avant sa ligne TOTAL (écran et image)', () => {
   const p = arrangeScenario();
   const plan = planArrangement(p);
   eq(3, plan.units.length, 'trois objets déplacés');
-  eq('1,2,3', [plan.dest.p, plan.dest.ti, plan.dest.r].join(','), 'après « Appartenant à ULMA »');
+  eq('1,0,4', [plan.dest.p, plan.dest.ti, plan.dest.r].join(','), 'après « PRODUITS FINIS », juste avant « TOTAL STOCK »');
   check(plan.units[1].title && !plan.units[1].whole, 'gazelle : objet seul + valeurs du titre');
   const h0 = p.Pages[0].Height, h1 = p.Pages[1].Height;
   const cut = plan.units.filter((u) => u.p === 0).reduce((s, u) => s + u.bottom - u.top, 0);
@@ -412,6 +413,27 @@ test('Lot 0 : la ligne quitte sa place et passe après le dernier lot (écran et
   const back = planArrangement(p);
   eq(0, back.units.length, 'plus rien à déplacer');
   check(!pageArranged(p, back, 0) && !pageArranged(p, back, 1), 'pages d\'origine');
+});
+
+test('Lot 0 : total mal lu reconnu ; endroit choisi à la main (poignée) ; oublié quand le lot revient', () => {
+  const line = (t) => ({ Kind: 'Article', Cells: [{ Text: t }] });
+  check(looksLikeTotal(line('TOTAT. MOBILIER')) && looksLikeTotal(line('TOTAE aan marET')) && looksLikeTotal(line('TOTAL STOCK')), 'totaux mal lus');
+  check(!looksLikeTotal(line('2 rolls en métal')) && !looksLikeTotal(line('TOTEM lumineux')), 'pas les objets');
+  const p = fromPages(['page1', 'page5']);
+  createEmptyLots(p); fillLotsAutomatically(p);
+  const a = p.Pages[0], rolls = findLine(a, '2 rolls en métal'), distrib = findLine(a, '2 distributeurs de savon + 1 distributeur papier');
+  setLot(p, rolls, '0');
+  rolls.EndAt = { Page: 'page1', Line: distrib.Cells[0].Id };
+  const plan = planArrangement(p);
+  eq('0,0', [plan.moving[0].dest.p, plan.moving[0].dest.ti].join(','), 'page 1');
+  check(plan.moving[0].dest.table.Rows[plan.moving[0].dest.r].Lines.includes(distrib), 'juste après « 2 distributeurs »');
+  const v = viewOf(p, plan, 0);
+  const y = (l) => v.lines.find((e) => e.line === l).cells[0].box.Y;
+  check(y(rolls) > y(distrib), 'affiché sous « 2 distributeurs »');
+  check(v.tables[0].units.length === 1, 'poignée du lot 0 sur cette page');
+  eq(String(lines(p).findIndex((x) => x.includes('2 distributeurs')) + 1), String(lines(p).findIndex((x) => x.startsWith('0\t2 rolls'))), '.txt : juste après aussi');
+  setLot(p, rolls, '4');
+  check(!rolls.EndAt, 'remis dans la vente : endroit oublié');
 });
 
 test('Rangée déplacée à la main : ordre du .txt, des lots et de l\'image', () => {

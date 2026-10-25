@@ -59,6 +59,15 @@ public static partial class LineClassifier
                && values.Any(v => !v.Equals("mémoire", StringComparison.OrdinalIgnoreCase));
     }
 
+    private static readonly System.Text.RegularExpressions.Regex TotalLike =
+        new(@"^[^A-Za-z0-9_]{0,3}T[O0Q][TI1l][A4][LTEI1|!]", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Ligne de total, même mal lue sur un fond tramé (« TOTAT. MOBILIER », « TOTAE MATERIEL… ») : pas un objet (pas de numéro
+    /// de lot) et fin de sa partie (un lot 0 est recollé juste avant elle). Le type de la ligne n'est pas changé.
+    /// </summary>
+    public static bool LooksLikeTotal(PrintedLine? line) => line != null && (line.Kind == LineKind.Total || TotalLike.IsMatch(line.FirstText));
+
     public static bool StartsWithTotal(string s) =>
         RemoveAccents(s).TrimStart().StartsWith("TOTAL", StringComparison.OrdinalIgnoreCase);
 

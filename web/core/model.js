@@ -329,6 +329,12 @@ function isHeaderRow(lines) {
   return values.length > 0 && values.every((v) => !/\p{Nd}/u.test(v)) && values.some((v) => v.toLowerCase() !== 'mémoire');
 }
 
+/**
+ * Ligne de total, même mal lue sur un fond tramé (« TOTAT. MOBILIER », « TOTAE MATERIEL… ») : pas un objet (pas de numéro
+ * de lot) et fin de sa partie (un lot 0 est recollé juste avant elle). Le type de la ligne n'est pas changé.
+ */
+export const looksLikeTotal = (line) => line?.Kind === 'Total' || /^[^A-Za-z0-9_]{0,3}T[O0Q][TI1l][A4][LTEI1|!]/i.test(firstText(line));
+
 export const startsWithTotal = (s) =>
   s.normalize('NFD').replace(/\p{Mn}/gu, '').trimStart().toUpperCase().startsWith('TOTAL');
 

@@ -254,6 +254,48 @@ public static class Arrangement
         return new Destination(project.Pages.IndexOf(page), page.Tables.IndexOf(table), row, table, page);
     }
 
+    private sealed record OrderedRow(int P, int Ti, int R, Table Table, Page Page);
+
+    /// <summary>Rangées des tableaux à filets, dans l'ordre affiché, toutes pages (pas les pages « lots de fin »).</summary>
+    private static List<OrderedRow> RowsInOrder(InventoryProject project)
+    {
+        var output = new List<OrderedRow>();
+        for (int p = 0; p < project.Pages.Count; p++)
+        {
+            var page = project.Pages[p];
+            if (page.EndLots) continue;
+            foreach (var (t, ti) in page.Tables.Select((t, ti) => (t, ti)).Where(x => GridTable(x.t)).OrderBy(x => x.t.RowYs[0]))
+                foreach (var r in Lots.RowOrder(t))
+                    if (r + 1 < t.RowYs.Count) output.Add(new OrderedRow(p, ti, r, t, page));
+        }
+        return output;
+    }
+
+    private static Destination DestOf(OrderedRow x) => new(x.P, x.Ti, x.R, x.Table, x.Page);
+
+    /// <summary>
+    /// Où recoller ce lot 0 : l'endroit choisi à la main (poignée ⋮⋮ en mode Modifier, <see cref="PrintedLine.EndAt"/> : après la
+    /// rangée de cette ligne) ; sinon à la fin de sa partie : après le dernier objet numéroté avant la ligne TOTAL qui la ferme
+    /// (« TOTAL MOBILIER ET MATERIEL ») ; sans ligne TOTAL après lui, après le dernier lot du document.
+    /// </summary>
+    private static Destination UnitDestination(Unit u, List<OrderedRow> rows, HashSet<PrintedLine> numbered, Destination fallback)
+    {
+        if (u.Object.EndAt is { } at)
+        {
+            var x = rows.FirstOrDefault(x => x.Page.Id == at.Page && x.Table.Rows[x.R].Lines.Any(l => l.Cells.FirstOrDefault()?.Id == at.Line));
+            if (x != null) return DestOf(x);
+        }
+        int k = rows.FindIndex(x => x.P == u.P && x.Ti == u.Ti && x.R == u.R);
+        OrderedRow? last = null;
+        for (int i = Math.Max(0, k); i < rows.Count; i++)
+        {
+            var lines = rows[i].Table.Rows[rows[i].R].Lines;
+            if (lines.Any(l => !l.Deleted && Analysis.LineClassifier.LooksLikeTotal(l))) return DestOf(last ?? rows[Math.Max(k, i - 1)]);
+            if (i > k && lines.Any(numbered.Contains)) last = rows[i];
+        }
+        return fallback;
+    }
+
     /// <summary>Décalage horizontal d'une colonne vers le tableau d'arrivée (selon l'alignement de la colonne).</summary>
     private static int ColumnShift(Table src, Table dst, int c, TextAlign align)
     {
@@ -315,8 +357,15 @@ public static class Arrangement
         }
         else if (zeros.Count > 0)
         {
-            dest = FindDestination(project);
-            if (dest != null) { moving = zeros; foreach (var u in moving) Prepare(u, dest); }
+            if (FindDestination(project) is { } fallback)
+            {
+                var rows = RowsInOrder(project);
+                var zeroLines = zeros.SelectMany(u => u.Lines).ToHashSet();
+                var numbered = Lots.ObjectLines(project).Select(o => o.Line).Where(l => !Lots.IsZero(l) && !l.Deleted && !zeroLines.Contains(l)).ToHashSet();
+                moving = zeros;
+                foreach (var u in moving) Prepare(u, UnitDestination(u, rows, numbered, fallback));
+                dest = moving[0].Dest;
+            }
         }
         var cutting = moving.Concat(deleted).ToList();
 
@@ -365,8 +414,8 @@ public static class Arrangement
                     int y = s0;
                     foreach (var u in cuts) { Copy(y, Math.Max(y, u.Top)); y = Math.Max(y, u.Bottom); }
                     Copy(y, s1);
-                    if (dest != null && template is null && dest.P == p && dest.Ti == ti && dest.R == r)
-                        foreach (var u in moving) { pieces.Add(new Piece { Unit = u, Dst = dst, H = u.Height }); dst += u.Height; }
+                    if (template is null)
+                        foreach (var u in moving.Where(u => u.Dest.P == p && u.Dest.Ti == ti && u.Dest.R == r)) { pieces.Add(new Piece { Unit = u, Dst = dst, H = u.Height }); dst += u.Height; }
                 }
                 cursor = B;
             }
@@ -441,7 +490,9 @@ public static class Arrangement
     }
 
     public sealed record Strip(int R, double Top, double Bottom);
-    public sealed record ViewTable(Table Table, List<double> ColumnXs, List<double> RowYs, List<Strip> Strips);
+    /// <summary>Lot 0 recollé dans un tableau, tel qu'à l'écran (pour sa poignée en mode Modifier).</summary>
+    public sealed record UnitStrip(Unit Unit, double Top, double Bottom);
+    public sealed record ViewTable(Table Table, List<double> ColumnXs, List<double> RowYs, List<Strip> Strips, List<UnitStrip>? Units = null);
     public sealed record ViewPage(Page Page, int Width, int Height, List<ViewLine> Lines, List<ViewTable> Tables);
 
     private static int CenterY(PrintedLine line, Field f) => (int)Math.Floor(PageLayout.BaseBox(line, f).CenterY);
@@ -540,12 +591,13 @@ public static class Arrangement
                 strips.Add(new Strip(r, a.Value, a.Value + (CutY(t.RowYs[r + 1]) - CutY(t.RowYs[r])) - cutH));
             }
             var ys = strips.Select(s => s.Top).ToList();
-            if (plan.Dest != null && plan.Dest.P == k && plan.Dest.Ti == ti)
-                ys.AddRange(pp.Pieces.Where(pc => pc.IsUnit).Select(pc => (double)(pc.Dst + Cut)));
+            var units = page.EndLots ? [] : pp.Pieces.Where(pc => pc.IsUnit && pc.Unit!.Dest.P == k && pc.Unit.Dest.Ti == ti).ToList();
+            ys.AddRange(units.Select(pc => (double)(pc.Dst + Cut)));
             int? end = MapY(pp, R(t.RowYs[^1]));
             if (end != null) ys.Add(end.Value);
             ys.Sort();
-            tables.Add(new ViewTable(t, t.ColumnXs, ys, strips));
+            // Lots 0 recollés dans ce tableau : déplaçables avec une poignée (mode Modifier).
+            tables.Add(new ViewTable(t, t.ColumnXs, ys, strips, units.Select(pc => new UnitStrip(pc.Unit!, pc.Dst + Cut, pc.Dst + pc.H)).ToList()));
         }
         return new ViewPage(page, page.Width, pp.Height, lines, tables);
     }

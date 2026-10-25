@@ -442,6 +442,7 @@ public sealed partial class MainWindow : Window
             ScheduleAutosave();
         };
         view.LineMoved += async (v, table, line, before) => await MoveLineAsync(v.Page, table, line, before);
+        view.UnitMoved += async (v, table, unit, before) => await PlaceZeroAsync(v.Page, table, unit, before);
         view.LineCommands = LineCommandsFor;
         view.SetLockMode(LockToggle.IsChecked == true);
         view.SetMoveMode(MoveToggle.IsChecked == true);
@@ -886,7 +887,7 @@ public sealed partial class MainWindow : Window
         int rank = _plan.Pages[k].Pieces.Where(pc => pc.IsUnit).ToList().FindIndex(pc => pc.Unit == u) + 1;
         if (_project.Pages[k].EndLots) return (k, $"page {k + 1} « Lots de fin », {(rank == 1 ? "1re" : rank + "e")} ligne");
         var anchor = u.Dest.Table.Rows[u.Dest.R].Lines.FirstOrDefault(l => l.FirstText.Length > 0) ?? u.Object;
-        return (k, $"page {k + 1}, après le dernier lot (« {Short(anchor.FirstText)} »)");
+        return (k, $"page {k + 1}, après « {Short(anchor.FirstText)} » {(u.Object.EndAt != null ? "(endroit choisi)" : "(fin de sa partie, avant la ligne TOTAL)")}");
     }
 
     /// <summary>Choix à cocher avec un titre en gras et une explication.</summary>
@@ -931,7 +932,7 @@ public sealed partial class MainWindow : Window
             if (pg.Id == wanted) after.SelectedIndex = ids.Count - 1;
         }
         if (after.SelectedIndex < 0 && ids.Count > 0) after.SelectedIndex = ids.Count - 1;
-        var last = Choice("endMode", "Juste après le dernier lot numéroté", "Dans le même tableau, à la suite.", cur?.Mode != "page");
+        var last = Choice("endMode", "À la fin de sa partie", "Après le dernier lot, juste avant la ligne TOTAL de sa partie (ex. « TOTAL MOBILIER ET MATERIEL »). Pour le mettre ailleurs : Modifier, puis glisser sa poignée.", cur?.Mode != "page");
         var pageBox = new StackPanel { Spacing = 2 };
         pageBox.Children.Add(new TextBlock { Text = "Une page créée exprès, même mise en page que la vente, placée :", FontSize = 13, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
         pageBox.Children.Add(after);
@@ -983,11 +984,33 @@ public sealed partial class MainWindow : Window
             SetStatus(PlaceOf(line) is { } where
                 ? $"Lot 0 : « {Short(line.FirstText)} » est maintenant à la fin : {where.Text}."
                   + (added > 0 ? $" Page « Lots de fin » ajoutée (page {where.K + 1}) : les pages suivantes ont été renumérotées." : "")
-                  + " Pour le remettre : retapez son numéro, ou clic droit › Remettre à sa place."
+                  + " Pour le placer ailleurs : Modifier, puis glissez sa poignée orange ⋮⋮. Pour le remettre : retapez son numéro, ou clic droit › Remettre à sa place."
                 : "Lot 0 : aucun autre lot numéroté, la ligne reste en place.");
         }
         else if (wasZero && !zero) SetStatus($"Lot {(line.Lot.Length > 0 ? line.Lot : "(vide)")} : « {Short(line.FirstText)} » est revenu à sa place.");
         else SetStatus(line.Lot.Length > 0 ? $"Lot {line.Lot} enregistré." : "Case de lot vidée.");
+        ScheduleAutosave();
+    }
+
+    /// <summary>
+    /// Poignée d'un lot 0 recollé (mode Modifier) : il est posé avant la rangée <paramref name="before"/> (null : à la fin du
+    /// tableau) ; l'endroit est gardé (EndAt) tant qu'il est au lot 0.
+    /// </summary>
+    private async Task PlaceZeroAsync(ModelPage page, Table table, Arrangement.Unit unit, int? before)
+    {
+        if (_busy) return;
+        var order = Lots.RowOrder(table);
+        int i = before is int b ? order.IndexOf(b) : order.Count;
+        var anchorRow = table.Rows[order[Math.Max(0, i - 1)]];
+        var anchor = anchorRow.Lines.FirstOrDefault(l => l.Cells.Count > 0);
+        if (anchor is null) return;
+        PushUndo();
+        unit.Object.EndAt = new EndAnchor { Page = page.Id, Line = anchor.Cells[0].Id };
+        Replan();
+        RecomputeTotals();
+        await RefreshViewAsync();
+        _view?.FlashLine(unit.Object);
+        SetStatus($"Lot 0 « {Short(unit.Object.FirstText)} » placé après « {Short(anchor.FirstText.Length > 0 ? anchor.FirstText : "(rangée)")} ». Il reste là ; retaper son numéro le remet à sa place d'origine. ↶ pour annuler.");
         ScheduleAutosave();
     }
 
@@ -1230,7 +1253,7 @@ public sealed partial class MainWindow : Window
         {
             ("Choisir les pages.", "Bouton Lots : cochez les pages (et tableaux) qui reçoivent des numéros, puis OK. Une page de garde, un récapitulatif ou une signature restent sans numéro. Pour changer : Lots › Pages et tableaux…"),
             ("Numéroter.", "Touchez une case à gauche d'un objet et tapez son numéro : rien d'autre ne change. Ou « Synchroniser… » (cette page ou toutes les pages) : les cases vides se remplissent ; les numéros déjà là ne bougent pas, une case vide prend le numéro qui suit et décale seulement les lots qui la suivent directement. Case qui manque sur un objet : clic droit › Ajouter une case de lot. Pour tout refaire dans l'ordre affiché : Renuméroter tout."),
-            ("Objet absent : à la fin.", "Tapez 0 (ou clic droit › Mettre à la fin). La 1re fois, l'app demande où : après le dernier lot, ou sur une page « Lots de fin » placée où vous voulez (les pages suivantes sont renumérotées, une nouvelle page s'ajoute quand elle est pleine). Le message en bas dit exactement où la ligne est partie. Pour la remettre : retapez son numéro (ou clic droit › Remettre à sa place)."),
+            ("Objet absent : à la fin.", "Tapez 0 (ou clic droit › Mettre à la fin). La 1re fois, l'app demande où : à la fin de sa partie (juste avant sa ligne TOTAL, ex. « TOTAL MOBILIER ET MATERIEL »), ou sur une page « Lots de fin » placée où vous voulez (les pages suivantes sont renumérotées, une nouvelle page s'ajoute quand elle est pleine). Le message en bas dit exactement où la ligne est partie. Pour la mettre ailleurs : Modifier, puis glissez sa poignée orange ⋮⋮. Pour la remettre : retapez son numéro (ou clic droit › Remettre à sa place)."),
             ("Objet retiré de la vente.", "Clic droit › Supprimer cette ligne : elle disparaît (page, fichier texte, totaux), ce qui suit remonte. Pour la retrouver : ↶, ou Retirer… › Remettre les lignes supprimées."),
             ("Ajouter ou séparer.", "Clic droit (ou bouton Ligne) : ligne vide au-dessus ou en dessous, dupliquer, tracer un trait au-dessus ou en dessous pour séparer un gros bloc. Une rangée trop haute (espace vide imprimé) est réduite à la hauteur des autres ; aussi au clic droit : Réduire la rangée."),
             ("Déplacer.", "Touchez Modifier en haut : les poignées ⋮⋮ apparaissent à gauche de chaque ligne (la poubelle se cache). Glissez-en une vers le haut ou le bas : une rangée, ou une ligne seule d'un bloc (poignée blanche), qui devient alors une rangée. Retouchez Modifier pour terminer."),
@@ -1570,7 +1593,7 @@ public sealed partial class MainWindow : Window
                 var ends = _project.Pages.Select((pg, i) => pg.EndLots ? i + 1 : 0).Where(i => i > 0).ToList();
                 SetStatus(endChoice.Mode == "page"
                     ? $"Lots 0 sur une page « Lots de fin »{(ends.Count > 0 ? $" (page {string.Join(", ", ends)})" : " (créée au premier lot 0)")}."
-                    : "Lots 0 juste après le dernier lot numéroté.");
+                    : "Lots 0 à la fin de leur partie, juste avant la ligne TOTAL (Modifier : les glisser ailleurs).");
                 ScheduleAutosave();
                 return;
             case "pages":
