@@ -81,7 +81,7 @@ public static partial class Totals
             .SelectMany(r => r.Lines).Where(l => !l.OutsideTable && l.Kind != LineKind.Ignoree).ToList();
 
     /// <summary>Cases retirées des totaux : objets au lot 0, leurs lignes de suite et les valeurs de titre qu'ils reprennent.</summary>
-    private static HashSet<Field> RemovedCells(List<PrintedLine> lines, Arrangement.Plan? plan)
+    private static HashSet<Field> RemovedCells(List<PrintedLine> lines, Arrangement.Plan? plan, HashSet<PrintedLine> deleted)
     {
         var removed = new HashSet<Field>();
         foreach (var u in plan?.Units ?? [])
@@ -90,6 +90,7 @@ public static partial class Totals
             if (u.Title != null) foreach (var c in u.Title.Cells.Where(c => c.Column > 0)) removed.Add(c);
         }
         foreach (var l in lines.Where(l => Lots.HasCell(l) && Lots.IsZero(l))) foreach (var c in l.Cells) removed.Add(c);
+        foreach (var l in deleted) foreach (var c in l.Cells) removed.Add(c);
         return removed;
     }
 
@@ -107,7 +108,7 @@ public static partial class Totals
     public static List<Field> Recompute(InventoryProject project, Arrangement.Plan? plan = null)
     {
         var lines = DocumentLines(project);
-        var removed = RemovedCells(lines, plan);
+        var removed = RemovedCells(lines, plan, Arrangement.DeletedLines(project));
         var changed = new List<Field>();
         static IEnumerable<Field> Cols(PrintedLine l) => l.Cells.Where(c => c.Column > 0);
         static Field? CellOf(PrintedLine l, int c) => l.Cells.FirstOrDefault(x => x.Column == c);
@@ -139,10 +140,11 @@ public static partial class Totals
         int start = 0;
         for (int i = 0; i < lines.Count; i++)
         {
+            if (lines[i].TotalScope != null) continue; // ligne TOTAL ajoutée : calculée à part, ne coupe pas les rubriques imprimées
             if (lines[i].Kind == LineKind.EnTete) start = i + 1;
             else if (lines[i].Kind == LineKind.Total)
             {
-                totals.Add((lines[i], lines.GetRange(start, i - start).Where(x => x.Kind != LineKind.EnTete).ToList()));
+                totals.Add((lines[i], lines.GetRange(start, i - start).Where(x => x.Kind != LineKind.EnTete && x.TotalScope is null).ToList()));
                 start = i + 1;
             }
         }
@@ -158,6 +160,7 @@ public static partial class Totals
         Section? cur = null;
         foreach (var l in lines)
         {
+            if (l.TotalScope != null) continue;
             if (l.Kind == LineKind.EnTete)
             {
                 var name = SectionName(l.FirstText);
@@ -182,7 +185,46 @@ public static partial class Totals
             }
         }
         ComputeTotals();
+        AddedTotals(project, Current, changed);
         return changed;
+    }
+
+    /// <summary>
+    /// Lignes TOTAL ajoutées : somme des montants actuels, colonne par colonne, selon leur choix (<see cref="TotalScope"/>).
+    /// Lots 0 et lignes supprimées : comptés 0. Auto = false : à taper.
+    /// </summary>
+    private static void AddedTotals(InventoryProject project, Func<Field, long> current, List<Field> changed)
+    {
+        static bool Countable(PrintedLine x) => !x.OutsideTable && x.Kind is LineKind.Article or LineKind.Titre && x.TotalScope is null && !IsRecapLine(x);
+        static IEnumerable<PrintedLine> LinesOf(Page pg) => pg.Tables.SelectMany(t => Lots.RowOrder(t).SelectMany(r => t.Rows[r].Lines));
+        foreach (var page in project.Pages)
+            foreach (var t in page.Tables)
+            {
+                var ordered = Lots.RowOrder(t).SelectMany(r => t.Rows[r].Lines).ToList();
+                for (int i = 0; i < ordered.Count; i++)
+                {
+                    var l = ordered[i];
+                    var sc = l.TotalScope;
+                    if (sc is null || !sc.Auto) continue;
+                    IEnumerable<PrintedLine> items;
+                    if (sc.Mode == "page") items = LinesOf(page);
+                    else if (sc.Mode == "all") items = project.Pages.SelectMany(LinesOf);
+                    else if (sc.Mode == "pages") items = project.Pages.Where(pg => sc.Pages.Contains(pg.Id)).SelectMany(LinesOf);
+                    else
+                    {
+                        int from = 0;
+                        for (int j = i - 1; j >= 0; j--) if (ordered[j].Kind is LineKind.EnTete or LineKind.Total) { from = j + 1; break; }
+                        items = ordered.GetRange(from, i - from);
+                    }
+                    var list = items.Where(Countable).ToList();
+                    foreach (var f in l.Cells.Where(c => c.Column > 0))
+                    {
+                        if (f.Manual) continue;
+                        string text = FormatAmount(list.Sum(x => x.Cells.FirstOrDefault(c => c.Column == f.Column) is Field c ? current(c) : 0));
+                        if (f.Text != text) { f.Text = text; changed.Add(f); }
+                    }
+                }
+            }
     }
 
     /// <summary>Montant calculé d'une case (pour afficher l'écart avec un total tapé à la main).</summary>

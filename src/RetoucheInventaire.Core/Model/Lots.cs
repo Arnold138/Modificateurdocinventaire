@@ -115,7 +115,7 @@ public static class Lots
     }
 
     private static bool IsObject(PrintedLine line, PrintedLine? pick) =>
-        !line.NoLot && !line.OutsideTable && (line == pick || (line.ForceLot && line.FirstText.Length > 0));
+        !line.NoLot && !line.OutsideTable && !line.Deleted && (line == pick || (line.ForceLot && line.FirstText.Length > 0));
 
     /// <summary>
     /// Ligne sans numéro à laquelle on peut en ajouter un (« + ») : article ou titre (pas un total, un en-tête, un récapitulatif),
@@ -229,7 +229,7 @@ public static class Lots
         foreach (var l in project.Pages.SelectMany(p => p.AllLines()))
         {
             l.LotSlot = objects.Contains(l);
-            if (!l.LotSlot) { l.Lot = ""; l.LotManual = false; }
+            if (!l.LotSlot && !l.Deleted) { l.Lot = ""; l.LotManual = false; } // ligne supprimée : son numéro est gardé (si on la remet)
         }
     }
 

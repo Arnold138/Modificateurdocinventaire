@@ -204,3 +204,49 @@ export function removeAddedRow(page, line) {
   rowBounds(t);
   return true;
 }
+
+/** « Tracer un trait en dessous » : la ligne suivante de la rangée commence une nouvelle rangée. */
+export function canSplitBelow(page, line) {
+  const at = line && !line.OutsideTable ? locate(page, line) : null;
+  return !!at && at.i + 1 < at.row.Lines.length;
+}
+export function splitBelow(page, line) {
+  const at = locate(page, line);
+  return !!at && at.i + 1 < at.row.Lines.length && splitAt(page, at.row.Lines[at.i + 1]);
+}
+
+/**
+ * « Ajouter une ligne TOTAL » sous la rangée de la ligne : rangée complète (comme une ligne vide), en gras,
+ * désignation « TOTAL », montants calculés selon `scope` ({ Mode: 'above' | 'page' | 'pages' | 'all', Pages: [Id], Auto }).
+ */
+export function addTotalLine(page, line, scope) {
+  const t = copyLine(page, line, true, false);
+  if (!t) return null;
+  t.Kind = 'Total';
+  t.KindChosenByUser = true;
+  t.Cells[0].Text = 'TOTAL';
+  t.TotalScope = { Mode: scope?.Mode ?? 'above', Pages: [...(scope?.Pages ?? [])], Auto: scope?.Auto !== false };
+  return t;
+}
+
+/** Ligne d'appui pour une ligne TOTAL ajoutée depuis le menu de la page : la dernière ligne d'objet du tableau (ou du dernier). */
+export function lastObjectLine(page, table = null) {
+  const tables = page.Tables.filter((t) => gridTable(t) && (!table || t === table));
+  for (let k = tables.length - 1; k >= 0; k--) {
+    const t = tables[k];
+    const order = rowOrder(t);
+    // De préférence la dernière ligne qui porte un montant (pas une lecture parasite d'un fond grisé).
+    for (const strict of [true, false])
+      for (let i = order.length - 1; i >= 0; i--) {
+        const row = t.Rows[order[i]];
+        for (let j = row.Lines.length - 1; j >= 0; j--) {
+          const l = row.Lines[j];
+          if (!canCopyLine(page, l) || l.Deleted) continue;
+          if (!strict || l.Cells.slice(1).some((c) => AMOUNT.test(c.Text))) return l;
+        }
+      }
+  }
+  return null;
+}
+
+const AMOUNT = /^\s*(?:m[ée]moire|[+-]?\d[\d\s.,]*)\s*€?\s*$/i;

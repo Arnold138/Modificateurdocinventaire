@@ -123,6 +123,8 @@ Application web installable (« Sur l'écran d'accueil »), sans étape de compi
 
 - Rien n'est modifié dans le projet : chaque page affichée est recomposée (`Build` → plan de morceaux). Une page = suite de morceaux recopiés de l'image d'origine (`[Y0, Y1[` → `Dst`) et de rangées refaites.
 - Rangées : bandes `[R(RowYs[r]) − 2, R(RowYs[r+1]) − 2[` (filet du haut compris) recopiées dans l'ordre `RowOrder`.
+- `MovedUnits` : ce qui quitte sa place, `zero` (lot 0) ou `deleted` (ligne `Deleted` et sa suite sans montant, jusqu'au prochain objet ; `DeletedLines` les retire aussi du .txt, des totaux et des lots).
+- Lots de fin (`EndLots.Mode = "page"`) : pages `Page.EndLots` (sans image propre) composées sur la page modèle (`EndTemplate` : dernière page à lots avant elles) : papier jusqu'au 1er filet, lots 0 en rangées du tableau modèle, filet du bas, papier jusqu'à la hauteur du modèle (`PagePlan.Template`, morceaux `Paper`). Remplies jusqu'à la hauteur du tableau modèle ; `SyncEndPages` crée/retire les pages (après `AfterId`) à chaque mise en page.
 - Lot 0 : l'objet, ses lignes de suite et, s'il les reprend (comme dans le .txt), les valeurs de son titre. Rangée entière si elle ne contient que lui ; sinon bande entre les interlignes. Retiré de sa page, recollé après la rangée du dernier objet numéroté : filet du haut et fond (interligne le plus propre, filets verticaux prolongés) pris dans cette rangée, contenu de chaque case recopié et recalé sur sa colonne (décalage selon l'alignement), case du lot comprise ; valeurs du titre posées à la hauteur de l'objet et effacées (papier) sous le titre.
 - `ViewOf` : où afficher chaque case (décalage par case, découpe à sa colonne), cases de lot, rangées à l'écran (poignées). L'écran pose les champs à ces places ; l'export dessine les corrections sur chaque page d'origine puis recompose.
 - Calcul en entiers : pages recomposées identiques à l'octet près sur Windows et iPhone/iPad (vérifié à chaque compilation, avec le .txt et les totaux).
@@ -131,6 +133,7 @@ Application web installable (« Sur l'écran d'accueil »), sans étape de compi
 
 - Case calculée : montants d'une ligne Total ou d'une ligne de récapitulatif. `Field.Manual` : tapée à la main, n'est plus recalculée.
 - Total = montant imprimé + Σ (valeur actuelle − valeur lue) des lignes de sa rubrique (de l'en-tête ou du total précédent jusqu'à lui, toutes pages) ; lots 0 (et valeurs de titre qu'ils emportent) retirés. Montant imprimé illisible : somme des valeurs.
+- Ligne TOTAL ajoutée (`PrintedLine.TotalScope` : `above`, `page`, `pages` + Ids, `all` ; `Auto`) : somme des articles et titres de la portée, recalculée à chaque modification ; ignorée par les autres totaux.
 - Récapitulatif : relié à la rubrique de même nom (sans numéro romain ni accents) ; suit l'écart de son total (ou de ses lignes). TOTAL GENERAL : total des lignes de récapitulatif au-dessus de lui.
 - « 15 000 » ↔ 1500000 centimes ; « mémoire » = 0 ; « S/O/l » lus comme 5/0/1 dans un montant.
 

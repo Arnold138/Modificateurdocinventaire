@@ -69,10 +69,10 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 .page-row { display: flex; align-items: flex-start; }
 /* Colonne de gauche, hors de la page : type de ligne, poubelle / « + » des lots. */
 .gutter { position: relative; width: 112px; flex: none; }
-.gutter .badge { left: 34px; }
+.gutter .badge { left: 4px; }
 /* Poignée pour monter / descendre une rangée */
-.grip { position: absolute; left: 2px; width: 28px; border-radius: 8px; display: grid; place-items: center; color: #9aa3ad; touch-action: none; cursor: grab; }
-.grip svg { width: 20px; height: 20px; fill: currentColor; stroke: none; }
+.grip { position: absolute; right: 52px; width: 30px; border-radius: 8px; display: grid; place-items: center; color: #4a5560; background: #eef1f4; border: 1px solid #cdd3da; touch-action: none; cursor: grab; }
+.grip svg { width: 22px; height: 22px; fill: currentColor; stroke: none; }
 .grip:hover, .grip:active { background: var(--accent-soft); color: var(--accent); }
 .dragghost { position: absolute; background: rgba(10,102,194,.10); outline: 2px solid var(--accent); pointer-events: none; z-index: 4; }
 .dropline { position: absolute; height: 4px; background: var(--accent); border-radius: 2px; pointer-events: none; z-index: 4; }
@@ -210,3 +210,12 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 .lotpages small { color: var(--muted); }
 .lotpages ul { margin: 2px 0 0 32px; padding: 0; list-style: none; }
 .lotpages li.off { opacity: .5; }
+
+/* Choix dans les fenêtres (lots de fin, ligne TOTAL) */
+#dialogBody label.choice { display: flex; align-items: flex-start; margin: 0; gap: 10px; padding: 10px 4px; border-bottom: 1px solid var(--line); }
+.choice input[type=radio] { width: 22px; height: 22px; margin-top: 2px; flex: none; }
+.choice span { display: flex; flex-direction: column; gap: 2px; }
+.choice small { color: var(--muted); font-size: 13px; line-height: 1.35; }
+.choice select { font-size: 14px; padding: 4px 6px; border-radius: 8px; border: 1px solid var(--line); margin: 2px 0; max-width: 100%; }
+.help { padding-left: 20px; }
+.help li { margin: 0 0 10px; line-height: 1.4; }

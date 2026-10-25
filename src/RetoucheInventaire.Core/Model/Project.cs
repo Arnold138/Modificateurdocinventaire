@@ -97,8 +97,32 @@ public sealed class PrintedLine
     /// </summary>
     public bool Copy { get; set; }
 
+    /// <summary>Ligne supprimée (« Supprimer cette ligne ») : retirée de la page, du .txt, des totaux et des lots (son numéro est gardé).</summary>
+    public bool Deleted { get; set; }
+
+    /// <summary>Ligne TOTAL ajoutée : ce qu'elle additionne (voir <see cref="Totals"/>).</summary>
+    public TotalScope? TotalScope { get; set; }
+
     [JsonIgnore] public RectD Bounds => Cells.Aggregate(RectD.Empty, (r, f) => r.Union(f.Box));
     [JsonIgnore] public string FirstText => Cells.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c.Text))?.Text.Trim() ?? "";
+}
+
+/// <summary>
+/// Ligne TOTAL ajoutée : somme des montants actuels, colonne par colonne, des lignes au-dessus (« above », depuis l'en-tête ou le total
+/// précédent), de sa page (« page »), des pages choisies (« pages ») ou de tout le document (« all ») ; Auto = false : à taper.
+/// </summary>
+public sealed class TotalScope
+{
+    public string Mode { get; set; } = "above";
+    public List<string> Pages { get; set; } = [];
+    public bool Auto { get; set; } = true;
+}
+
+/// <summary>Où vont les lots 0 : « last » (après le dernier lot numéroté) ou « page » (pages « lots de fin » après la page AfterId).</summary>
+public sealed class EndLotsChoice
+{
+    public string Mode { get; set; } = "last";
+    public string? AfterId { get; set; }
 }
 
 /// <summary>Une rangée du tableau (entre deux filets horizontaux).</summary>
@@ -178,6 +202,8 @@ public sealed class Page
     public List<RectD> LockZones { get; set; } = [];
     /// <summary>Bandes insérées (rangées ajoutées), voir <see cref="Rows"/>.</summary>
     public List<InsertedBand> Inserts { get; set; } = [];
+    /// <summary>Page « lots de fin » (créée automatiquement) : composée depuis une page modèle, voir <see cref="Export.Arrangement"/>.</summary>
+    public bool EndLots { get; set; }
 
     public IEnumerable<PrintedLine> AllLines() =>
         Tables.SelectMany(t => t.Rows).SelectMany(r => r.Lines).Concat(LooseLines);
@@ -194,6 +220,8 @@ public sealed class InventoryProject
     /// <summary>Lots remplis à la main : rien ne se remplit tout seul (sauf « Synchroniser automatiquement »).</summary>
     public bool LotsByHand { get; set; }
     public List<Page> Pages { get; set; } = [];
+    /// <summary>Où vont les lots 0 (null : pas encore choisi, on le demande).</summary>
+    public EndLotsChoice? EndLots { get; set; }
 
     public IEnumerable<Field> AllFields() => Pages.SelectMany(p => p.AllFields());
 }

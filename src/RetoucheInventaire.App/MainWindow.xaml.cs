@@ -268,12 +268,24 @@ public sealed partial class MainWindow : Window
 
     // ---------- Mise en page et images ----------
 
-    /// <summary>Mise en page : lots 0 recollés après le dernier lot, rangées déplacées à la main.</summary>
-    private Arrangement.Plan _plan = new([], [], null, []);
+    /// <summary>Mise en page : lots 0 recollés à la fin, lignes supprimées, rangées déplacées à la main.</summary>
+    private Arrangement.Plan _plan = new([], [], [], null, [], 0);
     /// <summary>Morceaux d'image des lots 0 (pour recomposer la page où ils arrivent sans rouvrir leur page).</summary>
     private readonly Dictionary<string, Arrangement.Crop?> _crops = [];
 
-    private Arrangement.Plan Replan() => _plan = Arrangement.Build(_project);
+    /// <summary>Recalcule la mise en page ; crée ou retire les pages « Lots de fin » au besoin (on reste sur la même page).</summary>
+    private Arrangement.Plan Replan()
+    {
+        var cur = CurrentPage;
+        if (Arrangement.SyncEndPages(_project))
+        {
+            int i = cur is null ? -1 : _project.Pages.IndexOf(cur);
+            _index = i >= 0 ? i : Math.Clamp(_index, 0, Math.Max(0, _project.Pages.Count - 1));
+            _crops.Clear();
+            UpdateCommands();
+        }
+        return _plan = Arrangement.Build(_project);
+    }
 
     /// <summary>Totaux recalculés (cases non tapées à la main) ; renvoie les cases changées.</summary>
     private List<Field> RecomputeTotals() => Totals.Recompute(_project, _plan);
@@ -306,7 +318,10 @@ public sealed partial class MainWindow : Window
     /// <summary>Image affichée de la page k : la sienne, recomposée si des rangées partent ou arrivent.</summary>
     private async Task<Raster?> DisplayOfAsync(int k)
     {
-        var own = await OwnDisplayAsync(_project.Pages[k]);
+        // Page « Lots de fin » : composée sur l'image de sa page modèle.
+        var page = _project.Pages[k];
+        int? tpl = k < _plan.Pages.Count ? _plan.Pages[k].Template : null;
+        var own = page.EndLots ? (tpl is int t && t >= 0 ? await OwnDisplayAsync(_project.Pages[t]) : null) : await OwnDisplayAsync(page);
         if (own is null || !Arrangement.PageArranged(_project, _plan, k)) return own;
         var crops = new Dictionary<Arrangement.Unit, Arrangement.Crop?>();
         foreach (var pc in _plan.Pages[k].Pieces.Where(pc => pc.IsUnit)) crops[pc.Unit!] = await CropOfAsync(pc.Unit!);
@@ -330,15 +345,26 @@ public sealed partial class MainWindow : Window
         UpdateCommands();
         if (flat != null) Remember(_flats, page, flat, 3);
         Replan();
+        if (_project.Pages.Count == 0) { _index = 0; UpdateCommands(); return; }
+        if (!_project.Pages.Contains(page)) page = _project.Pages[Math.Clamp(_index, 0, _project.Pages.Count - 1)];
+        _index = _project.Pages.IndexOf(page);
         if (page.Source == PageSource.Image && !_flats.ContainsKey(page)) SetStatus($"Ouverture de la page {_index + 1}…");
         int k = _index;
         var display = await DisplayOfAsync(k);
         if (CurrentPage != page) return; // l'utilisateur a déjà changé de page
 
         var title = new TextBlock { FontSize = 15, VerticalAlignment = VerticalAlignment.Center, Opacity = 0.7,
-                                    Text = $"Page {_index + 1} sur {_project.Pages.Count} · {page.SourceName}" };
-        var remove = new Button { Content = "Retirer la page", MinHeight = 40, Padding = new Thickness(14, 4, 14, 4), CornerRadius = new CornerRadius(20) };
-        remove.Click += async (_, _) => await RemovePageAsync(page);
+                                    Text = $"Page {_index + 1} sur {_project.Pages.Count} · {page.SourceName}{(page.EndLots ? " (lots 0, créée automatiquement)" : "")}" };
+        var remove = new Button { Content = "Retirer…", MinHeight = 40, Padding = new Thickness(14, 4, 14, 4), CornerRadius = new CornerRadius(20) };
+        ToolTipService.SetToolTip(remove, "Retirer cette page, des pages au choix ou tout le dossier");
+        remove.Click += async (_, _) => await RetireMenuAsync(page);
+        var totals = new Button { MinHeight = 40, Padding = new Thickness(14, 4, 14, 4), CornerRadius = new CornerRadius(20) };
+        var totalsContent = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        totalsContent.Children.Add(new TextBlock { Text = "Σ", FontWeight = Microsoft.UI.Text.FontWeights.Bold });
+        totalsContent.Children.Add(new TextBlock { Text = "Totaux" });
+        totals.Content = totalsContent;
+        ToolTipService.SetToolTip(totals, "Recalculer les totaux de la page, ajouter une ligne TOTAL");
+        totals.Click += async (_, _) => await TotalsMenuAsync(page);
         var sync = new Button
         {
             MinHeight = 40, Padding = new Thickness(14, 4, 14, 4), CornerRadius = new CornerRadius(20),
@@ -354,7 +380,11 @@ public sealed partial class MainWindow : Window
         var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Margin = new Thickness(PageView.GutterWidth, 0, 0, 0) };
         header.Children.Add(title);
         header.Children.Add(sync);
-        header.Children.Add(remove);
+        if (!page.EndLots)
+        {
+            header.Children.Add(totals);
+            header.Children.Add(remove);
+        }
 
         var view = new PageView(Arrangement.ViewOf(_project, _plan, k), display, () => Lots.IsActive(_project),
             y => Arrangement.MapY(_plan.Pages[k], y), y => Arrangement.UnmapY(_plan.Pages[k], y));
@@ -369,25 +399,7 @@ public sealed partial class MainWindow : Window
             ScheduleAutosave();
         };
         view.LocksChanged += _ => { ScheduleAutosave(); SetStatus("Zones verrouillées mises à jour."); };
-        view.LotChanged += async (v, line, value) =>
-        {
-            PushUndo();
-            bool wasZero = Lots.IsZero(line);
-            string sig = LotColumn.Signature(v.Page, _project.LotFrame);
-            Lots.Set(_project, line, value);
-            bool zero = Lots.IsZero(line);
-            Replan();
-            RecomputeTotals();
-            if (zero != wasZero || sig != LotColumn.Signature(v.Page, _project.LotFrame)) await RefreshViewAsync();
-            else v.UpdateLots();
-            if (zero && !wasZero)
-                SetStatus(_plan.Dest is { } d
-                    ? $"Lot 0 : « {line.FirstText} » est passé après le dernier lot (page {d.P + 1}). Retapez un numéro pour le remettre à sa place."
-                    : "Lot 0 : aucun autre lot numéroté, la ligne reste en place.");
-            else if (wasZero && !zero) SetStatus($"Lot {line.Lot} : « {line.FirstText} » est revenu à sa place.");
-            else SetStatus(line.Lot.Length > 0 ? $"Lot {line.Lot} enregistré." : "Case de lot vidée.");
-            ScheduleAutosave();
-        };
+        view.LotChanged += async (v, line, value) => await ApplyLotAsync(v, line, value);
         view.LotRemoved += async (_, line) =>
         {
             PushUndo();
@@ -616,6 +628,15 @@ public sealed partial class MainWindow : Window
         var list = new List<PageView.LineCommand>();
         if (_busy || PageEdits.FindLine(_project, f) is not { } hit) return list;
         var (page, line) = hit;
+        if (_plan.Moving.Any(u => u.Lines.Contains(line)))
+        {
+            // Ligne au lot 0, affichée à la fin : la remettre, ou la supprimer.
+            list.Add(new("Remettre à sa place", "La ligne retourne où elle était (case de lot vide : tapez son numéro).", "\uE7A7",
+                () => _ = LineActionAsync("back", 0, f)));
+            list.Add(new("Supprimer cette ligne", "Elle disparaît de la vente (page, .txt, totaux).", "\uE74D",
+                () => _ = LineActionAsync("delete", 0, f), Danger: true));
+            return list;
+        }
         int typed = CaretLine(f);
         string rest = typed > 0 ? string.Join(" ", f.Text.Replace("\r\n", "\n").Split('\n').Skip(typed)).Trim() : "";
         bool canCopy = Rows.CanCopy(page, line);
@@ -633,8 +654,14 @@ public sealed partial class MainWindow : Window
             list.Add(new("Séparer ici", $"« {Short(rest)} » passe dans sa propre ligne, juste en dessous.", "\uE8C6",
                 () => _ = LineActionAsync("typed", typed, f)));
         else if (Rows.CanSplit(page, line))
-            list.Add(new("Séparer ici", "Cette ligne devient une rangée à part, avec sa case de lot et ses prix.", "\uE8C6",
+            list.Add(new("Séparer au-dessus (tracer un trait)", "Un trait au-dessus de cette ligne : elle devient une rangée à part, avec sa case de lot et ses prix.", "\uE8C6",
                 () => _ = LineActionAsync("split", 0, f)));
+        if (Rows.CanSplitBelow(page, line))
+            list.Add(new("Séparer en dessous (tracer un trait)", "Un trait sous cette ligne : ce qui suit devient une rangée à part.", "\uE8C6",
+                () => _ = LineActionAsync("splitBelow", 0, f)));
+        if (Lots.HasCell(line) && !Lots.IsZero(line))
+            list.Add(new("Mettre à la fin (lot 0)", "Objet absent : sa ligne part à la fin, ce qui suit remonte.", "\uE74B",
+                () => _ = LineActionAsync("end", 0, f)));
         if (Rows.AddedRowOf(page, line) is { } added)
         {
             if (added.Band.Kind == "Split" && added.At.Row.Lines.Count > 0 && added.At.Row.Lines[0] == line)
@@ -644,6 +671,9 @@ public sealed partial class MainWindow : Window
                 list.Add(new("Supprimer cette ligne ajoutée", "La ligne copiée disparaît, la suite remonte.", "\uE74D",
                     () => _ = LineActionAsync("remove", 0, f), Danger: true));
         }
+        if (Rows.AddedRowOf(page, line) is not { Band.Kind: "Copy" } && Rows.Locate(page, line) != null && line.FirstText.Length > 0)
+            list.Add(new("Supprimer cette ligne", "Objet retiré de la vente : la ligne (et sa suite) disparaît, ce qui suit remonte.", "\uE74D",
+                () => _ = LineActionAsync("delete", 0, f), Danger: true));
         return list;
     }
 
@@ -670,6 +700,33 @@ public sealed partial class MainWindow : Window
         if (_busy || PageEdits.FindLine(_project, f) is not { } hit) return;
         var (page, line) = hit;
         string name = Short(line.FirstText);
+        if (act == "end") { if (_view != null) await ApplyLotAsync(_view, line, "0"); return; }
+        if (act == "back")
+        {
+            PushUndo();
+            Lots.Set(_project, line, "");
+            Replan();
+            RecomputeTotals();
+            await RefreshViewAsync();
+            SetStatus($"« {name} » est revenu à sa place : tapez son numéro (ou « Synchroniser »).");
+            ScheduleAutosave();
+            return;
+        }
+        if (act == "delete")
+        {
+            if (!await ConfirmAsync("Supprimer cette ligne ?", $"« {name} » (et sa suite) disparaît de la page, du fichier texte et des totaux. Les autres numéros de lot ne changent pas. ↶ ou Retirer… › Remettre les lignes supprimées pour la retrouver.", "Supprimer")) return;
+            PushUndo();
+            line.Deleted = true;
+            Lots.Resync(_project);
+            Replan();
+            RecomputeTotals();
+            _currentField = null;
+            await RefreshViewAsync();
+            UpdateEditBar();
+            SetStatus($"« {name} » supprimée : ce qui suit est remonté. ↶ pour annuler.");
+            ScheduleAutosave();
+            return;
+        }
         PushUndo();
         PrintedLine? show = null;
         string msg = "";
@@ -698,6 +755,10 @@ public sealed partial class MainWindow : Window
                 show = Rows.Split(page, line) ? line : null;
                 msg = $"« {name} » est maintenant une rangée à part, avec sa case de lot et ses prix.";
                 break;
+            case "splitBelow":
+                show = Rows.SplitBelow(page, line) ? line : null;
+                msg = $"Trait tracé sous « {name} » : ce qui suit est une rangée à part.";
+                break;
             case "merge":
                 Rows.RemoveAdded(page, line);
                 msg = $"« {name} » est remise dans la rangée du dessus.";
@@ -707,7 +768,7 @@ public sealed partial class MainWindow : Window
                 msg = "Ligne ajoutée supprimée, la suite est remontée.";
                 break;
         }
-        if ((act is "copy" or "typed" or "split" or "blankBelow" or "blankAbove") && show is null)
+        if ((act is "copy" or "typed" or "split" or "splitBelow" or "blankBelow" or "blankAbove") && show is null)
         {
             _undo.RemoveAt(_undo.Count - 1);
             UpdateCommands();
@@ -728,6 +789,352 @@ public sealed partial class MainWindow : Window
         UpdateEditBar();
         SetStatus(msg + " ↶ pour annuler.");
         ScheduleAutosave();
+    }
+
+    // ---------- Lots 0 : à la fin du document ----------
+
+    /// <summary>Où est maintenant la ligne : « page 9 « Lots de fin », 3e ligne » ou « page 7, après le dernier lot (« … ») ».</summary>
+    private (int K, string Text)? PlaceOf(PrintedLine line)
+    {
+        var u = _plan.Moving.FirstOrDefault(x => x.Lines.Contains(line));
+        if (u is null) return null;
+        int k = u.EndPage >= 0 ? u.EndPage : u.Dest.P;
+        int rank = _plan.Pages[k].Pieces.Where(pc => pc.IsUnit).ToList().FindIndex(pc => pc.Unit == u) + 1;
+        if (_project.Pages[k].EndLots) return (k, $"page {k + 1} « Lots de fin », {(rank == 1 ? "1re" : rank + "e")} ligne");
+        var anchor = u.Dest.Table.Rows[u.Dest.R].Lines.FirstOrDefault(l => l.FirstText.Length > 0) ?? u.Object;
+        return (k, $"page {k + 1}, après le dernier lot (« {Short(anchor.FirstText)} »)");
+    }
+
+    /// <summary>Choix à cocher avec un titre en gras et une explication.</summary>
+    private static RadioButton Choice(string group, string title, string? detail, bool chosen, UIElement? extra = null)
+    {
+        var content = new StackPanel { Spacing = 2 };
+        content.Children.Add(new TextBlock { Text = title, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
+        if (detail != null) content.Children.Add(new TextBlock { Text = detail, FontSize = 13, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        if (extra != null) content.Children.Add(extra);
+        return new RadioButton { GroupName = group, Content = content, IsChecked = chosen, MinHeight = 44, Margin = new Thickness(0, 2, 0, 2) };
+    }
+
+    /// <summary>
+    /// Lot 0 : la 1re fois, on demande où mettre les lots à la fin (après le dernier lot, ou sur une page « Lots de fin »
+    /// placée après la page choisie). Le choix vaut pour les suivants (modifiable dans Lots › Lots de fin…). Null : annulé.
+    /// </summary>
+    private async Task<EndLotsChoice?> ChooseEndPlaceAsync(PrintedLine? line, bool force = false)
+    {
+        if (_project.EndLots != null && !force) return _project.EndLots;
+        var cur = _project.EndLots;
+        var panel = new StackPanel { Spacing = 8, MaxWidth = 520 };
+        if (line != null)
+            panel.Children.Add(new TextBlock
+            {
+                TextWrapping = TextWrapping.Wrap,
+                Inlines =
+                {
+                    new Microsoft.UI.Xaml.Documents.Run { Text = $"« {Short(line.FirstText)} »", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold },
+                    new Microsoft.UI.Xaml.Documents.Run { Text = " n'est plus dans la vente (lot 0) : sa ligne quitte sa place, ce qui suit remonte, et elle passe à la fin." },
+                },
+            });
+        panel.Children.Add(new TextBlock { Text = "Où mettre les lots à la fin ?", TextWrapping = TextWrapping.Wrap });
+        var after = new ComboBox { MinWidth = 300, Margin = new Thickness(0, 4, 0, 4) };
+        var ids = new List<string>();
+        string wanted = cur?.AfterId ?? CurrentPage?.Id ?? "";
+        for (int i = 0; i < _project.Pages.Count; i++)
+        {
+            var pg = _project.Pages[i];
+            if (pg.EndLots) continue;
+            ids.Add(pg.Id);
+            after.Items.Add($"après la page {i + 1} · {Short(pg.SourceName)}");
+            if (pg.Id == wanted) after.SelectedIndex = ids.Count - 1;
+        }
+        if (after.SelectedIndex < 0 && ids.Count > 0) after.SelectedIndex = ids.Count - 1;
+        var last = Choice("endMode", "Juste après le dernier lot numéroté", "Dans le même tableau, à la suite.", cur?.Mode != "page");
+        var pageBox = new StackPanel { Spacing = 2 };
+        pageBox.Children.Add(new TextBlock { Text = "Une page créée exprès, même mise en page que la vente, placée :", FontSize = 13, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        pageBox.Children.Add(after);
+        pageBox.Children.Add(new TextBlock { Text = "Les pages suivantes sont renumérotées ; une nouvelle page s'ajoute quand elle est pleine.", FontSize = 13, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        var dedicated = Choice("endMode", "Sur une page « Lots de fin »", null, cur?.Mode == "page", pageBox);
+        after.SelectionChanged += (_, _) => dedicated.IsChecked = true;
+        panel.Children.Add(last);
+        panel.Children.Add(dedicated);
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Ce choix vaut pour tous les lots 0 (modifiable : Lots › Lots de fin…). Pour remettre un lot à sa place : retapez son numéro.",
+            FontSize = 13, Opacity = 0.7, TextWrapping = TextWrapping.Wrap,
+        });
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot, Title = line != null ? "Mettre ce lot à la fin ?" : "Lots de fin : où ?",
+            Content = new ScrollViewer { Content = panel, MaxHeight = 560 },
+            PrimaryButtonText = line != null ? "Oui, à la fin" : "OK", CloseButtonText = "Annuler", DefaultButton = ContentDialogButton.Primary,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return null;
+        bool page = dedicated.IsChecked == true && after.SelectedIndex >= 0;
+        return new EndLotsChoice { Mode = page ? "page" : "last", AfterId = page ? ids[after.SelectedIndex] : null };
+    }
+
+    /// <summary>Numéro tapé dans une case de lot (0 : à la fin, après confirmation).</summary>
+    private async Task ApplyLotAsync(PageView v, PrintedLine line, string value)
+    {
+        bool wasZero = Lots.IsZero(line);
+        bool goingZero = System.Text.RegularExpressions.Regex.IsMatch(value.Trim(), "^[+-]?0+$") && !wasZero;
+        EndLotsChoice? end = null;
+        if (goingZero)
+        {
+            end = await ChooseEndPlaceAsync(line);
+            if (end is null) { v.UpdateLots(); SetStatus("Lot 0 annulé : la ligne reste à sa place."); return; }
+        }
+        PushUndo();
+        if (end != null) _project.EndLots = end;
+        int before = _project.Pages.Count;
+        string sig = LotColumn.Signature(v.Page, _project.LotFrame);
+        Lots.Set(_project, line, value);
+        bool zero = Lots.IsZero(line);
+        Replan();
+        RecomputeTotals();
+        if (zero != wasZero || before != _project.Pages.Count || sig != LotColumn.Signature(v.Page, _project.LotFrame)) await RefreshViewAsync();
+        else v.UpdateLots();
+        if (zero && !wasZero)
+        {
+            int added = _project.Pages.Count - before;
+            SetStatus(PlaceOf(line) is { } where
+                ? $"Lot 0 : « {Short(line.FirstText)} » est maintenant à la fin : {where.Text}."
+                  + (added > 0 ? $" Page « Lots de fin » ajoutée (page {where.K + 1}) : les pages suivantes ont été renumérotées." : "")
+                  + " Pour le remettre : retapez son numéro, ou clic droit › Remettre à sa place."
+                : "Lot 0 : aucun autre lot numéroté, la ligne reste en place.");
+        }
+        else if (wasZero && !zero) SetStatus($"Lot {(line.Lot.Length > 0 ? line.Lot : "(vide)")} : « {Short(line.FirstText)} » est revenu à sa place.");
+        else SetStatus(line.Lot.Length > 0 ? $"Lot {line.Lot} enregistré." : "Case de lot vidée.");
+        ScheduleAutosave();
+    }
+
+    // ---------- Page : retirer, totaux ----------
+
+    /// <summary>Cases à cocher des pages (hors pages « lots de fin »).</summary>
+    private (StackPanel Panel, List<(CheckBox Box, ModelPage Page)> Boxes) PageChecklist(Func<ModelPage, bool> isChecked)
+    {
+        var panel = new StackPanel { Spacing = 2 };
+        var boxes = new List<(CheckBox, ModelPage)>();
+        for (int i = 0; i < _project.Pages.Count; i++)
+        {
+            var pg = _project.Pages[i];
+            if (pg.EndLots) continue;
+            var box = new CheckBox
+            {
+                MinHeight = 40, IsChecked = isChecked(pg),
+                Content = new TextBlock
+                {
+                    Inlines =
+                    {
+                        new Microsoft.UI.Xaml.Documents.Run { Text = $"Page {i + 1}  ", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold },
+                        new Microsoft.UI.Xaml.Documents.Run { Text = Short(pg.SourceName) },
+                    },
+                },
+            };
+            panel.Children.Add(box);
+            boxes.Add((box, pg));
+        }
+        return (panel, boxes);
+    }
+
+    /// <summary>Fenêtre à boutons empilés (un choix par bouton) ; renvoie la valeur du bouton touché, ou null.</summary>
+    private async Task<string?> ChooseAsync(string title, string message, params (string Label, string Value, bool Danger)[] options)
+    {
+        string? choice = null;
+        ContentDialog? dialog = null;
+        var panel = new StackPanel { Spacing = 8, MinWidth = 340 };
+        panel.Children.Add(new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
+        foreach (var (label, value, danger) in options)
+        {
+            var b = new Button { Content = label, MinHeight = 44, HorizontalAlignment = HorizontalAlignment.Stretch };
+            if (danger) b.Foreground = new SolidColorBrush(ColorHelper.FromArgb(255, 180, 40, 40));
+            b.Click += (_, _) => { choice = value; dialog?.Hide(); };
+            panel.Children.Add(b);
+        }
+        dialog = new ContentDialog { XamlRoot = Content.XamlRoot, Title = title, Content = panel, CloseButtonText = "Annuler" };
+        await dialog.ShowAsync();
+        return choice;
+    }
+
+    /// <summary>« Retirer… » : cette page, des pages au choix, tout le dossier ; remettre les lignes supprimées.</summary>
+    private async Task RetireMenuAsync(ModelPage page)
+    {
+        if (_busy) return;
+        int k = _project.Pages.IndexOf(page);
+        var deleted = page.AllLines().Where(l => l.Deleted).ToList();
+        var options = new List<(string, string, bool)> { ($"Cette page (page {k + 1})", "one", true), ("Pages au choix…", "some", false), ("Tout le dossier", "all", true) };
+        if (deleted.Count > 0) options.Add(($"Remettre les lignes supprimées ({deleted.Count})", "restore", false));
+        var choice = await ChooseAsync("Retirer", "Que voulez-vous retirer ? (↶ pour revenir en arrière)", [.. options]);
+        if (choice == "one") { await RemovePageAsync(page); return; }
+        if (choice == "restore")
+        {
+            PushUndo();
+            foreach (var l in deleted) l.Deleted = false;
+            Lots.Resync(_project);
+            Replan();
+            RecomputeTotals();
+            await RefreshViewAsync();
+            SetStatus($"{deleted.Count} ligne(s) remise(s) à leur place.");
+            ScheduleAutosave();
+            return;
+        }
+        List<ModelPage> targets;
+        if (choice == "all")
+        {
+            if (!await ConfirmAsync("Retirer tout le dossier ?", $"Les {_project.Pages.Count} pages seront retirées (projet vide). ↶ pour revenir en arrière.", "Tout retirer")) return;
+            targets = [.. _project.Pages];
+        }
+        else if (choice == "some")
+        {
+            var (list, boxes) = PageChecklist(pg => pg == page);
+            var panel = new StackPanel { Spacing = 8 };
+            panel.Children.Add(new TextBlock { Text = "Cochez les pages à retirer.", TextWrapping = TextWrapping.Wrap });
+            panel.Children.Add(new ScrollViewer { Content = list, MaxHeight = 440 });
+            var dialog = new ContentDialog
+            {
+                XamlRoot = Content.XamlRoot, Title = "Retirer des pages", Content = panel,
+                PrimaryButtonText = "Retirer", CloseButtonText = "Annuler", DefaultButton = ContentDialogButton.Close,
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+            targets = boxes.Where(b => b.Box.IsChecked == true).Select(b => b.Page).ToList();
+            if (targets.Count == 0) { SetStatus("Aucune page cochée."); return; }
+            if (!await ConfirmAsync("Retirer ces pages ?", $"{targets.Count} page(s) : {string.Join(", ", targets.Select(pg => _project.Pages.IndexOf(pg) + 1))}. ↶ pour revenir en arrière.", "Retirer")) return;
+        }
+        else return;
+        PushUndo();
+        foreach (var pg in targets)
+        {
+            _project.Pages.Remove(pg);
+            Forget(pg);
+            if (pg.SourceEntry != null && _project.Pages.All(x => x.SourceEntry != pg.SourceEntry)) _sources.Remove(pg.SourceEntry);
+        }
+        if (_project.Pages.All(x => x.EndLots)) _project.Pages.Clear();
+        Lots.Resync(_project);
+        _crops.Clear();
+        Replan();
+        RecomputeTotals();
+        await ShowPageAsync(Math.Min(k, _project.Pages.Count - 1));
+        SetStatus($"{targets.Count} page(s) retirée(s).");
+        ScheduleAutosave();
+    }
+
+    /// <summary>« Totaux » : recalculer les totaux de la page ; ajouter une ligne TOTAL (calcul au choix).</summary>
+    private async Task TotalsMenuAsync(ModelPage page)
+    {
+        if (_busy) return;
+        var choice = await ChooseAsync("Totaux", "Les totaux se recalculent tout seuls quand un montant change. Ici, vous pouvez aussi :",
+            ("Ajouter une ligne TOTAL…", "add", false), ("Recalculer les totaux de la page", "recalc", false));
+        if (choice == "recalc")
+        {
+            PushUndo();
+            int n = 0;
+            foreach (var l in page.AllLines())
+                foreach (var f in l.Cells)
+                    if (Totals.IsComputedCell(l, f) && f.Manual) { f.Manual = false; n++; }
+            Replan();
+            RecomputeTotals();
+            await RefreshViewAsync();
+            SetStatus($"Totaux de la page recalculés{(n > 0 ? $" ({n} total(aux) tapé(s) à la main remis en automatique)" : "")}.");
+            ScheduleAutosave();
+            return;
+        }
+        if (choice != "add") return;
+        var hit = _currentField is null ? null : PageEdits.FindLine(_project, _currentField);
+        var here = hit is { } h && h.Page == page && Rows.CanCopy(page, h.Line) ? h.Line : null;
+        // Tableaux possibles : ceux qui ont des lignes d'objet ; proposé : celui de la case touchée, sinon le 1er avec des montants.
+        var tables = page.Tables.Select(t => (T: t, Last: Rows.LastObjectLine(page, t))).Where(x => x.Last != null).ToList();
+        if (tables.Count == 0) { SetStatus("Pas de tableau d'objets sur cette page pour y ajouter une ligne TOTAL."); return; }
+        static bool HasAmounts(Table t) => t.Rows.Any(r => r.Lines.Any(l => l.Cells.Skip(1).Any(c => c.Text.Any(char.IsDigit))));
+        int pick = Math.Max(0, tables.FindIndex(x => HasAmounts(x.T)));
+
+        var panel = new StackPanel { Spacing = 6, MaxWidth = 520 };
+        panel.Children.Add(new TextBlock { Text = "La ligne TOTAL s'ajoute comme les autres lignes du tableau.", TextWrapping = TextWrapping.Wrap });
+        var where = new ComboBox { MinWidth = 300, Header = "Sous" };
+        if (here != null) where.Items.Add($"la ligne touchée « {Short(here.FirstText)} »");
+        for (int i = 0; i < tables.Count; i++) where.Items.Add($"la fin du tableau {i + 1} (« {Short(tables[i].Last!.FirstText)} »)");
+        where.SelectedIndex = here != null ? 0 : pick;
+        if (tables.Count > 1 || here != null) panel.Children.Add(where);
+        else panel.Children.Add(new TextBlock { Text = $"Sous « {Short(tables[0].Last!.FirstText)} » (fin du tableau).", TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new TextBlock { Text = "Elle additionne :", Margin = new Thickness(0, 6, 0, 0) });
+        var above = Choice("totScope", "Les lignes au-dessus", "Du début du tableau (ou du total précédent) jusqu'à elle.", true);
+        var onPage = Choice("totScope", "Toute cette page", null, false);
+        var (checklist, boxes) = PageChecklist(pg => pg == page);
+        var pagesList = new ScrollViewer { Content = checklist, MaxHeight = 220, Margin = new Thickness(28, 0, 0, 0), Visibility = Visibility.Collapsed };
+        var some = Choice("totScope", "Les pages au choix", "À cocher dans la liste qui s'ouvre.", false);
+        var all = Choice("totScope", "Tout le document", null, false);
+        foreach (var r in new[] { above, onPage, some, all }) r.Checked += (_, _) => pagesList.Visibility = some.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        panel.Children.Add(above);
+        panel.Children.Add(onPage);
+        panel.Children.Add(some);
+        panel.Children.Add(pagesList);
+        panel.Children.Add(all);
+        var auto = new CheckBox { Content = "Calculer automatiquement (sinon : à taper soi-même)", IsChecked = true, MinHeight = 40 };
+        panel.Children.Add(auto);
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot, Title = "Ajouter une ligne TOTAL", Content = new ScrollViewer { Content = panel, MaxHeight = 600 },
+            PrimaryButtonText = "Ajouter", CloseButtonText = "Annuler", DefaultButton = ContentDialogButton.Primary,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        int sel = where.SelectedIndex < 0 ? 0 : where.SelectedIndex;
+        var anchor = here != null && sel == 0 ? here : tables[Math.Clamp(here != null ? sel - 1 : sel, 0, tables.Count - 1)].Last!;
+        string mode = onPage.IsChecked == true ? "page" : some.IsChecked == true ? "pages" : all.IsChecked == true ? "all" : "above";
+        var scope = new TotalScope
+        {
+            Mode = mode, Auto = auto.IsChecked == true,
+            Pages = mode == "pages" ? boxes.Where(b => b.Box.IsChecked == true).Select(b => b.Page.Id).ToList() : [],
+        };
+        PushUndo();
+        var t = Rows.AddTotalLine(page, anchor, scope);
+        if (t is null)
+        {
+            _undo.RemoveAt(_undo.Count - 1);
+            UpdateCommands();
+            SetStatus("Impossible d'ajouter la ligne ici.");
+            return;
+        }
+        Lots.Resync(_project);
+        Replan();
+        RecomputeTotals();
+        await RefreshViewAsync();
+        _view?.FlashLine(t);
+        string sums = string.Join(" / ", t.Cells.Skip(1).Select(c => c.Text).Where(x => x.Length > 0));
+        SetStatus($"Ligne TOTAL ajoutée sous « {Short(anchor.FirstText)} »"
+                  + (scope.Auto ? $" : {(sums.Length > 0 ? sums : "0")}. Elle se recalcule toute seule" : " : tapez les montants")
+                  + ". Touchez « TOTAL » pour renommer (ex. « TOTAL SALLE 2 »). ↶ pour annuler.");
+        ScheduleAutosave();
+    }
+
+    /// <summary>Aide : les numéros de lot, pas à pas.</summary>
+    private async Task LotsHelpAsync()
+    {
+        var steps = new (string Title, string Text)[]
+        {
+            ("Choisir les pages.", "Bouton Lots : cochez les pages (et tableaux) qui reçoivent des numéros, puis OK. Une page de garde, un récapitulatif ou une signature restent sans numéro. Pour changer : Lots › Pages et tableaux…"),
+            ("Numéroter.", "Touchez une case à gauche d'un objet et tapez son numéro : rien d'autre ne change. Ou « Synchroniser automatiquement » : toutes les cases se remplissent dans l'ordre, en repartant des numéros déjà tapés."),
+            ("Objet absent : à la fin.", "Tapez 0 (ou clic droit › Mettre à la fin). La 1re fois, l'app demande où : après le dernier lot, ou sur une page « Lots de fin » placée où vous voulez (les pages suivantes sont renumérotées, une nouvelle page s'ajoute quand elle est pleine). Le message en bas dit exactement où la ligne est partie. Pour la remettre : retapez son numéro (ou clic droit › Remettre à sa place)."),
+            ("Objet retiré de la vente.", "Clic droit › Supprimer cette ligne : elle disparaît (page, fichier texte, totaux), ce qui suit remonte. Pour la retrouver : ↶, ou Retirer… › Remettre les lignes supprimées."),
+            ("Ajouter ou séparer.", "Clic droit (ou bouton Ligne) : ligne vide au-dessus ou en dessous, dupliquer, tracer un trait au-dessus ou en dessous pour séparer un gros bloc."),
+            ("Déplacer une rangée.", "Glissez la poignée ⋮⋮ (à gauche de la poubelle) vers le haut ou le bas."),
+            ("Totaux.", "Ils suivent tout seuls. Bouton Totaux de la page : recalculer, ou ajouter une ligne TOTAL (lignes au-dessus, la page, des pages au choix ou tout le document)."),
+        };
+        var panel = new StackPanel { Spacing = 10, MaxWidth = 560 };
+        for (int i = 0; i < steps.Length; i++)
+            panel.Children.Add(new TextBlock
+            {
+                TextWrapping = TextWrapping.Wrap,
+                Inlines =
+                {
+                    new Microsoft.UI.Xaml.Documents.Run { Text = $"{i + 1}. {steps[i].Title} ", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold },
+                    new Microsoft.UI.Xaml.Documents.Run { Text = steps[i].Text },
+                },
+            });
+        panel.Children.Add(new TextBlock { Text = "Rien ne change sans votre action. ↶ annule la dernière action (jusqu'à 30).", Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot, Title = "Numéros de lot : comment ça marche ?",
+            Content = new ScrollViewer { Content = panel, MaxHeight = 600 }, CloseButtonText = "Compris", DefaultButton = ContentDialogButton.Close,
+        };
+        await dialog.ShowAsync();
     }
 
     private string ComputedText(Field f)
@@ -933,7 +1340,7 @@ public sealed partial class MainWindow : Window
             Lots.CreateEmpty(_project);
             Replan();
             await RefreshViewAsync();
-            SetStatus($"Colonne des lots créée sur {PagesWithLots()} : {Lots.ObjectLines(_project).Count()} cases vides. Touchez une case pour taper un numéro (0 = absent : la ligne passe après le dernier lot).");
+            SetStatus($"Colonne des lots créée sur {PagesWithLots()} : {Lots.ObjectLines(_project).Count()} cases vides. Touchez une case pour taper un numéro (0 = absent : la ligne passe à la fin). Aide : Lots › Comment ça marche ?");
             ScheduleAutosave();
             return;
         }
@@ -952,7 +1359,7 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(new TextBlock
         {
             TextWrapping = TextWrapping.Wrap, Opacity = 0.7,
-            Text = "Touchez une case sur la page pour taper un numéro : rien d'autre ne change. 0 = objet absent : sa ligne passe après le dernier lot ; "
+            Text = "Touchez une case sur la page pour taper un numéro : rien d'autre ne change. 0 = objet absent : sa ligne passe à la fin (après le dernier lot ou sur une page « Lots de fin ») ; "
                  + "retapez un numéro pour la remettre à sa place. Poubelle : ce n'est pas un objet. « + » : ajouter une case. ⋮⋮ : glisser pour déplacer une rangée.",
         });
         panel.Children.Add(new TextBlock
@@ -988,6 +1395,14 @@ public sealed partial class MainWindow : Window
         var pagesButton = new Button { Content = "Pages et tableaux…", MinHeight = 44 };
         pagesButton.Click += (_, _) => { choice = "pages"; dialog?.Hide(); };
         extra.Children.Add(pagesButton);
+        var endButton = new Button { Content = "Lots de fin (lot 0)…", MinHeight = 44 };
+        endButton.Click += (_, _) => { choice = "end"; dialog?.Hide(); };
+        var helpButton = new Button { Content = "Comment ça marche ?", MinHeight = 44 };
+        helpButton.Click += (_, _) => { choice = "help"; dialog?.Hide(); };
+        var extra2 = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        extra2.Children.Add(endButton);
+        extra2.Children.Add(helpButton);
+        panel.Children.Add(extra2);
         var empty = new Button { Content = "Vider les cases", MinHeight = 44 };
         empty.Click += (_, _) => { choice = "empty"; dialog?.Hide(); };
         var clear = new Button { Content = "Enlever la colonne", MinHeight = 44, Foreground = new SolidColorBrush(ColorHelper.FromArgb(255, 180, 40, 40)) };
@@ -1010,6 +1425,23 @@ public sealed partial class MainWindow : Window
             case "sync":
                 PushUndo();
                 SyncLots();
+                return;
+            case "help":
+                await LotsHelpAsync();
+                break;
+            case "end":
+                var endChoice = await ChooseEndPlaceAsync(null, force: true);
+                if (endChoice is null) break;
+                PushUndo();
+                _project.EndLots = endChoice;
+                Replan();
+                RecomputeTotals();
+                await RefreshViewAsync();
+                var ends = _project.Pages.Select((pg, i) => pg.EndLots ? i + 1 : 0).Where(i => i > 0).ToList();
+                SetStatus(endChoice.Mode == "page"
+                    ? $"Lots 0 sur une page « Lots de fin »{(ends.Count > 0 ? $" (page {string.Join(", ", ends)})" : " (créée au premier lot 0)")}."
+                    : "Lots 0 juste après le dernier lot numéroté.");
+                ScheduleAutosave();
                 return;
             case "pages":
                 var chosen = await ChooseLotTablesAsync();
@@ -1161,7 +1593,7 @@ public sealed partial class MainWindow : Window
             // Lots 0 : leurs morceaux sont pris sur leur page (corrections comprises), puis recollés après le dernier lot.
             var crops = new Dictionary<Arrangement.Unit, Arrangement.Crop?>();
             var unitPages = targets.Select(p => _project.Pages.IndexOf(p))
-                .SelectMany(k => plan.Pages[k].Pieces.Where(pc => pc.IsUnit).Select(pc => pc.Unit!.P)).Distinct().ToList();
+                .SelectMany(k => plan.Pages[k].Pieces.Where(pc => pc.IsUnit).Select(pc => pc.Unit!.P)).Distinct().Where(p => !_project.Pages[p].EndLots).ToList();
             for (int i = 0; i < unitPages.Count; i++)
             {
                 var page = _project.Pages[unitPages[i]];
@@ -1178,7 +1610,9 @@ public sealed partial class MainWindow : Window
                 int k = _project.Pages.IndexOf(page);
                 Progress.Value = (double)i / targets.Count;
                 SetStatus($"Création de l'image {i + 1} sur {targets.Count}…");
-                var edited = await EditedOf(page);
+                // Page « lots de fin » : composée sur l'image de sa page modèle.
+                int? tpl = plan.Pages[k].Template;
+                var edited = page.EndLots ? (tpl is int t && t >= 0 ? await EditedOf(_project.Pages[t]) : null) : await EditedOf(page);
                 if (edited is null) continue;
                 var final = edited;
                 bool arranged = Arrangement.PageArranged(_project, plan, k);
@@ -1194,7 +1628,8 @@ public sealed partial class MainWindow : Window
                 done++;
             }
             SetStatus($"{done} image(s) JPEG exportée(s) dans « {folder.Name} » (nom d'origine + « - modifié »)."
-                      + (plan.Units.Count > 0 && plan.Dest != null ? $" {plan.Units.Count} lot(s) 0 placé(s) après le dernier lot (page {plan.Dest.P + 1})." : ""));
+                      + (plan.Moving.Count > 0 && plan.Dest != null
+                          ? $" {plan.Moving.Count} lot(s) 0 placé(s) {(_project.Pages[plan.Dest.P].EndLots ? "sur la page « Lots de fin »" : "après le dernier lot")} (page {plan.Dest.P + 1})." : ""));
         });
     }
 
@@ -1518,8 +1953,8 @@ public sealed partial class MainWindow : Window
         int n = _project.Pages.Count;
         var page = CurrentPage;
         PhotoButton.IsEnabled = ImportButton.IsEnabled = ProjectButton.IsEnabled = !_busy;
-        CropButton.IsEnabled = !_busy && page?.Source == PageSource.Image;
-        LockToggle.IsEnabled = !_busy && page != null;
+        CropButton.IsEnabled = !_busy && page?.Source == PageSource.Image && !page.EndLots;
+        LockToggle.IsEnabled = !_busy && page != null && !page.EndLots;
         LotsButton.IsEnabled = ExportButton.IsEnabled = EditButton.IsEnabled = !_busy && n > 0;
         SyncItem.IsEnabled = Lots.IsActive(_project);
         RemovePageItem.IsEnabled = page != null;

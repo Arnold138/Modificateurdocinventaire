@@ -35,7 +35,9 @@ public sealed class PageView
     private static readonly SolidColorBrush TrashFill = new(ColorHelper.FromArgb(255, 253, 236, 236));
     private static readonly SolidColorBrush TrashInk = new(ColorHelper.FromArgb(255, 180, 40, 40));
     private static readonly SolidColorBrush AddInk = new(ColorHelper.FromArgb(255, 154, 163, 173));
-    private static readonly SolidColorBrush GripInk = new(ColorHelper.FromArgb(255, 154, 163, 173));
+    private static readonly SolidColorBrush GripInk = new(ColorHelper.FromArgb(255, 74, 85, 96));
+    private static readonly SolidColorBrush GripFill = new(ColorHelper.FromArgb(255, 238, 241, 244));
+    private static readonly SolidColorBrush GripBorder = new(ColorHelper.FromArgb(255, 205, 211, 218));
     private static readonly TextBlock Meter = new() { FontFamily = new FontFamily("Times New Roman") };
 
     private const double LineHeightRatio = 1.15; // hauteur de ligne de Times New Roman, en em
@@ -454,12 +456,12 @@ public sealed class PageView
                 HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
             },
         };
-        Canvas.SetLeft(badge, 34);
+        Canvas.SetLeft(badge, 4);
         Canvas.SetTop(badge, centerY - 12);
         _gutter.Children.Add(badge);
     }
 
-    // ---------- Déplacer une rangée (poignée ⋮⋮ à gauche) ----------
+    // ---------- Déplacer une rangée (poignée ⋮⋮ juste à gauche de la poubelle) ----------
 
     private void DrawGrips()
     {
@@ -475,11 +477,12 @@ public sealed class PageView
                 double h = Math.Max(24, Math.Min(40, strip.Bottom - strip.Top - 4));
                 var grip = new Border
                 {
-                    Width = 28, Height = h, CornerRadius = new CornerRadius(8), Background = Clear,
-                    Child = new FontIcon { Glyph = "", FontSize = 18, Foreground = GripInk },
+                    Width = 30, Height = h, CornerRadius = new CornerRadius(8), Background = GripFill,
+                    BorderBrush = GripBorder, BorderThickness = new Thickness(1),
+                    Child = new FontIcon { Glyph = "", FontSize = 20, Foreground = GripInk },
                 };
                 ToolTipService.SetToolTip(grip, "Glisser pour déplacer la rangée");
-                Canvas.SetLeft(grip, 2);
+                Canvas.SetLeft(grip, GutterWidth - 52 - 30); // juste à gauche de la poubelle
                 Canvas.SetTop(grip, (strip.Top + strip.Bottom) / 2 - h / 2);
                 InitDrag(grip, vt, strip);
                 _gutter.Children.Add(grip);

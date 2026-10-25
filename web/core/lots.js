@@ -36,7 +36,7 @@ function plainText(t) {
   return words.length >= 2 && letters > 3 * signs;
 }
 
-const isObject = (line, pick) => !line.NoLot && !line.OutsideTable && (line === pick || (!!line.ForceLot && firstText(line).length > 0));
+const isObject = (line, pick) => !line.NoLot && !line.OutsideTable && !line.Deleted && (line === pick || (!!line.ForceLot && firstText(line).length > 0));
 
 /** Objet d'une rangée : la règle, ou la 1re ligne d'une rangée ajoutée ou séparée (même vide : « Ajouter une ligne vide »). */
 const pickOf = (row) => defaultPick(row)
@@ -193,7 +193,7 @@ export function resyncLots(project) {
   const objects = new Set([...objectLines(project)].map((o) => o.line));
   for (const l of everyLine(project)) {
     l.LotSlot = objects.has(l);
-    if (!l.LotSlot) { l.Lot = ''; l.LotManual = false; }
+    if (!l.LotSlot && !l.Deleted) { l.Lot = ''; l.LotManual = false; } // ligne supprimée : son numéro est gardé (si on la remet)
   }
 }
 

@@ -13,10 +13,11 @@ import { objectLines, lotsActive, numberLots, clearLots, setLot, resyncLots, rem
 import { unzipSync } from './vendor/fflate.js';
 import { stretch, setExtra, baseHeight, totalExtra } from './core/layout.js';
 import { toggleStrike, isStruck, setColor, RED, BLACK, TEXT_COLORS } from './core/strikes.js';
-import { planArrangement, viewOf, composePage, unitCrop, pageArranged, mapY, unmapY } from './core/arrange.js';
+import { planArrangement, viewOf, composePage, unitCrop, pageArranged, mapY, unmapY, syncEndPages } from './core/arrange.js';
 import { recomputeTotals, isComputedCell, computedValue } from './core/totals.js';
+import { hasLotCell } from './core/lots.js';
 import { frameSignature, lotFrameEnabled } from './core/lotcolumn.js';
-import { canCopyLine, canSplit, addedRowOf, copyLine, addBlankLine, locate, splitAt, splitTypedText, removeAddedRow } from './core/rows.js';
+import { canCopyLine, canSplit, addedRowOf, copyLine, addBlankLine, locate, splitAt, splitTypedText, removeAddedRow, canSplitBelow, splitBelow, addTotalLine, lastObjectLine } from './core/rows.js';
 import { decodeImage, pdfPages, isImageName, mimeOf } from './services/decode.js';
 import { recognize, warmUp } from './services/ocr.js';
 import { rasterToCanvas, canvasToBlob, renderEdits, freeCanvas, lineExtra, pageRaster } from './services/canvas.js';
@@ -76,8 +77,8 @@ function updateButtons() {
   const n = pages().length, page = currentPage();
   const b = state.busy;
   $('btnPhoto').disabled = $('btnImport').disabled = $('btnProjects').disabled = b;
-  $('btnCrop').disabled = b || page?.Source !== 'Image';
-  $('btnLock').disabled = b || !page;
+  $('btnCrop').disabled = b || page?.Source !== 'Image' || !!page?.EndLots;
+  $('btnLock').disabled = b || !page || !!page?.EndLots;
   $('btnLots').disabled = b || n === 0;
   $('btnEdit').disabled = b || n === 0;
   $('btnUndo').disabled = b || state.undo.length === 0;
@@ -244,8 +245,15 @@ function disposeView() {
 
 // ---------- Mise en page et images ----------
 
-/** Recalcule la mise en page (lots 0, rangées déplacées). */
+/** Recalcule la mise en page (lots 0, lignes supprimées, rangées déplacées, pages « lots de fin »). */
 function replan() {
+  const cur = currentPage();
+  if (syncEndPages(state.project)) {
+    const i = pages().indexOf(cur);
+    state.index = i >= 0 ? i : Math.max(0, Math.min(state.index, pages().length - 1));
+    state.crops.clear();
+    updateButtons();
+  }
   state.plan = planArrangement(state.project);
   return state.plan;
 }
@@ -283,7 +291,8 @@ async function cropOf(u) {
 /** Image affichée de la page k : la sienne, recomposée si des rangées partent ou arrivent. */
 async function displayOf(k) {
   const page = pages()[k];
-  const own = await ownDisplay(page);
+  const tpl = state.plan.pages[k]?.template;
+  const own = page.EndLots ? (tpl >= 0 ? await ownDisplay(pages()[tpl]) : null) : await ownDisplay(page);
   if (!own || !pageArranged(state.project, state.plan, k)) return own;
   const crops = new Map();
   for (const pc of state.plan.pages[k].pieces) if (pc.kind === 'unit') crops.set(pc.unit, await cropOf(pc.unit));
@@ -311,15 +320,21 @@ async function showPage(n, { flat = null, fit = true, keepScroll = false } = {})
   const head = document.createElement('div');
   head.className = 'page-head';
   const title = document.createElement('span');
-  title.textContent = `Page ${state.index + 1} sur ${list.length} · ${page.SourceName}`;
+  title.textContent = `Page ${state.index + 1} sur ${list.length} · ${page.SourceName}${page.EndLots ? ' (lots 0, créée automatiquement)' : ''}`;
   const remove = document.createElement('button');
-  remove.textContent = 'Retirer la page';
-  remove.onclick = () => removePage(page);
+  remove.innerHTML = 'Retirer… <svg><use href="#i-plus"/></svg>';
+  remove.title = 'Retirer cette page, des pages au choix ou tout le dossier';
+  remove.onclick = () => run(() => retireMenu(page));
+  const totals = document.createElement('button');
+  totals.innerHTML = '<svg><use href="#i-sum"/></svg>Totaux';
+  totals.title = 'Recalculer les totaux de la page, ajouter une ligne TOTAL';
+  totals.onclick = () => run(() => totalsMenu(page));
   const sync = document.createElement('button');
   sync.className = 'sync';
   sync.innerHTML = '<svg><use href="#i-sync"/></svg>Synchroniser automatiquement';
   sync.onclick = () => { pushUndo(); syncLots(); };
-  head.append(title, sync, remove);
+  if (page.EndLots) head.append(title, sync);
+  else head.append(title, sync, totals, remove);
 
   const pp = () => state.plan.pages[k];
   const view = new PageView(viewOf(state.project, state.plan, k), display, {
@@ -337,22 +352,7 @@ async function showPage(n, { flat = null, fit = true, keepScroll = false } = {})
       scheduleSave();
     },
     onLocks: () => { status('Zones verrouillées mises à jour.'); scheduleSave(); },
-    onLot: (v, line, value) => {
-      pushUndo();
-      const wasZero = isZeroLot(line), sig = frameSignature(v.page, lotFrameEnabled(state.project));
-      setLot(state.project, line, value);
-      const zero = isZeroLot(line);
-      replan();
-      recomputeAll();
-      if (zero !== wasZero || sig !== frameSignature(v.page, lotFrameEnabled(state.project))) refreshView();
-      else v.updateLots();
-      if (zero && !wasZero) {
-        const d = state.plan.dest;
-        status(d ? `Lot 0 : « ${firstText(line)} » est passé après le dernier lot (page ${d.p + 1}). Retapez un numéro pour le remettre à sa place.` : 'Lot 0 : aucun autre lot numéroté, la ligne reste en place.');
-      } else if (wasZero && !zero) status(`Lot ${line.Lot} : « ${firstText(line)} » est revenu à sa place.`);
-      else status(line.Lot ? `Lot ${line.Lot} enregistré.` : 'Case de lot vidée.');
-      scheduleSave();
-    },
+    onLot: (v, line, value) => { if (!state.busy) run(() => applyLot(v, line, value)); },
     onLotRemove: (v, line) => {
       pushUndo();
       removeLot(state.project, line);
@@ -427,6 +427,13 @@ function lineChoices(f) {
   const items = [];
   const typed = caretLine(state.view, f);
   const typedRest = typed > 0 ? f.Text.replace(/\r\n?/g, '\n').split('\n').slice(typed).join(' ').trim() : '';
+  const moved = state.plan?.moving.some((u) => u.lines.includes(line));
+  if (moved) {
+    // Ligne au lot 0, affichée à la fin : la remettre, ou la supprimer.
+    items.push({ act: 'back', icon: 'i-merge', label: 'Remettre à sa place', hint: 'La ligne retourne où elle était (case de lot vide : tapez son numéro).' });
+    items.push({ act: 'delete', icon: 'i-trash', label: 'Supprimer cette ligne', hint: 'Elle disparaît de la vente (page, .txt, totaux).', danger: true });
+    return { page, line, items };
+  }
   if (canCopyLine(page, line)) {
     items.push({ act: 'blankBelow', icon: 'i-addbelow', label: 'Ajouter une ligne vide en dessous', hint: 'Rangée complète (case de lot, désignation, prix) sous cette rangée. La suite descend.' });
     if (locate(page, line)?.r > 0)
@@ -436,12 +443,18 @@ function lineChoices(f) {
   if (typedRest && canCopyLine(page, line))
     items.push({ act: 'typed', from: typed, icon: 'i-split', label: 'Séparer ici', hint: `« ${short(typedRest)} » passe dans sa propre ligne, juste en dessous.` });
   else if (canSplit(page, line))
-    items.push({ act: 'split', icon: 'i-split', label: 'Séparer ici', hint: 'Cette ligne devient une rangée à part, avec sa case de lot et ses prix.' });
+    items.push({ act: 'split', icon: 'i-split', label: 'Séparer au-dessus (tracer un trait)', hint: 'Un trait au-dessus de cette ligne : elle devient une rangée à part, avec sa case de lot et ses prix.' });
+  if (canSplitBelow(page, line))
+    items.push({ act: 'splitBelow', icon: 'i-split', label: 'Séparer en dessous (tracer un trait)', hint: 'Un trait sous cette ligne : ce qui suit devient une rangée à part.' });
+  if (hasLotCell(line) && !isZeroLot(line))
+    items.push({ act: 'end', icon: 'i-addbelow', label: 'Mettre à la fin (lot 0)', hint: 'Objet absent : sa ligne part à la fin, ce qui suit remonte.' });
   const added = addedRowOf(page, line);
   if (added?.band.Kind === 'Split' && added.row.Lines[0] === line)
     items.push({ act: 'merge', icon: 'i-merge', label: 'Remettre dans la rangée du dessus', hint: 'Annule « Séparer ici » : le trait ajouté disparaît.' });
   if (added?.band.Kind === 'Copy')
-    items.push({ act: 'remove', icon: 'i-trash', label: 'Supprimer cette ligne ajoutée', hint: 'La ligne copiée disparaît, la suite remonte.', danger: true });
+    items.push({ act: 'remove', icon: 'i-trash', label: 'Supprimer cette ligne ajoutée', hint: 'La ligne ajoutée disparaît, la suite remonte.', danger: true });
+  else if (locate(page, line) && firstText(line))
+    items.push({ act: 'delete', icon: 'i-trash', label: 'Supprimer cette ligne', hint: 'Objet retiré de la vente : la ligne (et sa suite) disparaît, ce qui suit remonte.', danger: true });
   return { page, line, items };
 }
 
@@ -478,6 +491,26 @@ async function lineAction(item, f) {
   if (!hit || !item) return;
   const { page, line } = hit;
   const name = short(firstText(line));
+  if (item.act === 'end') return applyLot(state.view, line, '0');
+  if (item.act === 'back') {
+    pushUndo();
+    setLot(state.project, line, '');
+    replan(); recomputeAll();
+    await refreshView();
+    status(`« ${name} » est revenu à sa place : tapez son numéro (ou « Synchroniser »).`);
+    return scheduleSave();
+  }
+  if (item.act === 'delete') {
+    if (!(await confirmDialog('Supprimer cette ligne ?', `« ${name} » (et sa suite) disparaît de la page, du fichier texte et des totaux. Les autres numéros de lot ne changent pas. ↶ ou Retirer… › Remettre les lignes supprimées pour la retrouver.`, 'Supprimer'))) return;
+    pushUndo();
+    line.Deleted = true;
+    resyncLots(state.project);
+    replan(); recomputeAll();
+    state.field = null;
+    await refreshView();
+    status(`« ${name} » supprimée : ce qui suit est remonté. ↶ pour annuler.`);
+    return scheduleSave();
+  }
   pushUndo();
   let show = null, msg = '';
   if (item.act === 'blankBelow' || item.act === 'blankAbove') {
@@ -491,6 +524,9 @@ async function lineAction(item, f) {
     show = splitTypedText(page, line, item.from);
     if (show) { setExtra(page, line, lineExtra(line)); setExtra(page, show, lineExtra(show)); }
     msg = `« ${short(firstText(show ?? line))} » est maintenant sur sa propre ligne : tapez ses prix et son numéro de lot.`;
+  } else if (item.act === 'splitBelow') {
+    show = splitBelow(page, line) ? line : null;
+    msg = `Trait tracé sous « ${name} » : ce qui suit est une rangée à part.`;
   } else if (item.act === 'split') {
     show = splitAt(page, line) ? line : null;
     msg = `« ${name} » est maintenant une rangée à part, avec sa case de lot et ses prix.`;
@@ -501,7 +537,7 @@ async function lineAction(item, f) {
     removeAddedRow(page, line);
     msg = 'Ligne ajoutée supprimée, la suite est remontée.';
   }
-  if (['copy', 'typed', 'split', 'blankBelow', 'blankAbove'].includes(item.act) && !show) {
+  if (['copy', 'typed', 'split', 'splitBelow', 'blankBelow', 'blankAbove'].includes(item.act) && !show) {
     state.undo.pop();
     updateButtons();
     status('Impossible ici : choisissez une ligne d\'article d\'un tableau.');
@@ -519,6 +555,171 @@ async function lineAction(item, f) {
   }
   updateEditBar();
   status(msg + ' ↶ pour annuler.');
+  scheduleSave();
+}
+
+// ---------- Lots 0 : à la fin du document ----------
+
+/** Où est maintenant la ligne : « page 9 « Lots de fin », 3e ligne » ou « page 7, après « 1 gazelle… » ». */
+function placeOf(line) {
+  const u = state.plan.moving.find((x) => x.lines.includes(line));
+  if (!u) return null;
+  const k = u.endPage ?? u.dest.p;
+  const onPage = state.plan.pages[k].pieces.filter((pc) => pc.kind === 'unit');
+  const rank = onPage.findIndex((pc) => pc.unit === u) + 1;
+  return { k, text: pages()[k].EndLots ? `page ${k + 1} « Lots de fin », ${rank === 1 ? '1re' : rank + 'e'} ligne` : `page ${k + 1}, après le dernier lot (« ${short(firstText(u.dest.table.Rows[u.dest.r].Lines.find((l) => firstText(l)) ?? u.object))} »)` };
+}
+
+/**
+ * Lot 0 : la 1re fois, on demande où mettre les lots à la fin (après le dernier lot, ou sur une page « Lots de fin »
+ * placée après la page choisie). Le choix vaut pour les suivants (modifiable dans Lots › Lots de fin…). Null : annulé.
+ */
+async function chooseEndPlace(line, force = false) {
+  if (state.project.EndLots && !force) return state.project.EndLots;
+  const cur = state.project.EndLots;
+  const options = pages().map((p, i) => (p.EndLots ? '' : `<option value="${escapeHtml(p.Id)}" ${(cur?.AfterId ?? pages()[state.index]?.Id) === p.Id ? 'selected' : ''}>après la page ${i + 1} · ${escapeHtml(short(p.SourceName))}</option>`)).join('');
+  const html = `${line ? `<p><b>« ${escapeHtml(short(firstText(line)))} »</b> n'est plus dans la vente (lot 0) : sa ligne quitte sa place, ce qui suit remonte, et elle passe à la fin.</p>` : ''}
+    <p>Où mettre les lots à la fin ?</p>
+    <label class="choice"><input type="radio" name="endMode" value="last" ${cur?.Mode !== 'page' ? 'checked' : ''}> <span><b>Juste après le dernier lot numéroté</b><small>Dans le même tableau, à la suite.</small></span></label>
+    <label class="choice"><input type="radio" name="endMode" value="page" ${cur?.Mode === 'page' ? 'checked' : ''}> <span><b>Sur une page « Lots de fin »</b><small>Une page créée exprès, même mise en page que la vente, placée
+      <select id="endAfter">${options}</select>. Les pages suivantes sont renumérotées ; une nouvelle page s'ajoute quand elle est pleine.</small></span></label>
+    <p class="muted">Ce choix vaut pour tous les lots 0 (modifiable : Lots › Lots de fin…). Pour remettre un lot à sa place : retapez son numéro.</p>`;
+  const choice = await dialog(line ? 'Mettre ce lot à la fin ?' : 'Lots de fin : où ?', html, [
+    { label: 'Annuler', value: null },
+    { label: line ? 'Oui, à la fin' : 'OK', value: 'ok', className: 'accent' },
+  ]);
+  if (choice !== 'ok') return null;
+  const mode = document.querySelector('input[name=endMode]:checked')?.value ?? 'last';
+  return { Mode: mode, AfterId: mode === 'page' ? $('endAfter').value : null };
+}
+
+/** Numéro tapé dans une case de lot (0 : à la fin, après confirmation). */
+async function applyLot(v, line, value) {
+  const wasZero = isZeroLot(line);
+  const goingZero = /^[+-]?0+$/.test(value.trim()) && !wasZero;
+  let end = null;
+  if (goingZero) {
+    end = await chooseEndPlace(line);
+    if (!end) { v.updateLots(); return status('Lot 0 annulé : la ligne reste à sa place.'); }
+  }
+  pushUndo();
+  if (end) state.project.EndLots = end;
+  const before = pages().length;
+  setLot(state.project, line, value);
+  replan();
+  recomputeAll();
+  await refreshView();
+  const zero = isZeroLot(line);
+  if (zero && !wasZero) {
+    const where = placeOf(line);
+    const added = pages().length - before;
+    status(where
+      ? `Lot 0 : « ${short(firstText(line))} » est maintenant à la fin : ${where.text}.${added > 0 ? ` Page « Lots de fin » ajoutée (page ${where.k + 1}) : les pages suivantes ont été renumérotées.` : ''} Pour le remettre : retapez son numéro, ou clic droit › Remettre à sa place.`
+      : 'Lot 0 : aucun autre lot numéroté, la ligne reste en place.');
+  } else if (wasZero && !zero) status(`Lot ${line.Lot || '(vide)'} : « ${short(firstText(line))} » est revenu à sa place.`);
+  else status(line.Lot ? `Lot ${line.Lot} enregistré.` : 'Case de lot vidée.');
+  scheduleSave();
+}
+
+// ---------- Page : retirer, totaux ----------
+
+/** Cases à cocher des pages (hors pages « lots de fin »). */
+function pageChecklist(checked = () => false) {
+  return `<ul class="list lotpages">${pages().map((p, i) => (p.EndLots ? '' : `<li><label><input type="checkbox" data-page="${i}" ${checked(p, i) ? 'checked' : ''}> <b>Page ${i + 1}</b> <small>${escapeHtml(short(p.SourceName))}</small></label></li>`)).join('')}</ul>`;
+}
+const checkedPages = () => [...$('dialogBody').querySelectorAll('input[data-page]')].filter((c) => c.checked).map((c) => pages()[+c.dataset.page]).filter(Boolean);
+
+/** « Retirer… » : cette page, des pages au choix, tout le dossier ; remettre les lignes supprimées. */
+async function retireMenu(page) {
+  const k = pages().indexOf(page);
+  const deleted = [...allLines(page)].filter((l) => l.Deleted);
+  const choice = await dialog('Retirer', '<p>Que voulez-vous retirer ? (↶ pour revenir en arrière)</p>', [
+    { label: `Cette page (page ${k + 1})`, value: 'one', className: 'danger' },
+    { label: 'Pages au choix…', value: 'some' },
+    { label: 'Tout le dossier', value: 'all', className: 'danger' },
+    ...(deleted.length ? [{ label: `Remettre les lignes supprimées (${deleted.length})`, value: 'restore' }] : []),
+    { label: 'Annuler', value: null },
+  ]);
+  if (choice === 'one') return removePage(page);
+  if (choice === 'restore') {
+    pushUndo();
+    for (const l of deleted) l.Deleted = false;
+    resyncLots(state.project);
+    replan(); recomputeAll();
+    await refreshView();
+    status(`${deleted.length} ligne(s) remise(s) à leur place.`);
+    return scheduleSave();
+  }
+  let targets = [];
+  if (choice === 'all') {
+    if (!(await confirmDialog('Retirer tout le dossier ?', `Les ${pages().length} pages seront retirées (projet vide). ↶ pour revenir en arrière.`, 'Tout retirer'))) return;
+    targets = pages().slice();
+  } else if (choice === 'some') {
+    const ok = await dialog('Retirer des pages', `<p>Cochez les pages à retirer.</p>${pageChecklist((p) => p === page)}`, [{ label: 'Annuler', value: null }, { label: 'Retirer', value: 'ok', className: 'danger' }]);
+    if (ok !== 'ok') return;
+    targets = checkedPages();
+    if (!targets.length) return status('Aucune page cochée.');
+    if (!(await confirmDialog('Retirer ces pages ?', `${targets.length} page(s) : ${targets.map((p) => pages().indexOf(p) + 1).join(', ')}. ↶ pour revenir en arrière.`, 'Retirer'))) return;
+  } else return;
+  pushUndo();
+  for (const p of targets) { const i = pages().indexOf(p); if (i >= 0) pages().splice(i, 1); state.flats.delete(p); state.oriented.delete(p); }
+  if (pages().every((p) => p.EndLots)) pages().splice(0);
+  resyncLots(state.project);
+  replan(); recomputeAll();
+  await showPage(Math.min(k, pages().length - 1));
+  status(`${targets.length} page(s) retirée(s).`);
+  scheduleSave();
+}
+
+/** « Totaux » : recalculer les totaux de la page ; ajouter une ligne TOTAL (calcul au choix). */
+async function totalsMenu(page) {
+  const choice = await dialog('Totaux', '<p>Les totaux se recalculent tout seuls quand un montant change. Ici, vous pouvez aussi :</p>', [
+    { label: 'Ajouter une ligne TOTAL…', value: 'add', className: 'accent' },
+    { label: 'Recalculer les totaux de la page', value: 'recalc' },
+    { label: 'Annuler', value: null },
+  ]);
+  if (choice === 'recalc') {
+    pushUndo();
+    let n = 0;
+    for (const l of allLines(page)) for (const f of l.Cells) if (isComputedCell(l, f) && f.Manual) { f.Manual = false; n++; }
+    replan(); recomputeAll();
+    await refreshView();
+    status(`Totaux de la page recalculés${n ? ` (${n} total(aux) tapé(s) à la main remis en automatique)` : ''}.`);
+    return scheduleSave();
+  }
+  if (choice !== 'add') return;
+  const hit = state.field ? findLine(state.project, state.field) : null;
+  const here = hit?.page === page && canCopyLine(page, hit.line) ? hit.line : null;
+  // Tableaux possibles : ceux qui ont des lignes d'objet ; proposé : celui de la case touchée, sinon le 1er avec des montants.
+  const tables = page.Tables.map((t) => ({ t, last: lastObjectLine(page, t) })).filter((x) => x.last);
+  if (!tables.length) return status('Pas de tableau d\'objets sur cette page pour y ajouter une ligne TOTAL.');
+  const hasAmounts = (t) => t.Rows.some((r) => r.Lines.some((l) => l.Cells.slice(1).some((c) => /\d/.test(c.Text))));
+  const pick = here ? tables.findIndex((x) => x.t.Rows.some((r) => r.Lines.includes(here))) : Math.max(0, tables.findIndex((x) => hasAmounts(x.t)));
+  const where = tables.length > 1 || here
+    ? `<label class="switch">Sous <select id="totTable">${here ? `<option value="here">la ligne touchée « ${escapeHtml(short(firstText(here)))} »</option>` : ''}${tables.map((x, i) => `<option value="${i}" ${!here && i === pick ? 'selected' : ''}>la fin du tableau ${i + 1} (« ${escapeHtml(short(firstText(x.last)))} »)</option>`).join('')}</select></label>`
+    : `<p>Sous « ${escapeHtml(short(firstText(tables[0].last)))} » (fin du tableau).</p>`;
+  const html = `<p>La ligne <b>TOTAL</b> s'ajoute comme les autres lignes du tableau.</p>${where}<p>Elle additionne :</p>
+    <label class="choice"><input type="radio" name="totScope" value="above" checked> <span><b>Les lignes au-dessus</b><small>Du début du tableau (ou du total précédent) jusqu'à elle.</small></span></label>
+    <label class="choice"><input type="radio" name="totScope" value="page"> <span><b>Toute cette page</b></span></label>
+    <label class="choice"><input type="radio" name="totScope" value="pages"> <span><b>Les pages au choix</b><small>À cocher dans la liste qui s'ouvre.</small></span></label>
+    <div id="totPages" hidden>${pageChecklist((p) => p === page)}</div>
+    <label class="choice"><input type="radio" name="totScope" value="all"> <span><b>Tout le document</b></span></label>
+    <label class="switch"><input id="totAuto" type="checkbox" checked> Calculer automatiquement (sinon : à taper soi-même)</label>`;
+  const showPages = (e) => { if (e.target.name === 'totScope') $('totPages').hidden = e.target.value !== 'pages'; };
+  if ((await dialog('Ajouter une ligne TOTAL', html, [{ label: 'Annuler', value: null }, { label: 'Ajouter', value: 'ok', className: 'accent' }], showPages)) !== 'ok') return;
+  const sel = $('totTable')?.value;
+  const anchor = sel === 'here' ? here : tables[sel !== undefined ? +sel : 0].last;
+  const mode = document.querySelector('input[name=totScope]:checked')?.value ?? 'above';
+  const scope = { Mode: mode, Pages: mode === 'pages' ? checkedPages().map((p) => p.Id) : [], Auto: $('totAuto').checked };
+  pushUndo();
+  const t = addTotalLine(page, anchor, scope);
+  if (!t) { state.undo.pop(); updateButtons(); return status('Impossible d\'ajouter la ligne ici.'); }
+  resyncLots(state.project);
+  replan(); recomputeAll();
+  await refreshView();
+  state.view?.flashLine(t);
+  const sums = t.Cells.slice(1).map((c) => c.Text).filter(Boolean).join(' / ');
+  status(`Ligne TOTAL ajoutée sous « ${short(firstText(anchor))} »${scope.Auto ? ` : ${sums || '0'}. Elle se recalcule toute seule` : ' : tapez les montants'}. Touchez « TOTAL » pour renommer (ex. « TOTAL SALLE 2 »). ↶ pour annuler.`);
   scheduleSave();
 }
 
@@ -871,7 +1072,7 @@ async function exportJpeg(only = null) {
   const targets = only ? all.filter((x) => x.page === only) : all;
   // Lots 0 : leurs morceaux sont pris sur leur page (corrections comprises), puis recollés après le dernier lot.
   const crops = new Map();
-  const unitPages = [...new Set(targets.flatMap(({ k }) => plan.pages[k].pieces.filter((pc) => pc.kind === 'unit').map((pc) => pc.unit.p)))];
+  const unitPages = [...new Set(targets.flatMap(({ k }) => plan.pages[k].pieces.filter((pc) => pc.kind === 'unit').map((pc) => pc.unit.p)))].filter((p) => !pages()[p].EndLots);
   for (let i = 0; i < unitPages.length; i++) {
     const page = pages()[unitPages[i]];
     if (page.Source !== 'Image') continue;
@@ -885,7 +1086,9 @@ async function exportJpeg(only = null) {
     const { page, k } = targets[i];
     progress(i / targets.length);
     status(`Création de l'image ${i + 1} sur ${targets.length}…`); await tick();
-    const edited = await editedOf(page);
+    // Page « lots de fin » : composée sur l'image de sa page modèle.
+    const tpl = plan.pages[k].template;
+    const edited = page.EndLots ? (tpl >= 0 ? await editedOf(pages()[tpl]) : null) : await editedOf(page);
     if (!edited) continue;
     let final = edited;
     const arranged = pageArranged(state.project, plan, k);
@@ -903,7 +1106,7 @@ async function exportJpeg(only = null) {
   }
   progress(null);
   status(`${files.length} image(s) prête(s).`);
-  const zero = plan.units.length > 0 ? ` ${plan.units.length} lot(s) 0 placé(s) après le dernier lot (page ${plan.dest.p + 1}).` : '';
+  const zero = plan.moving.length > 0 ? ` ${plan.moving.length} lot(s) 0 placé(s) à la fin (page ${(plan.moving[0].endPage ?? plan.dest.p) + 1}).` : '';
   await deliver(files, files.length > 1 ? 'Images prêtes' : 'Image prête', "<p>Chaque photo d'origine, inchangée sauf dans les cases modifiées" + (lotsActive(state.project) ? ' et la colonne des numéros de lot' : '') + '.' + zero + '</p>');
 }
 
@@ -964,6 +1167,21 @@ async function chooseLotTables() {
   return chosen;
 }
 
+/** Aide : les numéros de lot, pas à pas. */
+function lotsHelp() {
+  return dialog('Numéros de lot : comment ça marche ?', `
+    <ol class="help">
+      <li><b>Choisir les pages.</b> Bouton <b>Lots</b> : cochez les pages (et tableaux) qui reçoivent des numéros, puis <b>OK</b>. Une page de garde, un récapitulatif ou une signature restent sans numéro. Pour changer : <b>Lots › Pages et tableaux…</b></li>
+      <li><b>Numéroter.</b> Touchez une case à gauche d'un objet et tapez son numéro : rien d'autre ne change. Ou <b>Synchroniser automatiquement</b> : toutes les cases se remplissent dans l'ordre, en repartant des numéros déjà tapés.</li>
+      <li><b>Objet absent : à la fin.</b> Tapez <b>0</b> (ou clic droit › <b>Mettre à la fin</b>). La 1re fois, l'app demande où : <b>après le dernier lot</b>, ou sur une <b>page « Lots de fin »</b> placée où vous voulez (les pages suivantes sont renumérotées, une nouvelle page s'ajoute quand elle est pleine). Le message en bas dit exactement où la ligne est partie. Pour la remettre : retapez son numéro (ou clic droit › <b>Remettre à sa place</b>).</li>
+      <li><b>Objet retiré de la vente.</b> Clic droit › <b>Supprimer cette ligne</b> : elle disparaît (page, fichier texte, totaux), ce qui suit remonte. Pour la retrouver : ↶, ou <b>Retirer… › Remettre les lignes supprimées</b>.</li>
+      <li><b>Ajouter ou séparer.</b> Clic droit (ou bouton <b>Ligne</b>) : <b>ligne vide</b> au-dessus ou en dessous, <b>dupliquer</b>, <b>tracer un trait</b> au-dessus ou en dessous pour séparer un gros bloc.</li>
+      <li><b>Déplacer une rangée.</b> Glissez la poignée <b>⋮⋮</b> (à gauche de la poubelle) vers le haut ou le bas.</li>
+      <li><b>Totaux.</b> Ils suivent tout seuls. Bouton <b>Totaux</b> de la page : recalculer, ou <b>ajouter une ligne TOTAL</b> (lignes au-dessus, la page, des pages au choix ou tout le document).</li>
+    </ol>
+    <p class="muted">Rien ne change sans votre action. ↶ annule la dernière action (jusqu'à 30).</p>`, [{ label: 'Compris', className: 'accent' }]);
+}
+
 async function lotsDialog() {
   if (!lotsActive(state.project)) {
     const chosen = await chooseLotTables();
@@ -992,6 +1210,8 @@ async function lotsDialog() {
   const shown = dialog('Numéros de lot', html, [
     { label: 'Synchroniser automatiquement', value: 'sync', className: 'accent' },
     { label: 'Pages et tableaux…', value: 'pages' },
+    { label: 'Lots de fin (lot 0)…', value: 'end' },
+    { label: 'Comment ça marche ?', value: 'help' },
     { label: 'Renuméroter tout', value: 'number' },
     { label: 'Vider les cases', value: 'empty' },
     { label: 'Enlever la colonne', value: 'clear', className: 'danger' },
@@ -1005,6 +1225,20 @@ async function lotsDialog() {
     scheduleSave();
   };
   const choice = await shown;
+  if (choice === 'help') return lotsHelp();
+  if (choice === 'end') {
+    const end = await chooseEndPlace(null, true);
+    if (!end) return frameChanged && refreshView();
+    pushUndo();
+    state.project.EndLots = end;
+    replan(); recomputeAll();
+    await refreshView();
+    const ends = pages().map((p, i) => (p.EndLots ? i + 1 : 0)).filter(Boolean);
+    status(end.Mode === 'page'
+      ? `Lots 0 sur une page « Lots de fin »${ends.length ? ` (page ${ends.join(', ')})` : ' (créée au premier lot 0)'}.`
+      : 'Lots 0 juste après le dernier lot numéroté.');
+    return scheduleSave();
+  }
   if (choice === 'pages') {
     const chosen = await chooseLotTables();
     if (!chosen) return frameChanged && refreshView();

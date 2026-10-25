@@ -229,4 +229,54 @@ public static class Rows
         RowBounds(t);
         return true;
     }
+
+    /// <summary>« Séparer en dessous (tracer un trait) » : une ligne suit dans la rangée.</summary>
+    public static bool CanSplitBelow(Page page, PrintedLine line) =>
+        !line.OutsideTable && Locate(page, line) is { } at && at.I + 1 < at.Row.Lines.Count;
+
+    /// <summary>Trace un trait sous la ligne : ce qui la suit dans la rangée forme une rangée à part.</summary>
+    public static bool SplitBelow(Page page, PrintedLine line) =>
+        Locate(page, line) is { } at && at.I + 1 < at.Row.Lines.Count && Split(page, at.Row.Lines[at.I + 1]);
+
+    /// <summary>
+    /// « Ajouter une ligne TOTAL » sous la rangée de la ligne : rangée complète (comme une ligne vide), désignation « TOTAL »,
+    /// montants calculés selon <paramref name="scope"/> (above | page | pages | all ; Auto : recalculés à chaque modification).
+    /// </summary>
+    public static PrintedLine? AddTotalLine(Page page, PrintedLine line, TotalScope? scope)
+    {
+        var t = Copy(page, line, blank: true);
+        if (t is null) return null;
+        t.Kind = LineKind.Total;
+        t.KindChosenByUser = true;
+        t.Cells[0].Text = "TOTAL";
+        t.TotalScope = new TotalScope { Mode = scope?.Mode ?? "above", Pages = [.. scope?.Pages ?? []], Auto = scope?.Auto ?? true };
+        return t;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex Amount =
+        new(@"^\s*(?:m[ée]moire|[+-]?\d[\d\s.,]*)\s*€?\s*$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>Ligne d'appui pour une ligne TOTAL ajoutée depuis le menu de la page : la dernière ligne d'objet du tableau (ou du dernier).</summary>
+    public static PrintedLine? LastObjectLine(Page page, Table? table = null)
+    {
+        var tables = page.Tables.Where(t => GridTable(t) && (table is null || t == table)).ToList();
+        for (int k = tables.Count - 1; k >= 0; k--)
+        {
+            var t = tables[k];
+            var order = Lots.RowOrder(t).ToList();
+            // De préférence la dernière ligne qui porte un montant (pas une lecture parasite d'un fond grisé).
+            foreach (bool strict in new[] { true, false })
+                for (int i = order.Count - 1; i >= 0; i--)
+                {
+                    var row = t.Rows[order[i]];
+                    for (int j = row.Lines.Count - 1; j >= 0; j--)
+                    {
+                        var l = row.Lines[j];
+                        if (!CanCopy(page, l) || l.Deleted) continue;
+                        if (!strict || l.Cells.Skip(1).Any(c => Amount.IsMatch(c.Text))) return l;
+                    }
+                }
+        }
+        return null;
+    }
 }

@@ -15,10 +15,10 @@ import { numberLots, setLot, resyncLots, clearLots, lotsActive, objectLines, rep
 import { drawLotColumns, frames, framedRows } from '../core/lotcolumn.js';
 import { setExtra, stretch, extraFor } from '../core/layout.js';
 import { toggleStrike, isStruck, adjustStrikes, setColor, colorRuns } from '../core/strikes.js';
-import { planArrangement, composePage, unitCrop, viewOf, pageArranged } from '../core/arrange.js';
+import { planArrangement, composePage, unitCrop, viewOf, pageArranged, syncEndPages } from '../core/arrange.js';
 import { recomputeTotals, parseAmount, formatAmount } from '../core/totals.js';
 import { isZeroLot } from '../core/lots.js';
-import { copyLine, splitAt, splitTypedText, removeAddedRow, canCopyLine, canSplit, addedRowOf, addBlankLine } from '../core/rows.js';
+import { copyLine, splitAt, splitTypedText, removeAddedRow, canCopyLine, canSplit, addedRowOf, addBlankLine, splitBelow, canSplitBelow, addTotalLine, lastObjectLine } from '../core/rows.js';
 import { lotTables, tableHasObjects, setLotTables } from '../core/lots.js';
 import { carryOver, allLines as linesOf } from '../core/model.js';
 import { detectPage } from '../core/imaging.js';
@@ -666,6 +666,111 @@ test('Cadrage : un scan dont le tableau touche les bords reste en page entière'
   check(photo.n.crop.TopLeft.X > 5, 'une photo sur fond sombre est toujours recadrée');
 });
 
+test('Supprimer une ligne existante : retirée de la page, du .txt, des totaux et des lots ; ↶ la remet', () => {
+  const p = fromPages(['page1', 'page5']);
+  createEmptyLots(p);
+  fillLotsAutomatically(p);
+  const a = p.Pages[0];
+  const rolls = findLine(a, '2 rolls en métal'), next = findLine(a, '2 distributeurs de savon + 1 distributeur papier');
+  const before = lines(p), lotNext = next.Lot, h = planArrangement(p).pages[0].height;
+  rolls.Deleted = true;
+  const plan = planArrangement(p);
+  const l = lines(p);
+  eq(before.length - 1, l.length, 'une ligne de moins dans le .txt');
+  check(!l.some((x) => x.includes('2 rolls en métal')), 'absente du .txt');
+  eq(lotNext, next.Lot, 'les autres numéros ne bougent pas');
+  check(plan.pages[0].height < h, 'la page raccourcit (la suite remonte)');
+  check(!viewOf(p, plan, 0).lines.some((e) => e.line === rolls), 'plus affichée');
+  resyncLots(p);
+  check(!rolls.LotSlot && rolls.Lot === '4', 'plus de case de lot (numéro gardé si on la remet)');
+  // Ligne au milieu d'une rangée (avec sa suite) : « compresseur » et « CD3+ » partent ensemble.
+  const comp = findLine(a, '1 compresseur à vis ATLASCAPCO avec cuve 250L + 1 sécheur ATLASCAPCO');
+  comp.Deleted = true;
+  check(!lines(p).some((x) => x.includes('CD3+')), 'la suite part avec');
+  // Totaux : montant retiré.
+  const b = p.Pages[1], total = findLine(b, 'TOTAL STOCK');
+  findLine(b, 'CARTONNAGE').Deleted = true;
+  recomputeTotals(p, planArrangement(p));
+  eq('28 550', total.Cells[1].Text, 'montant retiré du total');
+  rolls.Deleted = false; comp.Deleted = false; findLine(b, 'CARTONNAGE').Deleted = false;
+  resyncLots(p);
+  recomputeTotals(p, planArrangement(p));
+  eq(before.join('\n'), lines(p).join('\n'), 'remise');
+  eq('44 550', total.Cells[1].Text, 'total revenu');
+});
+
+test('Lots de fin sur une page dédiée : insérée où on veut, même mise en page, nouvelle page si pleine', () => {
+  const p = fromPages(['page1', 'page5']);
+  createEmptyLots(p);
+  fillLotsAutomatically(p);
+  p.EndLots = { Mode: 'page', AfterId: 'page1' };
+  setLot(p, findLine(p.Pages[0], '2 rolls en métal'), '0');
+  check(syncEndPages(p), 'page créée');
+  eq('page1,END,page5', p.Pages.map((x) => (x.EndLots ? 'END' : x.Id)).join(','), 'entre la page 1 et la page 5 (qui devient la 3)');
+  const plan = planArrangement(p);
+  eq(1, plan.moving.length, 'un lot 0');
+  const end = plan.pages[1];
+  eq(0, end.template, 'modèle : la page 1');
+  const v = viewOf(p, plan, 1);
+  check(v.lines.some((e) => e.line.Cells[0].Text === '2 rolls en métal' && e.moved), 'affiché sur la page dédiée');
+  check(!viewOf(p, plan, 0).lines.some((e) => e.line.Cells[0].Text === '2 rolls en métal'), 'parti de la page 1');
+  const l = lines(p);
+  const k = l.findIndex((x) => x.startsWith('0\t2 rolls'));
+  check(k > l.findIndex((x) => x.includes('gazelle')) && k < l.findIndex((x) => x.includes('Liste détaillée')), '.txt : entre les pages');
+  // Image : marge, rangée refaite au modèle, filet du bas, même hauteur que la page modèle.
+  const imgs = p.Pages.map((pg) => (pg.EndLots ? null : drawLotColumns(load(pg.Id).n.image, pg)));
+  const crops = new Map(end.pieces.filter((x) => x.kind === 'unit').map((x) => [x.unit, unitCrop(x.unit, imgs[x.unit.p])]));
+  const out = composePage(p, plan, 1, imgs[0], crops);
+  eq(p.Pages[0].Height, out.h, 'hauteur de la page modèle');
+  // Beaucoup de lots 0 : d'autres pages se créent, à la suite.
+  for (const o of [...objectLines(p)]) setLot(p, o.line, '0');
+  syncEndPages(p);
+  const ends = p.Pages.filter((x) => x.EndLots).length;
+  check(ends >= 2, `plusieurs pages de fin (${ends})`);
+  eq('page1', p.Pages[0].Id, 'page 1 en tête');
+  eq('page5', p.Pages[p.Pages.length - 1].Id, 'page 5 à la fin');
+  // Plus aucun lot 0 : les pages dédiées disparaissent.
+  fillLotsAutomatically(p);
+  for (const o of [...objectLines(p)]) if (isZeroLot(o.line)) setLot(p, o.line, '7');
+  syncEndPages(p);
+  eq(0, p.Pages.filter((x) => x.EndLots).length, 'pages retirées');
+});
+
+test('Ligne TOTAL ajoutée : calcul au-dessus, sur la page, sur des pages au choix, à la main', () => {
+  const p = fromPages(['page1', 'page5']);
+  const b = p.Pages[1];
+  const produits = findLine(b, 'PRODUITS FINIS');
+  const t = addTotalLine(b, produits, { Mode: 'above' });
+  recomputeTotals(p);
+  eq('TOTAL|44 550|9 000', t.Cells.map((c) => c.Text).join('|'), 'lignes au-dessus (rubrique STOCK)');
+  eq('44 550', findLine(b, 'TOTAL STOCK').Cells[1].Text, 'le total imprimé ne change pas');
+  findLine(b, 'CARTONNAGE').Cells[1].Text = '6 000';
+  recomputeTotals(p);
+  eq('34 550', t.Cells[1].Text, 'recalculé tout seul');
+  eq('34 550', findLine(b, 'TOTAL STOCK').Cells[1].Text, 'le total imprimé suit aussi');
+  t.TotalScope = { Mode: 'pages', Pages: ['page1'], Auto: true };
+  recomputeTotals(p);
+  const sum1 = p.Pages[0].Tables.flatMap((x) => x.Rows).flatMap((r) => r.Lines).filter((x) => x.Kind === 'Article' || x.Kind === 'Titre')
+    .reduce((s, x) => s + (parseAmount(x.Cells[1]?.Text) ?? 0), 0);
+  eq(formatAmount(sum1), t.Cells[1].Text, 'page 1 seulement');
+  t.TotalScope.Auto = false; t.Cells[1].Text = '';
+  recomputeTotals(p);
+  eq('', t.Cells[1].Text, 'à taper soi-même');
+  check(lines(p).some((x) => /^TOTAL\t\t\d+$/.test(x)), 'dans le .txt');
+  const t0 = p.Pages[0].Tables[0], anchor = lastObjectLine(p.Pages[0]);
+  check(t0.Rows[t0.Rows.length - 1].Lines.includes(anchor), 'appui depuis le menu de la page : la dernière rangée à montants');
+});
+
+test('Tracer un trait en dessous d\'une ligne (1re ligne d\'un bloc)', () => {
+  const p = fromPages(['page1']);
+  const a = p.Pages[0];
+  const comp = findLine(a, '1 compresseur à vis ATLASCAPCO avec cuve 250L + 1 sécheur ATLASCAPCO');
+  check(canSplitBelow(a, comp) && !canSplitBelow(a, findLine(a, '2 rolls en métal')), 'seulement s\'il y a une ligne dessous');
+  const n = a.Tables[0].Rows.length;
+  check(splitBelow(a, comp), 'trait tracé');
+  eq(n + 1, a.Tables[0].Rows.length, 'deux rangées');
+});
+
 test('Couleur du texte : sur la sélection, suit la saisie, .txt inchangé', () => {
   const p = threePages();
   const l0 = lines(p);
@@ -771,6 +876,56 @@ if (windowsRows) {
       const i = w.data.findIndex((v, j) => v !== js2.data[j]);
       eq(-1, i, `${page.Id} : premier pixel différent (${i % w.w}, ${Math.trunc(i / w.w)})`);
     }
+  });
+}
+
+function endScenario() {
+  const p = fromPages(['page1', 'page5']);
+  createEmptyLots(p);
+  fillLotsAutomatically(p);
+  p.EndLots = { Mode: 'page', AfterId: 'page1' };
+  setLot(p, findLine(p.Pages[0], '2 rolls en métal'), '0');
+  setLot(p, findLine(p.Pages[0], '1 gazelle TULESCA inox'), '0');
+  setLot(p, findLine(p.Pages[1], 'CARTONNAGE'), '0');
+  findLine(p.Pages[0], '1 compresseur à vis ATLASCAPCO avec cuve 250L + 1 sécheur ATLASCAPCO').Deleted = true;
+  addTotalLine(p.Pages[1], findLine(p.Pages[1], 'PRODUITS FINIS'), { Mode: 'above' });
+  syncEndPages(p);
+  return p;
+}
+function composeEnd(p) {
+  const plan = planArrangement(p);
+  recomputeTotals(p, plan);
+  const imgs = p.Pages.map((pg) => (pg.EndLots ? null : drawLotColumns(stretch(load(pg.Id).n.image, pg), pg)));
+  return { plan, out: p.Pages.map((pg, k) => composePage(p, plan, k, imgs[plan.pages[k].template ?? k],
+    new Map(plan.pages[k].pieces.filter((x) => x.kind === 'unit').map((x) => [x.unit, unitCrop(x.unit, imgs[x.unit.p])])))) };
+}
+
+test('Scénario lots de fin + ligne supprimée + TOTAL : cohérent', () => {
+  const p = endScenario();
+  eq('page1,END,page5', p.Pages.map((x) => (x.EndLots ? 'END' : x.Id)).join(','), 'pages');
+  const { plan, out } = composeEnd(p);
+  eq(3, plan.moving.length, 'trois lots 0 sur la page de fin');
+  eq(p.Pages[0].Height, out[1].h, 'page de fin à la hauteur du modèle');
+});
+
+const windowsFin = process.argv[7];
+if (windowsFin) {
+  test('Lots de fin, ligne supprimée, ligne TOTAL : identique à Windows (texte, pixels)', () => {
+    const p = endScenario();
+    const { out } = composeEnd(p);
+    const win = readFileSync(join(windowsFin, 'export.txt'), 'utf8').replace(/^\uFEFF/, '');
+    const js = buildTxt(p).text;
+    if (win !== js) {
+      const a = win.split('\r\n'), b = js.split('\r\n');
+      const k = a.findIndex((l, i) => l !== b[i]);
+      throw new Error(`.txt ligne ${k + 1} : Windows « ${a[k]} » / iPad « ${b[k]} »`);
+    }
+    out.forEach((img, k) => {
+      const w = readPgm(join(windowsFin, `${k}.pgm`));
+      eq(`${w.w}x${w.h}`, `${img.w}x${img.h}`, `taille page ${k + 1}`);
+      const i = w.data.findIndex((v, j) => v !== img.data[j]);
+      eq(-1, i, `page ${k + 1} : premier pixel différent (${i % w.w}, ${Math.trunc(i / w.w)})`);
+    });
   });
 }
 

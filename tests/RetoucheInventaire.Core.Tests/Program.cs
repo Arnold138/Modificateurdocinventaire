@@ -112,6 +112,20 @@ if (args.Length > 0 && args[0] == "export-arrange")
     }
     return 0;
 }
+if (args.Length > 0 && args[0] == "export-fin")
+{
+    // Lots de fin sur une page dédiée, ligne supprimée, ligne TOTAL : .txt et pages composées, pour comparaison avec l'iPad.
+    var project = Tests.EndScenario();
+    var images = Tests.ComposeEnd(project);
+    Directory.CreateDirectory(args[1]);
+    RetoucheInventaire.Core.Export.TxtExporter.Write(project, Path.Combine(args[1], "export.txt"));
+    for (int i = 0; i < images.Count; i++)
+    {
+        Pgm.Write(Path.Combine(args[1], i + ".pgm"), images[i]);
+        Console.WriteLine($"page {i + 1}: {images[i].Width}x{images[i].Height}");
+    }
+    return 0;
+}
 if (args.Length > 0 && args[0] == "export-rows")
 {
     // Lignes dupliquées et séparées : .txt et pages agrandies (colonne des lots tracée), pour comparaison avec l'iPad.
