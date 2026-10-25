@@ -6,7 +6,7 @@
 //  - rangée déplacée à la main : l'ordre des rangées du tableau change (Table.RowOrder).
 // Portage identique (entiers, pixel pour pixel) dans Arrangement.cs.
 import { Rect } from './geometry.js';
-import { allLines } from './model.js';
+import { allLines, looksLikeTotal } from './model.js';
 import { rowOrder, hasLotCell, isZeroLot, lotsActive, objectLines, columnWidth, numberBox, tableLeft } from './lots.js';
 import { baseBox } from './layout.js';
 
@@ -126,6 +126,40 @@ function destination(project) {
   return { p, ti: last.page.Tables.indexOf(last.table), r: last.row, table: last.table, page: last.page };
 }
 
+/** Rangées des tableaux à filets, dans l'ordre affiché, toutes pages (pas les pages « lots de fin »). */
+function rowsInOrder(project) {
+  const out = [];
+  project.Pages.forEach((page, p) => {
+    if (page.EndLots) return;
+    page.Tables.map((t, ti) => ({ t, ti })).filter((x) => gridTable(x.t)).sort((a, b) => a.t.RowYs[0] - b.t.RowYs[0])
+      .forEach(({ t, ti }) => { for (const r of rowOrder(t)) if (r + 1 < t.RowYs.length) out.push({ p, ti, r, table: t, page }); });
+  });
+  return out;
+}
+
+const destOf = (x) => ({ p: x.p, ti: x.ti, r: x.r, table: x.table, page: x.page });
+
+/**
+ * Où recoller ce lot 0 : l'endroit choisi à la main (poignée ⋮⋮ en mode Modifier, `EndAt` : après la rangée de cette ligne) ;
+ * sinon à la fin de sa partie : après le dernier objet numéroté avant la ligne TOTAL qui la ferme (« TOTAL MOBILIER ET
+ * MATERIEL ») ; sans ligne TOTAL après lui, après le dernier lot du document.
+ */
+function unitDestination(project, u, rows, numbered, fallback) {
+  const at = u.object.EndAt;
+  if (at) {
+    const x = rows.find((x) => x.page.Id === at.Page && x.table.Rows[x.r].Lines.some((l) => l.Cells[0]?.Id === at.Line));
+    if (x) return destOf(x);
+  }
+  const k = rows.findIndex((x) => x.p === u.p && x.ti === u.ti && x.r === u.r);
+  let last = null;
+  for (let i = Math.max(0, k); i < rows.length; i++) {
+    const lines = rows[i].table.Rows[rows[i].r].Lines;
+    if (lines.some((l) => !l.Deleted && looksLikeTotal(l))) return destOf(last ?? rows[Math.max(k, i - 1)]);
+    if (i > k && lines.some((l) => numbered.has(l))) last = rows[i];
+  }
+  return fallback;
+}
+
 /** Décalage horizontal d'une colonne vers le tableau d'arrivée (selon l'alignement de la colonne). */
 function columnShift(src, dst, c, align) {
   const a = src.ColumnXs, b = dst.ColumnXs;
@@ -178,8 +212,15 @@ export function planArrangement(project) {
       if (i === 0) dest = d;
     });
   } else if (zeros.length) {
-    dest = destination(project);
-    if (dest) { moving = zeros; for (const u of moving) prepare(u, dest); }
+    const fallback = destination(project);
+    if (fallback) {
+      const rows = rowsInOrder(project);
+      const zeroLines = new Set(zeros.flatMap((u) => u.lines));
+      const numbered = new Set([...objectLines(project)].map((o) => o.line).filter((l) => !isZeroLot(l) && !l.Deleted && !zeroLines.has(l)));
+      moving = zeros;
+      for (const u of moving) prepare(u, unitDestination(project, u, rows, numbered, fallback));
+      dest = moving[0].dest;
+    }
   }
   const cutting = [...moving, ...deleted];
   const pages = project.Pages.map((page, p) => {
@@ -220,8 +261,8 @@ export function planArrangement(project) {
         let y = s0;
         for (const u of cuts) { copy(y, Math.max(y, u.top)); y = Math.max(y, u.bottom); }
         copy(y, s1);
-        if (dest && !template && dest.p === p && dest.ti === ti && dest.r === r)
-          for (const u of moving) { pieces.push({ kind: 'unit', unit: u, dst, h: u.height }); dst += u.height; }
+        if (!template)
+          for (const u of moving) if (u.dest.p === p && u.dest.ti === ti && u.dest.r === r) { pieces.push({ kind: 'unit', unit: u, dst, h: u.height }); dst += u.height; }
       }
       cursor = B;
     }
@@ -324,14 +365,14 @@ export function viewOf(project, plan, k) {
       strips.push({ r, top: a, bottom: a + (cutY(t.RowYs[r + 1]) - cutY(t.RowYs[r])) - cutHeight(plan, k, ti, r) });
     }
     const ys = [];
-    let units = [];
-    if (plan.dest && plan.dest.p === k && plan.dest.ti === ti) units = pp.pieces.filter((pc) => pc.kind === 'unit');
+    const units = page.EndLots ? [] : pp.pieces.filter((pc) => pc.kind === 'unit' && pc.unit.dest.p === k && pc.unit.dest.ti === ti);
     for (const s of strips) ys.push(s.top);
     for (const pc of units) ys.push(pc.dst + CUT);
     const end = mapY(pp, R(t.RowYs[t.RowYs.length - 1]));
     if (end !== null) ys.push(end);
     ys.sort((a, b) => a - b);
-    out.tables.push({ table: t, ColumnXs: t.ColumnXs, RowYs: ys, strips });
+    // Lots 0 recollés dans ce tableau : déplaçables avec une poignée (mode Modifier).
+    out.tables.push({ table: t, ColumnXs: t.ColumnXs, RowYs: ys, strips, units: units.map((pc) => ({ unit: pc.unit, top: pc.dst + CUT, bottom: pc.dst + pc.h })) });
   });
   return out;
 }

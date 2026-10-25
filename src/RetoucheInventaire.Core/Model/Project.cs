@@ -102,6 +102,8 @@ public sealed class PrintedLine
 
     /// <summary>Ligne TOTAL ajoutée : ce qu'elle additionne (voir <see cref="Totals"/>).</summary>
     public TotalScope? TotalScope { get; set; }
+    /// <summary>Lot 0 placé à la main (poignée, mode Modifier) : recollé après la rangée de cette ligne.</summary>
+    public EndAnchor? EndAt { get; set; }
 
     [JsonIgnore] public RectD Bounds => Cells.Aggregate(RectD.Empty, (r, f) => r.Union(f.Box));
     [JsonIgnore] public string FirstText => Cells.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c.Text))?.Text.Trim() ?? "";
@@ -111,6 +113,13 @@ public sealed class PrintedLine
 /// Ligne TOTAL ajoutée : somme des montants actuels, colonne par colonne, des lignes au-dessus (« above », depuis l'en-tête ou le total
 /// précédent), de sa page (« page »), des pages choisies (« pages ») ou de tout le document (« all ») ; Auto = false : à taper.
 /// </summary>
+/// <summary>Endroit choisi pour un lot 0 : page (Id) et case (Id de la 1re case d'une ligne de la rangée d'arrivée).</summary>
+public sealed class EndAnchor
+{
+    public string Page { get; set; } = "";
+    public string Line { get; set; } = "";
+}
+
 public sealed class TotalScope
 {
     public string Mode { get; set; } = "above";

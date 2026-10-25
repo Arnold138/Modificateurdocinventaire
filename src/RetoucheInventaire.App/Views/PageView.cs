@@ -96,6 +96,8 @@ public sealed class PageView
     public event Action<PageView, Table, int, int?>? RowMoved;
     /// <summary>Poignée d'une ligne dans un bloc lâchée : (tableau, ligne, rangée avant laquelle la poser ou null : à la fin).</summary>
     public event Action<PageView, Table, PrintedLine, int?>? LineMoved;
+    /// <summary>Poignée d'un lot 0 recollé lâchée : (tableau, lot 0, rangée avant laquelle le poser ou null : à la fin du tableau).</summary>
+    public event Action<PageView, Table, Arrangement.Unit, int?>? UnitMoved;
 
     /// <summary>Une action du menu « Ligne » (clic droit, appui long ou bouton « Ligne ») : dupliquer, séparer…</summary>
     public sealed record LineCommand(string Label, string Hint, string Glyph, Action Run, bool Danger = false);
@@ -482,11 +484,15 @@ public sealed class PageView
         if (!MoveMode) return;
         foreach (var vt in _view.Tables)
         {
+            // Lots 0 recollés ici (fin de partie ou endroit choisi) : leur poignée les replace où on veut dans ce tableau.
+            foreach (var u in vt.Units ?? [])
+                AddGrip(vt, new Arrangement.Strip(-1, u.Top, u.Bottom), null, (u.Top + u.Bottom) / 2, Math.Max(24, Math.Min(40, u.Bottom - u.Top - 4)),
+                    "Lot 0 : glisser pour le placer ailleurs dans ce tableau", u.Unit);
             if (vt.Strips.Count < 2) continue;
             foreach (var strip in vt.Strips)
             {
                 var row = vt.Table.Rows[strip.R];
-                if (row.Lines.Count == 0 || row.Lines.All(l => l.Kind == LineKind.EnTete)) continue;
+                if (row.Lines.Count == 0 || row.Lines.All(l => l.Kind == LineKind.EnTete) || row.Lines.Any(RetoucheInventaire.Core.Analysis.LineClassifier.LooksLikeTotal)) continue; // ni en-tête ni total
                 if (row.Lines.All(l => l.Cells.All(c => string.IsNullOrWhiteSpace(c.Text)))) continue;
                 // Bloc de plusieurs lignes : la poignée de la 1re ligne déplace le bloc, celle de chaque autre ligne déplace cette ligne seule.
                 var bands = row.Lines.Where(l => !l.Deleted && l.Cells.Any(c => !string.IsNullOrWhiteSpace(c.Text)))
@@ -505,7 +511,10 @@ public sealed class PageView
         }
     }
 
-    private void AddGrip(Arrangement.ViewTable vt, Arrangement.Strip strip, PrintedLine? line, double centerY, double h, string tip)
+    private static readonly SolidColorBrush UnitGripFill = new(ColorHelper.FromArgb(255, 255, 240, 224));
+    private static readonly SolidColorBrush UnitGripInk = new(ColorHelper.FromArgb(255, 200, 110, 20));
+
+    private void AddGrip(Arrangement.ViewTable vt, Arrangement.Strip strip, PrintedLine? line, double centerY, double h, string tip, Arrangement.Unit? unit = null)
     {
         var grip = new Border
         {
@@ -515,14 +524,15 @@ public sealed class PageView
             Child = new FontIcon { Glyph = "", FontSize = line is null ? 20 : 17, Foreground = GripInk },
         };
         ToolTipService.SetToolTip(grip, tip);
+        if (unit != null) { grip.Background = UnitGripFill; ((FontIcon)grip.Child).Foreground = UnitGripInk; }
         Canvas.SetLeft(grip, GutterWidth - 6 - (line is null ? 72 : 56));
         Canvas.SetTop(grip, centerY - h / 2);
-        InitDrag(grip, vt, strip, line);
+        InitDrag(grip, vt, strip, line, unit);
         _gutter.Children.Add(grip);
     }
 
     /// <summary>Glisser une poignée : rangée entière, ou une ligne seule (<paramref name="line"/>) qui devient une rangée à l'endroit choisi.</summary>
-    private void InitDrag(Border grip, Arrangement.ViewTable vt, Arrangement.Strip strip, PrintedLine? line = null)
+    private void InitDrag(Border grip, Arrangement.ViewTable vt, Arrangement.Strip strip, PrintedLine? line = null, Arrangement.Unit? unit = null)
     {
         int? before = null;
         bool dragging = false, moved = false;
@@ -559,6 +569,7 @@ public sealed class PageView
             dragging = false;
             _ghost.Visibility = _dropLine.Visibility = Visibility.Collapsed;
             if (!ok || !moved) return;
+            if (unit != null) { UnitMoved?.Invoke(this, vt.Table, unit, before); return; }
             if (line != null) { LineMoved?.Invoke(this, vt.Table, line, before); return; }
             if (before == strip.R) return;
             int k = vt.Strips.FindIndex(s => s.R == strip.R);

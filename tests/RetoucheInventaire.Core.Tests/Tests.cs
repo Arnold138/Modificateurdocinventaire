@@ -505,13 +505,14 @@ public static class Tests
         Equal("4", objects[4].Lot, "Renuméroter tout : le 0 ne prend pas de numéro");
         Equal((objects.Count - 1).ToString(), objects[^1].Lot, "la suite continue");
         var lines = ExportLines(p);
-        Equal("0\t2 rolls en métal\t60\t30", lines[^1], "objet à 0 regroupé à la fin");
+        int Tot() => Array.FindIndex(lines, l => l.Contains("TOTAL STOCK"));
+        Equal("0\t2 rolls en métal\t60\t30", lines[Tot() - 1], "à la fin de sa partie, juste avant TOTAL STOCK");
         Check(lines.Count(l => l.Contains("2 rolls en métal")) == 1, "retiré de sa place");
         // Un objet avec sa suite (« CD3+ … ») part en entier.
         var compresseur = p.Pages[0].AllLines().First(l => l.Cells[0].Text.StartsWith("1 compresseur"));
         Lots.Set(p, compresseur, "0");
         lines = ExportLines(p);
-        Check(lines[^2].StartsWith("0\t1 compresseur") && lines[^1] == "\tCD3+ +/- 14130 heures", "objet et sa suite en fin d'inventaire");
+        Check(lines[Tot() - 2].StartsWith("0\t1 compresseur") && lines[Tot() - 1] == "\tCD3+ +/- 14130 heures", "objet et sa suite, avant le total");
     }
 
     public static void T_Rangee_qui_grandit_puis_revient()
@@ -629,7 +630,7 @@ public static class Tests
         var p = ArrangeScenario();
         var plan = Arrangement.Build(p);
         Equal(3, plan.Units.Count, "trois objets déplacés");
-        Equal("1,2,3", $"{plan.Dest!.P},{plan.Dest.Ti},{plan.Dest.R}", "après « Appartenant à ULMA »");
+        Equal("1,0,4", $"{plan.Dest!.P},{plan.Dest.Ti},{plan.Dest.R}", "après « PRODUITS FINIS », juste avant « TOTAL STOCK »");
         Check(plan.Units[1].Title != null && !plan.Units[1].Whole, "gazelle : objet seul + valeurs du titre");
         int cut0 = plan.Units.Where(u => u.P == 0).Sum(u => u.Bottom - u.Top);
         Equal(p.Pages[0].Height - cut0, plan.Pages[0].Height, "page 1 raccourcie");
@@ -654,6 +655,32 @@ public static class Tests
         var back = Arrangement.Build(p);
         Equal(0, back.Units.Count, "plus rien à déplacer");
         Check(!Arrangement.PageArranged(p, back, 0) && !Arrangement.PageArranged(p, back, 1), "pages d'origine");
+    }
+
+    public static void T_Lot_zero_total_mal_lu_et_endroit_choisi()
+    {
+        PrintedLine L(string t) => new() { Kind = LineKind.Article, Cells = [new Field { Text = t }] };
+        Check(LineClassifier.LooksLikeTotal(L("TOTAT. MOBILIER")) && LineClassifier.LooksLikeTotal(L("TOTAE aan marET")) && LineClassifier.LooksLikeTotal(L("TOTAL STOCK")), "totaux mal lus");
+        Check(!LineClassifier.LooksLikeTotal(L("2 rolls en métal")) && !LineClassifier.LooksLikeTotal(L("TOTEM lumineux")), "pas les objets");
+        var p = new InventoryProject();
+        foreach (var n in new[] { "page1", "page5" }) p.Pages.Add(Fixtures.Analyze(n));
+        Lots.CreateEmpty(p); Lots.FillAutomatically(p);
+        var a = p.Pages[0];
+        var rolls = FindLine(a, "2 rolls en métal");
+        var distrib = FindLine(a, "2 distributeurs de savon + 1 distributeur papier");
+        Lots.Set(p, rolls, "0");
+        rolls.EndAt = new EndAnchor { Page = "page1", Line = distrib.Cells[0].Id };
+        var plan = Arrangement.Build(p);
+        Equal("0,0", $"{plan.Moving[0].Dest.P},{plan.Moving[0].Dest.Ti}", "page 1");
+        Check(plan.Moving[0].Dest.Table.Rows[plan.Moving[0].Dest.R].Lines.Contains(distrib), "juste après « 2 distributeurs »");
+        var v = Arrangement.ViewOf(p, plan, 0);
+        double Y(PrintedLine l) => v.Lines.First(e => e.Line == l).Cells[0].Box.Y;
+        Check(Y(rolls) > Y(distrib), "affiché sous « 2 distributeurs »");
+        Equal(1, v.Tables[0].Units!.Count, "poignée du lot 0 sur cette page");
+        var lines = ExportLines(p).ToList();
+        Equal(lines.FindIndex(x => x.Contains("2 distributeurs")) + 1, lines.FindIndex(x => x.StartsWith("0\t2 rolls")), ".txt : juste après aussi");
+        Lots.Set(p, rolls, "4");
+        Check(rolls.EndAt is null, "remis dans la vente : endroit oublié");
     }
 
     public static void T_Rangee_deplacee_a_la_main()

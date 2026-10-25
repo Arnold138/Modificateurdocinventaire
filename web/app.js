@@ -401,6 +401,7 @@ async function showPage(n, { flat = null, fit = true, keepScroll = false } = {})
       scheduleSave();
     },
     onMoveLine: (v, table, line, before) => run(() => moveLine(page, table, line, before)),
+    onMoveUnit: (v, table, unit, before) => run(() => placeZero(page, table, unit, before)),
   });
   view.baseFlat = state.flats.get(page) ?? null;
   view.setLockMode(state.lock);
@@ -630,7 +631,7 @@ function placeOf(line) {
   const k = u.endPage ?? u.dest.p;
   const onPage = state.plan.pages[k].pieces.filter((pc) => pc.kind === 'unit');
   const rank = onPage.findIndex((pc) => pc.unit === u) + 1;
-  return { k, text: pages()[k].EndLots ? `page ${k + 1} « Lots de fin », ${rank === 1 ? '1re' : rank + 'e'} ligne` : `page ${k + 1}, après le dernier lot (« ${short(firstText(u.dest.table.Rows[u.dest.r].Lines.find((l) => firstText(l)) ?? u.object))} »)` };
+  return { k, text: pages()[k].EndLots ? `page ${k + 1} « Lots de fin », ${rank === 1 ? '1re' : rank + 'e'} ligne` : `page ${k + 1}, après « ${short(firstText(u.dest.table.Rows[u.dest.r].Lines.find((l) => firstText(l)) ?? u.object))} » ${u.object.EndAt ? '(endroit choisi)' : '(fin de sa partie, avant la ligne TOTAL)'}` };
 }
 
 /**
@@ -643,7 +644,7 @@ async function chooseEndPlace(line, force = false) {
   const options = pages().map((p, i) => (p.EndLots ? '' : `<option value="${escapeHtml(p.Id)}" ${(cur?.AfterId ?? pages()[state.index]?.Id) === p.Id ? 'selected' : ''}>après la page ${i + 1} · ${escapeHtml(short(p.SourceName))}</option>`)).join('');
   const html = `${line ? `<p><b>« ${escapeHtml(short(firstText(line)))} »</b> n'est plus dans la vente (lot 0) : sa ligne quitte sa place, ce qui suit remonte, et elle passe à la fin.</p>` : ''}
     <p>Où mettre les lots à la fin ?</p>
-    <label class="choice"><input type="radio" name="endMode" value="last" ${cur?.Mode !== 'page' ? 'checked' : ''}> <span><b>Juste après le dernier lot numéroté</b><small>Dans le même tableau, à la suite.</small></span></label>
+    <label class="choice"><input type="radio" name="endMode" value="last" ${cur?.Mode !== 'page' ? 'checked' : ''}> <span><b>À la fin de sa partie</b><small>Après le dernier lot, juste avant la ligne TOTAL de sa partie (ex. « TOTAL MOBILIER ET MATERIEL »). Pour le mettre ailleurs : Modifier, puis glisser sa poignée.</small></span></label>
     <label class="choice"><input type="radio" name="endMode" value="page" ${cur?.Mode === 'page' ? 'checked' : ''}> <span><b>Sur une page « Lots de fin »</b><small>Une page créée exprès, même mise en page que la vente, placée
       <select id="endAfter">${options}</select>. Les pages suivantes sont renumérotées ; une nouvelle page s'ajoute quand elle est pleine.</small></span></label>
     <p class="muted">Ce choix vaut pour tous les lots 0 (modifiable : Lots › Lots de fin…). Pour remettre un lot à sa place : retapez son numéro.</p>`;
@@ -677,10 +678,29 @@ async function applyLot(v, line, value) {
     const where = placeOf(line);
     const added = pages().length - before;
     status(where
-      ? `Lot 0 : « ${short(firstText(line))} » est maintenant à la fin : ${where.text}.${added > 0 ? ` Page « Lots de fin » ajoutée (page ${where.k + 1}) : les pages suivantes ont été renumérotées.` : ''} Pour le remettre : retapez son numéro, ou clic droit › Remettre à sa place.`
+      ? `Lot 0 : « ${short(firstText(line))} » est maintenant à la fin : ${where.text}.${added > 0 ? ` Page « Lots de fin » ajoutée (page ${where.k + 1}) : les pages suivantes ont été renumérotées.` : ''} Pour le placer ailleurs : Modifier, puis glissez sa poignée orange ⋮⋮. Pour le remettre : retapez son numéro, ou clic droit › Remettre à sa place.`
       : 'Lot 0 : aucun autre lot numéroté, la ligne reste en place.');
   } else if (wasZero && !zero) status(`Lot ${line.Lot || '(vide)'} : « ${short(firstText(line))} » est revenu à sa place.`);
   else status(line.Lot ? `Lot ${line.Lot} enregistré.` : 'Case de lot vidée.');
+  scheduleSave();
+}
+
+/**
+ * Poignée d'un lot 0 recollé (mode Modifier) : il est posé avant la rangée `before` (null : à la fin du tableau) ; l'endroit
+ * est gardé (EndAt) tant qu'il est au lot 0.
+ */
+async function placeZero(page, table, unit, before) {
+  const order = rowOrder(table);
+  const i = before === null ? order.length : order.indexOf(before);
+  const anchorRow = table.Rows[order[Math.max(0, i - 1)]];
+  const anchor = anchorRow?.Lines.find((l) => l.Cells[0]?.Id);
+  if (!anchor) return;
+  pushUndo();
+  unit.object.EndAt = { Page: page.Id, Line: anchor.Cells[0].Id };
+  replan(); recomputeAll();
+  await refreshView();
+  state.view?.flashLine(unit.object);
+  status(`Lot 0 « ${short(firstText(unit.object))} » placé après « ${short(firstText(anchor) || '(rangée)')} ». Il reste là ; retaper son numéro le remet à sa place d'origine. ↶ pour annuler.`);
   scheduleSave();
 }
 
@@ -1322,7 +1342,7 @@ function lotsHelp() {
     <ol class="help">
       <li><b>Choisir les pages.</b> Bouton <b>Lots</b> : cochez les pages (et tableaux) qui reçoivent des numéros, puis <b>OK</b>. Une page de garde, un récapitulatif ou une signature restent sans numéro. Pour changer : <b>Lots › Pages et tableaux…</b></li>
       <li><b>Numéroter.</b> Touchez une case à gauche d'un objet et tapez son numéro : rien d'autre ne change. Ou <b>Synchroniser…</b> (cette page ou toutes les pages) : les <b>cases vides</b> se remplissent ; les numéros déjà là ne bougent pas, une case vide prend le numéro qui suit et décale seulement les lots qui la suivent directement. Case qui manque sur un objet : clic droit › <b>Ajouter une case de lot</b>. Pour tout refaire dans l'ordre affiché : <b>Renuméroter tout</b>.</li>
-      <li><b>Objet absent : à la fin.</b> Tapez <b>0</b> (ou clic droit › <b>Mettre à la fin</b>). La 1re fois, l'app demande où : <b>après le dernier lot</b>, ou sur une <b>page « Lots de fin »</b> placée où vous voulez (les pages suivantes sont renumérotées, une nouvelle page s'ajoute quand elle est pleine). Le message en bas dit exactement où la ligne est partie. Pour la remettre : retapez son numéro (ou clic droit › <b>Remettre à sa place</b>).</li>
+      <li><b>Objet absent : à la fin.</b> Tapez <b>0</b> (ou clic droit › <b>Mettre à la fin</b>). La 1re fois, l'app demande où : <b>à la fin de sa partie</b> (juste avant sa ligne TOTAL, ex. « TOTAL MOBILIER ET MATERIEL »), ou sur une <b>page « Lots de fin »</b> placée où vous voulez (les pages suivantes sont renumérotées, une nouvelle page s'ajoute quand elle est pleine). Le message en bas dit exactement où la ligne est partie. Pour la mettre ailleurs : <b>Modifier</b>, puis glissez sa poignée orange ⋮⋮. Pour la remettre : retapez son numéro (ou clic droit › <b>Remettre à sa place</b>).</li>
       <li><b>Objet retiré de la vente.</b> Clic droit › <b>Supprimer cette ligne</b> : elle disparaît (page, fichier texte, totaux), ce qui suit remonte. Pour la retrouver : ↶, ou <b>Retirer… › Remettre les lignes supprimées</b>.</li>
       <li><b>Ajouter ou séparer.</b> Clic droit (ou bouton <b>Ligne</b>) : <b>ligne vide</b> au-dessus ou en dessous, <b>dupliquer</b>, <b>tracer un trait</b> au-dessus ou en dessous pour séparer un gros bloc. Une rangée trop haute (espace vide imprimé) est réduite à la hauteur des autres ; aussi au clic droit : <b>Réduire la rangée</b>.</li>
       <li><b>Déplacer.</b> Touchez <b>Modifier</b> en haut : les poignées <b>⋮⋮</b> apparaissent à gauche de chaque ligne (la poubelle se cache). Glissez-en une vers le haut ou le bas : une rangée, ou une ligne seule d'un bloc (poignée en pointillés), qui devient alors une rangée. Retouchez <b>Modifier</b> pour terminer.</li>
@@ -1387,7 +1407,7 @@ async function lotsDialog() {
     const ends = pages().map((p, i) => (p.EndLots ? i + 1 : 0)).filter(Boolean);
     status(end.Mode === 'page'
       ? `Lots 0 sur une page « Lots de fin »${ends.length ? ` (page ${ends.join(', ')})` : ' (créée au premier lot 0)'}.`
-      : 'Lots 0 juste après le dernier lot numéroté.');
+      : 'Lots 0 à la fin de leur partie, juste avant la ligne TOTAL (Modifier : les glisser ailleurs).');
     return scheduleSave();
   }
   if (choice === 'pages') {

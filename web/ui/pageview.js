@@ -3,7 +3,7 @@
 // Case modifiée ou en cours d'édition : fond couleur papier + texte noir (ou en couleur), même taille que l'imprimé.
 // Les cases sont placées d'après la mise en page (arrange.js) : un lot 0 recollé en fin d'inventaire s'édite là où il est affiché.
 import { Rect } from '../core/geometry.js';
-import { isModified, addLockZone, removeLockZoneAt } from '../core/model.js';
+import { isModified, addLockZone, removeLockZoneAt, looksLikeTotal } from '../core/model.js';
 import { paperColor } from '../core/exports.js';
 import { canAddLot, hasLotCell, isZeroLot } from '../core/lots.js';
 import { font, lotSize, textLayout, isMultiline, LINE_HEIGHT, strikeSegments, rasterToCanvas, freeCanvas, cleanPatch } from '../services/canvas.js';
@@ -275,10 +275,20 @@ export class PageView {
   drawHandles() {
     if (!this.moveMode || !this.cb.onMoveRow) return;
     for (const vt of this.view.tables) {
+      // Lots 0 recollés ici (fin de partie ou endroit choisi) : leur poignée les replace où on veut dans ce tableau.
+      for (const u of vt.units ?? []) {
+        const g = el('div', 'grip unit', this.gutter);
+        g.innerHTML = '<svg><use href="#i-grip"/></svg>';
+        g.title = 'Lot 0 : glisser pour le placer ailleurs dans ce tableau';
+        g.setAttribute('aria-label', 'Déplacer ce lot 0');
+        const gh = Math.max(24, Math.min(40, u.bottom - u.top - 4));
+        Object.assign(g.style, { top: (u.top + u.bottom) / 2 - gh / 2 + 'px', height: gh + 'px' });
+        this.initDrag(g, vt, { r: -1, top: u.top, bottom: u.bottom }, null, u.unit);
+      }
       if (vt.strips.length < 2) continue;
       for (const s of vt.strips) {
         const row = vt.table.Rows[s.r];
-        if (!row || row.Lines.length === 0 || row.Lines.every((l) => l.Kind === 'EnTete')) continue;
+        if (!row || row.Lines.length === 0 || row.Lines.every((l) => l.Kind === 'EnTete') || row.Lines.some(looksLikeTotal)) continue; // ni en-tête ni total
         if (row.Lines.every((l) => l.Cells.every((c) => !c.Text.trim()))) continue;
         // Bloc de plusieurs lignes : la poignée de la 1re ligne déplace le bloc, celle de chaque autre ligne déplace cette ligne seule.
         const bands = row.Lines.filter((l) => !l.Deleted && l.Cells.some((c) => c.Text.trim()))
@@ -307,7 +317,7 @@ export class PageView {
   }
 
   /** Glisser une poignée : rangée entière, ou une ligne seule (`line`) qui devient une rangée à l'endroit choisi. */
-  initDrag(handle, vt, strip, line = null) {
+  initDrag(handle, vt, strip, line = null, unit = null) {
     let marker = null, ghost = null, target = null;
     const yOf = (e) => (e.clientY - this.root.getBoundingClientRect().top) / this.cb.zoom();
     handle.addEventListener('pointerdown', (e) => {
@@ -333,6 +343,7 @@ export class PageView {
       const t = target;
       target = null;
       if (!ok || !t) return;
+      if (unit) return this.cb.onMoveUnit?.(this, vt.table, unit, t.before);
       if (line) return this.cb.onMoveLine?.(this, vt.table, line, t.before);
       if (t.before === strip.r) return;
       const next = vt.strips[vt.strips.findIndex((s) => s.r === strip.r) + 1];

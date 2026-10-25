@@ -2,9 +2,9 @@
 import { Rect, Quad, pt } from './geometry.js';
 import { homography, homographyPts, toRgba, raster } from './imaging.js';
 import { allFields, firstText, isModified } from './model.js';
-import { lotsActive, isZeroLot, hasLotCell, orderedRows } from './lots.js';
+import { lotsActive, isZeroLot, hasLotCell, orderedRows, rowOrder } from './lots.js';
 import { lotRegions } from './lotcolumn.js';
-import { deletedLines } from './arrange.js';
+import { deletedLines, planArrangement } from './arrange.js';
 
 // ---------- Texte ----------
 
@@ -47,7 +47,7 @@ function exportRow(row, lots, gone = new Set()) {
     const obj = lots && objectPart(line);
     if (line.Kind === 'Titre' && !titlesKeeping.has(line)) {
       const t = cleanText(firstText(line));
-      if (t.length > 0) out.push({ text: prefix(line) + t, zero: zero(line), obj });
+      if (t.length > 0) out.push({ text: prefix(line) + t, zero: zero(line), obj, line });
       continue;
     }
     const cells = line.Cells.map((c) => c.Text);
@@ -55,7 +55,7 @@ function exportRow(row, lots, gone = new Set()) {
     if (values) for (let c = 1; c < cells.length && c - 1 < values.length; c++) cells[c] = values[c - 1];
     const parts = cells.map((t, c) => (c === 0 ? cleanText(t) : cleanValue(t)));
     while (parts.length > 0 && parts[parts.length - 1].length === 0) parts.pop();
-    if (parts.length > 0) out.push({ text: prefix(line) + parts.join('\t'), zero: zero(line), obj });
+    if (parts.length > 0) out.push({ text: prefix(line) + parts.join('\t'), zero: zero(line), obj, line });
   }
   return out;
 }
@@ -72,21 +72,38 @@ function looksLikeFormula(cell) {
 export function buildTxt(project) {
   const output = [];
   const lots = lotsActive(project);
-  const zeroLines = []; // objets au lot 0 (absents ou barrés) : placés après le dernier lot
+  const zeroLines = []; // objets au lot 0 sans endroit connu : placés après le dernier lot
   let after = -1;       // fin du dernier objet numéroté
   let endAt = -1;       // page « lots de fin » (mode page dédiée) : les lots 0 y sont
   const gone = deletedLines(project);
-  for (const page of project.Pages) {
-    if (page.EndLots && project.EndLots?.Mode === 'page' && endAt < 0) endAt = output.length;
-    for (const table of page.Tables) {
-      const rows = orderedRows(table).flatMap((r) => exportRow(r, lots, gone));
-      zeroLines.push(...rows.filter((x) => x.zero).map((x) => x.text));
-      const kept = rows.filter((x) => !x.zero);
-      const first = orderedRows(table).flatMap((r) => r.Lines).find((l) => l.Kind !== 'Ignoree');
-      if (kept.length > 0 && first?.Kind === 'EnTete' && output.length > 0 && output[output.length - 1].length > 0) output.push('');
-      for (const x of kept) { output.push(x.text); if (x.obj) after = output.length; }
+  // Lots 0 recollés comme à l'écran : juste après la rangée où ils arrivent (fin de leur partie, ou endroit choisi).
+  const plan = lots && project.EndLots?.Mode !== 'page' ? planArrangement(project) : null;
+  const unitOf = new Map();
+  for (const u of plan?.moving ?? []) for (const l of u.lines) unitOf.set(l, u);
+  const key = (p, ti, r) => `${p},${ti},${r}`;
+  const pending = new Map();
+  const pages = project.Pages.map((page, p) => page.Tables.map((table, ti) => rowOrder(table).map((r) => {
+    const entries = exportRow(table.Rows[r], lots, gone);
+    let dest = null;
+    for (const x of entries.filter((e) => e.zero)) {
+      dest = unitOf.get(x.line)?.dest ?? dest;
+      if (dest) { const k = key(dest.p, dest.ti, dest.r); if (!pending.has(k)) pending.set(k, []); pending.get(k).push(x.text); }
+      else zeroLines.push(x.text);
     }
-  }
+    return { k: key(p, ti, r), kept: entries.filter((e) => !e.zero) };
+  })));
+  project.Pages.forEach((page, p) => {
+    if (page.EndLots && project.EndLots?.Mode === 'page' && endAt < 0) endAt = output.length;
+    page.Tables.forEach((table, ti) => {
+      const rows = pages[p][ti];
+      const first = orderedRows(table).flatMap((r) => r.Lines).find((l) => l.Kind !== 'Ignoree');
+      if (rows.some((x) => x.kept.length > 0) && first?.Kind === 'EnTete' && output.length > 0 && output[output.length - 1].length > 0) output.push('');
+      for (const row of rows) {
+        for (const x of row.kept) { output.push(x.text); if (x.obj) after = output.length; }
+        for (const t of pending.get(row.k) ?? []) output.push(t);
+      }
+    });
+  });
   output.splice(endAt >= 0 ? endAt : after < 0 ? output.length : after, 0, ...zeroLines);
   const warnings = [];
   output.forEach((l, i) => {
