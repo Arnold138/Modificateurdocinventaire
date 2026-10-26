@@ -51,6 +51,8 @@ public sealed class PageView
     private readonly Canvas _inputLayer = new() { IsHitTestVisible = false };
     /// <summary>Page ajoutée : « + » des lignes et des colonnes, « − » des traits.</summary>
     private readonly Canvas _addedLayer = new();
+    /// <summary>Colonne des lots vide, à la hauteur d'une ligne : cliquer ajoute la case (et on tape le numéro).</summary>
+    private readonly Canvas _zoneLayer = new();
     private double _uiScale = 1;
     private readonly Canvas _gutter = new() { Width = GutterWidth };
     private readonly Rectangle _focusFrame = new() { Stroke = Accent, StrokeThickness = 2, Visibility = Visibility.Collapsed };
@@ -157,6 +159,7 @@ public sealed class PageView
         Host.Children.Add(frame);
         Root.Children.Add(_fieldLayer);
         Root.Children.Add(_colorLayer);
+        Root.Children.Add(_zoneLayer);
         Root.Children.Add(_lotLayer);
         Root.Children.Add(_strikeLayer);
         Root.Children.Add(_overlayLayer);
@@ -305,7 +308,7 @@ public sealed class PageView
     private void DrawAddedControls()
     {
         _addedLayer.Children.Clear();
-        DrawFrameToggles();
+        // Plus de « + » / corbeille dans la colonne : un seul « + » (marge) ; tracer ou non la colonne : clic droit sur la ligne.
         var A = _view.Page.Added;
         if (A is null) return;
         Button Make(string glyph, string tip, double cx, double cy, bool danger, Action<Button> click)
@@ -564,6 +567,12 @@ public sealed class PageView
         RefreshGutter();
     }
 
+    /// <summary>Met le curseur dans la case de lot de la ligne (juste ajoutée) : on tape le numéro tout de suite.</summary>
+    public void FocusLot(PrintedLine line)
+    {
+        if (_lotBoxes.TryGetValue(line, out var tb)) tb.Focus(FocusState.Programmatic);
+    }
+
     /// <summary>Repère de hauteur d'une ligne à l'écran : sa 1re ligne de texte.</summary>
     private static RectD? LineBand(Arrangement.ViewLine entry)
     {
@@ -590,6 +599,8 @@ public sealed class PageView
     public void RefreshGutter()
     {
         _gutter.Children.Clear();
+        _zoneLayer.Children.Clear();
+        double lotW = Lots.ColumnWidth(_view.Page);
         bool active = _lotsActive() && !MoveMode;
         foreach (var entry in _view.Lines)
         {
@@ -618,6 +629,20 @@ public sealed class PageView
             var target = line;
             button.Click += (_, _) => { if (has) LotRemoved?.Invoke(this, target); else LotAdded?.Invoke(this, target); };
             _gutter.Children.Add(button);
+            // Cliquer dans la colonne des lots vide, à la hauteur de la ligne : la case apparaît et on tape le numéro.
+            if (!has && lotW >= 12)
+            {
+                var zone = new Button
+                {
+                    Width = lotW - 4, Height = h, Padding = new Thickness(0), MinWidth = 0, MinHeight = 0, CornerRadius = new CornerRadius(4),
+                    Background = new SolidColorBrush(Colors.Transparent), BorderThickness = new Thickness(0),
+                };
+                ToolTipService.SetToolTip(zone, "Ajouter une case de lot ici (puis taper le numéro)");
+                Canvas.SetLeft(zone, Lots.TableLeft(entry.Table) - lotW + 2);
+                Canvas.SetTop(zone, b.CenterY - h / 2);
+                zone.Click += (_, _) => LotAdded?.Invoke(this, target);
+                _zoneLayer.Children.Add(zone);
+            }
         }
         DrawGrips();
     }
@@ -783,6 +808,7 @@ public sealed class PageView
         }
         _boxes[f] = tb;
         Layout(tb, f);
+        if (multi) tb.Loaded += (_, _) => { if (_boxes.TryGetValue(f, out var cur) && cur == tb) Layout(tb, f); };
         ApplyVisual(tb, f, focused: false);
 
         tb.GotFocus += (_, _) => { ApplyVisual(tb, f, focused: true); ShowFrame(f); ShowLoupe(f); FieldFocused?.Invoke(this, f); };
@@ -919,7 +945,6 @@ public sealed class PageView
         // Texte sur plusieurs lignes (Entrée) : la case montre tout son texte tout de suite, même avant que la rangée
         // ait fini de grandir (sinon la zone de saisie défile et la 1re ligne semble effacée).
         double needed = TextWrap.IsMultiline(f) ? pad + lines.Count * size * LineHeightRatio + 4 : 0;
-        tb.Height = Math.Max(1, Math.Max(box.Height, needed));
         double left = Math.Max(0, f.Box.X + cell.Dx + f.Indent - box.X);
         double right = Math.Max(0, box.Right - (f.Box.Right + cell.Dx - f.Indent));
         tb.Padding = f.Align switch
@@ -928,6 +953,15 @@ public sealed class PageView
             TextAlign.Center => new Thickness(0, pad, 0, 0),
             _ => new Thickness(left, pad, TextWrap.IsMultiline(f) ? 3 : 0, 0),
         };
+        // Hauteur réelle du texte dans la zone de saisie (lignes vides comprises) : jamais de dernière ligne cachée,
+        // même si la hauteur de ligne de Windows diffère un peu de la règle commune.
+        if (TextWrap.IsMultiline(f) && tb.IsLoaded)
+        {
+            tb.Height = double.NaN;
+            tb.Measure(new Windows.Foundation.Size(tb.Width, double.PositiveInfinity));
+            needed = Math.Max(needed, tb.DesiredSize.Height);
+        }
+        tb.Height = Math.Max(1, Math.Max(box.Height, needed));
     }
 
     /// <summary>Zone de saisie revenue en haut de son texte (elle a pu défiler pendant la frappe).</summary>

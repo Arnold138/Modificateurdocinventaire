@@ -1,5 +1,7 @@
 using System.Text;
+using System.Numerics;
 using Microsoft.Graphics.Canvas;
+using Microsoft.Graphics.Canvas.Geometry;
 using Microsoft.Graphics.Canvas.Text;
 using Microsoft.UI;
 using RetoucheInventaire.Core;
@@ -53,6 +55,7 @@ public static class ImageExportService
             ds.Clear(Colors.White);
             ds.DrawImage(bitmap);
             var edited = ImageExporter.EditedFields(page).ToHashSet();
+            var prof = InkProfile(device, page, flat);
             foreach (var line in page.AllLines())
                 foreach (var f in line.Cells.Where(edited.Contains))
                 {
@@ -92,8 +95,8 @@ public static class ImageExportService
                         {
                             string part = text[(a - start)..(e - start)];
                             var (cr, cg, cb) = Strikes.TextRgb(color);
-                            using var layout = Layout(device, part, size, bold);
-                            ds.DrawTextLayout(layout, (float)x, (float)y, ColorHelper.FromArgb(255, cr, cg, cb));
+                            if (cr == 0 && cg == 0 && cb == 0 && prof.N >= 3) cr = cg = cb = (byte)prof.Ink; // noir de l'encre du scan
+                            InkText(ds, device, prof, part, x, y, size, bold, ColorHelper.FromArgb(255, cr, cg, cb));
                             x += Width(device, part, size, bold);
                         }
                     }
@@ -135,11 +138,150 @@ public static class ImageExportService
                     {
                         double x = box.X + (box.Width - layout.LayoutBounds.Width) / 2;
                         double y = Math.Clamp(box.CenterY - 0.58 * size, box.Top, Math.Max(box.Top, box.Bottom - LineHeightRatio * size));
-                        ds.DrawTextLayout(layout, (float)x, (float)y, Colors.Black);
+                        byte ink = (byte)(prof.N >= 3 ? prof.Ink : 0);
+                        InkText(ds, device, prof, line.Lot, x, y, size, false, ColorHelper.FromArgb(255, ink, ink, ink));
                     }
                 }
         }
         return new Raster(bgra.Width, bgra.Height, 4, target.GetPixelBytes());
+    }
+
+    // ---------- Écriture de l'imprimé (même règle que la version iPhone/iPad) ----------
+
+    /// <summary>Écriture de l'imprimé sur une page : facteur de largeur, épaisseur des traits (fraction de la taille), gris de l'encre.</summary>
+    public readonly record struct Profile(double Sx, double? Stem, int Ink, int N);
+
+    private static int Gray(Raster img, int x, int y)
+    {
+        int o = (y * img.Width + x) * img.Channels;
+        return img.Channels == 1 ? img.Data[o] : (img.Data[o] * 29 + img.Data[o + 1] * 150 + img.Data[o + 2] * 77) >> 8;
+    }
+
+    private static double? Median(List<double> v) { if (v.Count == 0) return null; v.Sort(); return v[v.Count / 2]; }
+
+    /// <summary>Épaisseur des traits (largeur des passages sombres) sur des lignes horizontales d'une zone.</summary>
+    private static void StemsIn(Raster img, int x0, int x1, IEnumerable<int> ys, List<double> output, int max)
+    {
+        foreach (int y in ys)
+        {
+            if (y < 0 || y >= img.Height) continue;
+            int run = 0;
+            for (int x = Math.Max(0, x0); x <= Math.Min(img.Width - 1, x1); x++)
+            {
+                if (Gray(img, x, y) < 140) run++;
+                else { if (run > 0 && run <= max) output.Add(run); run = 0; }
+            }
+        }
+    }
+
+    /// <summary>Hauteur x (px) d'un morceau d'écriture : bande des lignes de pixels les plus denses.</summary>
+    private static int? XHeightPx(Raster img, RectD ink)
+    {
+        int x0 = Math.Max(0, (int)Math.Floor(ink.X)), x1 = Math.Min(img.Width - 1, (int)Math.Ceiling(ink.Right));
+        int y0 = Math.Max(0, (int)Math.Floor(ink.Y)), y1 = Math.Min(img.Height - 1, (int)Math.Ceiling(ink.Bottom));
+        var rows = new List<int>();
+        for (int y = y0; y <= y1; y++) { int n = 0; for (int x = x0; x <= x1; x++) if (Gray(img, x, y) < 140) n++; rows.Add(n); }
+        if (rows.Count == 0) return null;
+        int max = rows.Max();
+        if (max < 4) return null;
+        int top = rows.FindIndex(n => n >= 0.5 * max), bottom = rows.Count - 1;
+        while (bottom > top && rows[bottom] < 0.5 * max) bottom--;
+        int xh = bottom - top + 1;
+        return xh >= 4 ? xh : null;
+    }
+
+    private static (int Xh, double Stem)? _timesRef;
+    /// <summary>Écriture de l'app (Times New Roman) à 100 px, mesurée comme le scan : hauteur x et épaisseur des traits.</summary>
+    private static (int Xh, double Stem) TimesRef(CanvasDevice device)
+    {
+        if (_timesRef is { } known) return known;
+        const string sample = "1 armoire en métal avec 15 casiers";
+        using var target = new CanvasRenderTarget(device, 1400, 170, 96);
+        using var layout = Layout(device, sample, 100, false);
+        using (var ds = target.CreateDrawingSession())
+        {
+            ds.Clear(Colors.White);
+            ds.DrawTextLayout(layout, 10, 130 - layout.LineMetrics[0].Baseline, Colors.Black);
+        }
+        var img = new Raster(1400, 170, 4, target.GetPixelBytes());
+        double w = Math.Min(1380, layout.LayoutBounds.Width);
+        int xh = XHeightPx(img, new RectD(10, 20, w, 140)) ?? 45;
+        var runs = new List<double>();
+        StemsIn(img, 10, (int)(10 + w), new[] { 130 - (int)Math.Round(0.1 * 100 * xh / 45), 130 - (int)Math.Round(0.18 * 100 * xh / 45), 130 - (int)Math.Round(0.26 * 100 * xh / 45) }, runs, 20);
+        var r = (xh, Median(runs) ?? 9);
+        _timesRef = r;
+        return r;
+    }
+
+    /// <summary>
+    /// Écriture de l'imprimé sur cette page, mesurée sur le scan : lettres plus ou moins hautes que Times New Roman à
+    /// largeur égale (Sx), traits plus épais et couleur de l'encre. Le texte retapé est écrit de la même façon.
+    /// </summary>
+    public static Profile InkProfile(CanvasDevice device, ModelPage page, Raster img)
+    {
+        var refT = TimesRef(device);
+        var ratios = new List<double>();
+        var stems = new List<double>();
+        var inks = new List<double>();
+        foreach (var line in page.AllLines())
+        {
+            if (line.Kind is not (LineKind.Article or LineKind.Titre) || line.Cells.Count == 0) continue;
+            var f = line.Cells[0];
+            if (f.Text != f.OriginalText || f.OriginalText.Trim().Length < 6 || f.Ink.IsEmpty) continue;
+            // Surtout des minuscules (la bande la plus dense est alors celle des minuscules : hauteur x).
+            var letters = f.OriginalText.Where(char.IsLetter).ToList();
+            if (letters.Count < 5 || letters.Count(c => c != char.ToUpperInvariant(c)) < 0.7 * letters.Count) continue;
+            if (XHeightPx(img, f.Ink) is not int xhp) continue;
+            double hs = xhp * 100.0 / refT.Xh;
+            if (hs < 8) continue;
+            ratios.Add(BaseSize(device, f, f.Box.Height + 1000, false) / hs);
+            int y0 = (int)Math.Round(f.Ink.Bottom);
+            int before = stems.Count;
+            StemsIn(img, (int)Math.Floor(f.Ink.X), (int)Math.Ceiling(f.Ink.Right),
+                new[] { y0 - (int)Math.Round(0.1 * hs), y0 - (int)Math.Round(0.18 * hs), y0 - (int)Math.Round(0.26 * hs) }, stems, (int)Math.Round(0.2 * hs));
+            for (int k = before; k < stems.Count; k++) stems[k] /= hs;
+            for (int x = (int)Math.Floor(f.Ink.X); x < f.Ink.Right; x += 2)
+            {
+                int yy = y0 - (int)Math.Round(0.18 * hs);
+                if (x < 0 || x >= img.Width || yy < 0 || yy >= img.Height) continue;
+                int g = Gray(img, x, yy);
+                if (g < 90) inks.Add(g);
+            }
+        }
+        double r = Math.Clamp(Median(ratios) ?? 1, 0.8, 1.2);
+        double sx = Math.Abs(1 - r) < 0.05 ? 1 : r; // écart faible : les lettres gardent leur forme
+        stems.Sort();
+        double? stem = stems.Count > 0 ? stems[(int)(stems.Count * 0.4)] : null;
+        int ink = (int)Math.Min(60, Median(inks) ?? 0);
+        return new Profile(sx, stem, ink, ratios.Count);
+    }
+
+    /// <summary>
+    /// Écrit <paramref name="text"/> (haut de ligne en <paramref name="y"/> à la taille <paramref name="size"/>) comme
+    /// l'imprimé : même largeur, lettres rehaussées de 1/Sx, traits épaissis jusqu'à l'épaisseur mesurée sur le scan.
+    /// </summary>
+    private static void InkText(CanvasDrawingSession ds, CanvasDevice device, Profile p, string text, double x, double y, double size, bool bold, Windows.UI.Color color)
+    {
+        double sx = p.N >= 3 ? p.Sx : 1, h = size / sx;
+        using var reference = Layout(device, "x", size, bold);
+        double baseline = y + reference.LineMetrics[0].Baseline;
+        using var layout = Layout(device, text, h, bold);
+        double top = baseline - layout.LineMetrics[0].Baseline;
+        var saved = ds.Transform;
+        ds.Transform = Matrix3x2.CreateScale((float)sx, 1, new Vector2((float)x, (float)baseline)) * saved;
+        ds.DrawTextLayout(layout, (float)x, (float)top, color);
+        if (p.N >= 3 && p.Stem is double stem)
+        {
+            // Le trait s'ajoute de part et d'autre : moitié de l'écart (et un peu moins : le scan est flou, il paraît plus gras).
+            double want = stem * h, have = TimesRef(device).Stem * h / 100 * (bold ? 1.6 : 1);
+            double extra = Math.Min(0.04 * h, 0.6 * (want - have));
+            if (extra > 0.3)
+            {
+                using var geometry = CanvasGeometry.CreateText(layout);
+                ds.DrawGeometry(geometry, (float)x, (float)top, color, (float)extra, new CanvasStrokeStyle { LineJoin = CanvasLineJoin.Round });
+            }
+        }
+        ds.Transform = saved;
     }
 
     private static CanvasTextLayout Layout(CanvasDevice device, string text, double size, bool bold) =>

@@ -103,6 +103,131 @@ export function textLayout(line, f, text = f.Text) {
   return { size, lines, top, baseHeight: b.Height, bold };
 }
 
+// ---------- Écriture de l'imprimé (export) ----------
+
+const median = (v) => { const s = [...v].sort((a, b) => a - b); return s.length ? s[Math.trunc(s.length / 2)] : null; };
+const grayAt = (img, x, y) => { const o = (y * img.w + x) * img.ch, d = img.data; return img.ch === 1 ? d[o] : (d[o] * 77 + d[o + 1] * 150 + d[o + 2] * 29) >> 8; };
+
+/** Épaisseur des traits (largeur médiane des passages sombres) sur des lignes horizontales d'une zone. */
+function stemsIn(img, x0, x1, ys, out, max) {
+  for (const y of ys) {
+    if (y < 0 || y >= img.h) continue;
+    let run = 0;
+    for (let x = Math.max(0, x0); x <= Math.min(img.w - 1, x1); x++) {
+      if (grayAt(img, x, y) < 140) run++;
+      else { if (run > 0 && run <= max) out.push(run); run = 0; }
+    }
+  }
+}
+
+/**
+ * Taille de l'écriture d'après la hauteur des minuscules sur le scan : la bande la plus dense (de « a », « e », « n »…)
+ * va de la hauteur x à la ligne de base ; Times New Roman a une hauteur x de 0,448 de sa taille.
+ */
+function xHeightSize(img, ink) {
+  const xh = xHeightPx(img, ink);
+  return xh === null ? null : (xh * 100) / timesRef().xh;
+}
+
+/** Hauteur x (px) d'un morceau d'écriture : bande des lignes de pixels les plus denses. */
+function xHeightPx(img, ink) {
+  const x0 = Math.max(0, Math.floor(ink.X)), x1 = Math.min(img.w - 1, Math.ceil(Rect.right(ink)));
+  const y0 = Math.max(0, Math.floor(ink.Y)), y1 = Math.min(img.h - 1, Math.ceil(Rect.bottom(ink)));
+  const rows = [];
+  for (let y = y0; y <= y1; y++) { let n = 0; for (let x = x0; x <= x1; x++) if (grayAt(img, x, y) < 140) n++; rows.push(n); }
+  const max = Math.max(...rows);
+  if (max < 4) return null;
+  let top = rows.findIndex((n) => n >= 0.5 * max), bottom = rows.length - 1;
+  while (bottom > top && rows[bottom] < 0.5 * max) bottom--;
+  const xh = bottom - top + 1;
+  return xh >= 4 ? xh : null;
+}
+
+let tnrRef = null;
+/**
+ * Écriture de l'app (Times New Roman de l'appareil) à 100 px, mesurée comme le scan : hauteur x et épaisseur des traits.
+ * Mesurée une fois sur un texte d'essai : rien ne dépend de la police exacte installée.
+ */
+function timesRef() {
+  if (tnrRef) return tnrRef;
+  const c = makeCanvas(1400, 170), x = c.getContext('2d', { willReadFrequently: true });
+  x.fillStyle = '#fff'; x.fillRect(0, 0, 1400, 170);
+  x.fillStyle = '#000'; x.font = font(100); x.textBaseline = 'alphabetic';
+  const sample = '1 armoire en métal avec 15 casiers';
+  x.fillText(sample, 10, 130);
+  const img = canvasToRaster(c);
+  freeCanvas(c);
+  const w = Math.min(1380, x.measureText(sample).width);
+  const xh = xHeightPx(img, { X: 10, Y: 20, Width: w, Height: 140 }) ?? 45;
+  const runs = [];
+  stemsIn(img, 10, 10 + w, [130 - Math.round(0.1 * 100 * xh / 45), 130 - Math.round(0.18 * 100 * xh / 45), 130 - Math.round(0.26 * 100 * xh / 45)], runs, 20);
+  tnrRef = { xh, stem: median(runs) ?? 9 };
+  return tnrRef;
+}
+
+const profiles = new WeakMap();
+/**
+ * Écriture de l'imprimé sur cette page, mesurée sur le scan : lettres plus hautes que Times New Roman à largeur égale
+ * (sx : facteur de largeur), traits plus épais (weight, en px pour une taille donnée) et couleur de l'encre. Le texte
+ * retapé est écrit de la même façon : même hauteur, même largeur, même épaisseur qu'une ligne imprimée.
+ */
+export function inkProfile(page, img) {
+  const cached = profiles.get(img);
+  if (cached) return cached;
+  const ratios = [], stems = [], inks = [];
+  for (const line of allLines(page)) {
+    if (line.Kind !== 'Article' && line.Kind !== 'Titre') continue;
+    const f = line.Cells[0];
+    if (!f || f.Text !== f.OriginalText || f.OriginalText.trim().length < 6 || Rect.isEmpty(f.Ink)) continue;
+    // Surtout des minuscules (la bande la plus dense est alors celle des minuscules : hauteur x).
+    const letters = f.OriginalText.match(/\p{L}/gu) ?? [];
+    if (letters.length < 5 || letters.filter((c) => c !== c.toUpperCase()).length < 0.7 * letters.length) continue;
+    const hs = xHeightSize(img, f.Ink); // taille d'après la hauteur des minuscules (x) mesurée sur le scan
+    if (hs === null) continue;
+    const ws = baseSize(f, f.Box.Height + 1000, false); // taille qui redonne la largeur imprimée
+    if (hs < 8) continue;
+    ratios.push(ws / hs);
+    const y0 = Math.round(Rect.bottom(f.Ink));
+    const before = stems.length;
+    stemsIn(img, Math.floor(f.Ink.X), Math.ceil(Rect.right(f.Ink)), [y0 - Math.round(0.1 * hs), y0 - Math.round(0.18 * hs), y0 - Math.round(0.26 * hs)], stems, Math.round(0.2 * hs));
+    for (let k = before; k < stems.length; k++) stems[k] /= hs; // en fraction de la taille
+    for (let x = Math.floor(f.Ink.X); x < Rect.right(f.Ink); x += 2) { const g = grayAt(img, x, y0 - Math.round(0.18 * hs)); if (g < 90) inks.push(g); }
+  }
+  const r = Math.min(1.2, Math.max(0.8, median(ratios) ?? 1));
+  const sx = Math.abs(1 - r) < 0.05 ? 1 : r; // écart faible : les lettres gardent leur forme
+  const sorted = [...stems].sort((a, b) => a - b);
+  const stem = sorted.length ? sorted[Math.trunc(sorted.length * 0.4)] : null; // fraction de la taille (traits fins comptés)
+  const ink = Math.min(60, median(inks) ?? 0);
+  const p = { sx, stem, ink, n: ratios.length };
+  profiles.set(img, p);
+  return p;
+}
+
+/**
+ * Écrit `text` en (x, y = ligne de base) comme l'imprimé : taille `size` pour la largeur (mise en page inchangée), lettres
+ * rehaussées de 1/sx et traits épaissis jusqu'à l'épaisseur mesurée sur le scan.
+ */
+function inkText(ctx, profile, text, x, y, size, bold, color) {
+  const sx = profile?.n >= 3 ? profile.sx : 1;
+  const h = size / sx;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(sx, 1);
+  ctx.font = font(h, bold);
+  ctx.fillStyle = color;
+  ctx.fillText(text, 0, 0);
+  if (profile?.n >= 3 && profile.stem) {
+    const want = profile.stem * h, have = (timesRef().stem * h) / 100 * (bold ? 1.6 : 1);
+    // Le trait s'ajoute de part et d'autre : moitié de l'écart (et un peu moins : le scan est flou, il paraît plus gras).
+    const extra = Math.min(0.04 * h, 0.6 * (want - have));
+    if (extra > 0.3) { ctx.lineWidth = extra; ctx.lineJoin = 'round'; ctx.strokeStyle = color; ctx.strokeText(text, 0, 0); }
+  }
+  ctx.restore();
+}
+
+/** Couleur du texte retapé : noir de l'encre du scan (le noir pur se voit sur une photocopie). */
+const inkColor = (color, profile) => { const hex = textColor(color); return hex === '#000000' && profile?.n >= 3 ? `rgb(${profile.ink},${profile.ink},${profile.ink})` : hex; };
+
 /** Lignes de texte affichées et position de leur 1er caractère dans le texte de la case. */
 function linesWithOffsets(text, lines) {
   let cursor = 0;
@@ -257,6 +382,7 @@ export function renderEdits(page, flat, lotFrame = true) {
   const ctx = c.getContext('2d');
   const original = rasterToCanvas(flat);
   const edited = new Set(editedFields(page));
+  const prof = inkProfile(page, flat);
   for (const line of allLines(page))
     for (const f of line.Cells) {
       if (!edited.has(f)) continue;
@@ -282,8 +408,8 @@ export function renderEdits(page, flat, lotFrame = true) {
         const y = t.top + i * LINE_HEIGHT * t.size + 0.91 * t.size;
         for (const run of colorRuns(f, l.start, l.start + l.text.length)) {
           const part = l.text.slice(run.start - l.start, run.end - l.start);
-          ctx.fillStyle = textColor(run.color);
-          ctx.fillText(part, x, y);
+          inkText(ctx, prof, part, x, y, t.size, t.bold, inkColor(run.color, prof));
+          ctx.font = font(t.size, t.bold);
           x += ctx.measureText(part).width;
         }
       });
@@ -307,9 +433,8 @@ export function renderEdits(page, flat, lotFrame = true) {
     const size = lotSize(line, box);
     ctx.font = font(size);
     const w = ctx.measureText(line.Lot).width;
-    ctx.fillStyle = '#000';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText(line.Lot, box.X + (box.Width - w) / 2, Math.min(Rect.bottom(box) - 0.2 * size, Rect.cy(box) + 0.33 * size));
+    inkText(ctx, prof, line.Lot, box.X + (box.Width - w) / 2, Math.min(Rect.bottom(box) - 0.2 * size, Rect.cy(box) + 0.33 * size), size, false, inkColor(null, prof));
   }
   const out = canvasToRaster(c);
   freeCanvas(c);
@@ -324,3 +449,4 @@ export function lotSize(line, box) {
   while (size > 5 && measure(line.Lot || ' ', size) > box.Width - 2) size -= 0.5;
   return size;
 }
+

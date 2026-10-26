@@ -17,7 +17,7 @@ import { toggleStrike, isStruck, setColor, RED, BLACK, TEXT_COLORS } from './cor
 import { planArrangement, viewOf, composePage, unitCrop, pageArranged, mapY, unmapY, syncEndPages } from './core/arrange.js';
 import { recomputeTotals, isComputedCell, computedValue } from './core/totals.js';
 import { hasLotCell, lotSegment } from './core/lots.js';
-import { frameSignature, lotFrameEnabled } from './core/lotcolumn.js';
+import { frameSignature, lotFrameEnabled, frameToggles } from './core/lotcolumn.js';
 import { canCopyLine, canAddRows, canAddAbove, canSplit, addedRowOf, copyLine, addBlankLine, locate, splitAt, splitTypedText, removeAddedRow, canSplitBelow, splitBelow, addTotalLine, lastObjectLine, rowTrimOf, trimRow, untrimRow, trimsOf } from './core/rows.js';
 import { decodeImage, pdfPages, isImageName, mimeOf } from './services/decode.js';
 import { recognize, warmUp } from './services/ocr.js';
@@ -411,7 +411,9 @@ async function showPage(n, { flat = null, fit = true, keepScroll = false } = {})
     onLotAdd: (v, line) => {
       pushUndo();
       addLotHere(state.project, locate(page, line)?.table ?? null, line); // tableau sans lots : seule cette ligne reçoit une case
-      refreshView();
+      replan();
+      // La case est prête : le curseur y est, on tape le numéro tout de suite.
+      refreshView().then(() => state.view?.lotInputs.get(line)?.focus({ preventScroll: true }));
       status('Case de lot ajoutée : tapez le numéro.');
       scheduleSave();
     },
@@ -515,6 +517,11 @@ function lineChoices(f) {
   if (hasLotCell(line) && !isZeroLot(line))
     items.push({ act: 'end', icon: 'i-addbelow', label: 'Mettre à la fin (lot 0)', hint: 'Objet absent : sa ligne part à la fin, ce qui suit remonte.' });
   const at0 = locate(page, line);
+  // Colonne des lots sur une rangée sans case (total, titre…) : la tracer ou non.
+  if (lotsActive(state.project) && at0 && !at0.table.LotsOff && !at0.row.Lines.some(hasLotCell)) {
+    const g = frameToggles(at0.table).find((x) => x.rows.includes(at0.r));
+    if (g) items.push({ act: 'frame', rows: g.rows, on: !g.framed, icon: g.framed ? 'i-trash' : 'i-plus', label: g.framed ? 'Ne pas tracer la colonne des lots ici' : 'Tracer la colonne des lots ici', hint: 'Seulement le cadre de la colonne sur cette rangée (pas de numéro).' });
+  }
   if (lotsActive(state.project) && at0 && (!at0.table.LotsOff || itemTable(at0.table)) && !hasLotCell(line) && firstText(line))
     items.push({ act: 'addLot', icon: 'i-plus', label: 'Ajouter une case de lot ici', hint: 'Une case vide à la hauteur de cette ligne (même dans une grande case) : tapez le numéro. Les autres numéros ne bougent pas.' });
   if (rowTrimOf(page, line))
@@ -572,6 +579,15 @@ async function lineAction(item, f) {
   const name = short(firstText(line)) || 'ligne vide';
   if (item.act === 'end') return applyLot(state.view, line, '0');
   if (item.act === 'rows') return rowsDialog(page, line);
+  if (item.act === 'frame') {
+    pushUndo();
+    const t = locate(page, line)?.table;
+    for (const r of item.rows) if (t?.Rows[r]) t.Rows[r].LotFrame = item.on;
+    replan(); recomputeAll();
+    await refreshView();
+    status(item.on ? 'Colonne des lots tracée sur cette rangée. ↶ pour annuler.' : 'Colonne des lots arrêtée sur cette rangée. ↶ pour annuler.');
+    return scheduleSave();
+  }
   if (item.act === 'oneBelow' || item.act === 'oneAbove') return addRowsNow(page, line, 1, item.act === 'oneAbove');
   if (item.act === 'lotAlign' || item.act === 'lotRemove') {
     pushUndo();
@@ -586,6 +602,7 @@ async function lineAction(item, f) {
     addLotHere(state.project, locate(page, line)?.table ?? null, line);
     replan(); recomputeAll();
     await refreshView();
+    state.view?.lotInputs.get(line)?.focus({ preventScroll: true });
     status(`Case de lot ajoutée sur « ${name} » : tapez le numéro, ou « Synchroniser… » (les autres numéros ne bougent pas).`);
     return scheduleSave();
   }

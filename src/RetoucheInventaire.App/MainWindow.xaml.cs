@@ -439,6 +439,7 @@ public sealed partial class MainWindow : Window
             Replan();
             RecomputeTotals();
             await RefreshViewAsync();
+            _view?.FocusLot(line); // la case est prête : on tape le numéro tout de suite
             SetStatus("Case de lot ajoutée : tapez le numéro.");
             ScheduleAutosave();
         });
@@ -748,6 +749,15 @@ public sealed partial class MainWindow : Window
         if (Lots.HasCell(line) && !Lots.IsZero(line))
             list.Add(new("Mettre à la fin (lot 0)", "Objet absent : sa ligne part à la fin, ce qui suit remonte.", "\uE74B",
                 () => _ = LineActionAsync("end", 0, f)));
+        // Colonne des lots sur une rangée sans case (total, titre…) : la tracer ou non.
+        if (Lots.IsActive(_project) && Rows.Locate(page, line) is { } atF && !atF.Table.LotsOff && !atF.Row.Lines.Any(Lots.HasCell)
+            && LotColumn.FrameToggles(atF.Table).FirstOrDefault(g => g.Rows.Contains(atF.R)) is { Rows: not null } grp)
+        {
+            var table = atF.Table;
+            bool on = !grp.Framed;
+            list.Add(new(grp.Framed ? "Ne pas tracer la colonne des lots ici" : "Tracer la colonne des lots ici", "Seulement le cadre de la colonne sur cette rangée (pas de numéro).",
+                grp.Framed ? "\uE74D" : "\uE710", () => _ = FrameRowsAsync(table, grp.Rows, on)));
+        }
         if (Lots.IsActive(_project) && Rows.Locate(page, line) is { } at0 && (!at0.Table.LotsOff || Lots.ItemTable(at0.Table)) && !Lots.HasCell(line) && line.FirstText.Length > 0)
             list.Add(new("Ajouter une case de lot ici", "Une case vide à la hauteur de cette ligne (même dans une grande case) : tapez le numéro. Les autres numéros ne bougent pas.", "\uE710",
                 () => _ = LineActionAsync("addLot", 0, f)));
@@ -828,6 +838,7 @@ public sealed partial class MainWindow : Window
             Replan();
             RecomputeTotals();
             await RefreshViewAsync();
+            _view?.FocusLot(line);
             SetStatus($"Case de lot ajoutée sur « {name} » : tapez le numéro, ou « Synchroniser… » (les autres numéros ne bougent pas).");
             ScheduleAutosave();
             return;
@@ -1094,6 +1105,17 @@ public sealed partial class MainWindow : Window
         int n = double.IsNaN(number.Value) ? 10 : Math.Clamp((int)number.Value, 1, 200);
         await AddRowsNowAsync(page, line, n, aboveBox.IsChecked == true && Rows.CanAddAbove(page, line));
     }
+
+    /// <summary>Colonne des lots tracée ou non sur ces rangées sans case (clic droit sur la ligne).</summary>
+    private Task FrameRowsAsync(RetoucheInventaire.Core.Model.Table table, List<int> rows, bool on) => GuardAsync("Colonne des lots", async () =>
+    {
+        PushUndo();
+        foreach (int r in rows) if (r < table.Rows.Count) table.Rows[r].LotFrame = on;
+        Replan();
+        await RefreshViewAsync();
+        SetStatus(on ? "Colonne des lots tracée sur cette rangée. ↶ pour annuler." : "Colonne des lots arrêtée sur cette rangée. ↶ pour annuler.");
+        ScheduleAutosave();
+    });
 
     /// <summary>Numéro de lot en haut, au milieu ou en bas de sa case (clic droit).</summary>
     private Task LotAlignAsync(PrintedLine line, string? value) => GuardAsync("Numéro de lot", async () =>

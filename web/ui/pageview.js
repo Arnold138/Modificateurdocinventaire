@@ -175,7 +175,7 @@ export class PageView {
    */
   drawAddedControls() {
     for (const b of this.overlay.querySelectorAll('.addctl')) b.remove();
-    this.drawFrameToggles();
+    // Plus de « + » / corbeille dans la colonne : un seul « + » (marge) ; tracer ou non la colonne : clic droit sur la ligne.
     const A = this.page.Added;
     if (!A) return;
     const mk = (cls, icon, label, cx, cy, onClick) => {
@@ -338,6 +338,8 @@ export class PageView {
 
   refreshGutter() {
     this.gutter.replaceChildren();
+    for (const z of this.overlay.querySelectorAll('.lotzone')) z.remove();
+    const lotW = columnWidth(this.page);
     const active = (this.cb.lotsActive?.() ?? false) && !this.moveMode;
     for (const entry of this.view.lines) {
       const { line } = entry;
@@ -363,6 +365,15 @@ export class PageView {
       const h = Math.max(26, Math.min(40, b.Height + 6));
       Object.assign(btn.style, { top: Rect.cy(b) - h / 2 + 'px', height: h + 'px' });
       btn.onclick = () => (has ? this.cb.onLotRemove : this.cb.onLotAdd)?.(this, line);
+      // Toucher la colonne des lots vide, à la hauteur de la ligne : la case apparaît et on tape le numéro.
+      if (!has && lotW >= 12) {
+        const z = el('button', 'lotzone', this.overlay);
+        z.title = 'Ajouter une case de lot ici (puis taper le numéro)';
+        z.setAttribute('aria-label', z.title);
+        Object.assign(z.style, { left: tableLeft(entry.table) - lotW + 2 + 'px', width: lotW - 4 + 'px', top: Rect.cy(b) - h / 2 + 'px', height: h + 'px' });
+        z.addEventListener('pointerdown', (e) => e.preventDefault());
+        z.onclick = (e) => { e.stopPropagation(); this.cb.onLotAdd?.(this, line); };
+      }
     }
     this.drawHandles();
   }
@@ -581,6 +592,8 @@ export class PageView {
     input.style.paddingTop = padTop + 'px';
     // Texte sur plusieurs lignes (Entrée) : la case montre tout son texte tout de suite, même avant que la rangée ait grandi.
     if (isMultiline(f)) input.style.height = Math.max(pl.box.Height, padTop + t.lines.length * lh + 4) + 'px';
+    // Jamais de dernière ligne cachée : hauteur réelle du texte si elle dépasse la règle commune.
+    if (isMultiline(f) && input.isConnected && input.scrollHeight > input.clientHeight + 1) input.style.height = input.scrollHeight + 'px';
     input.style.paddingLeft = f.Align === 'Left' ? Math.max(0, f.Box.X + pl.dx + f.Indent - pl.box.X) + 'px' : '0';
     input.style.paddingRight = f.Align === 'Right' ? Math.max(0, Rect.right(pl.box) - (Rect.right(f.Box) + pl.dx - f.Indent)) + 'px' : isMultiline(f) ? '3px' : '0';
   }
