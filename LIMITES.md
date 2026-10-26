@@ -101,6 +101,8 @@
 
 ## Texte sur plusieurs lignes
 
+- Pendant la frappe (Entrée dans la désignation), la case s'agrandit tout de suite pour montrer tout son texte, avant même que la rangée et l'image aient fini de se redessiner ; en la quittant, elle revient en haut de son texte.
+
 - Seule la **désignation** (1re colonne) passe à la ligne ; une valeur trop longue est encore réduite pour tenir sur une ligne.
 - La rangée s'agrandit en insérant une bande sous la ligne modifiée : les filets verticaux du tableau y sont prolongés, le reste est mis à la couleur du papier. Une page agrandie ne se superpose plus à la photo d'origine : son JPEG est la page **redressée** (droite, recadrée), plus longue de la hauteur ajoutée.
 - L'écran (champ de saisie) et l'export coupent les lignes avec la même règle ; un mot peut exceptionnellement passer à la ligne à un endroit légèrement différent.
