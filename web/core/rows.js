@@ -134,9 +134,9 @@ function inkBottomOf(l) {
  * `above` : la rangée est posée juste au-dessus de celle de la ligne (sinon juste en dessous).
  * Renvoie la nouvelle ligne (la hauteur de son texte sur plusieurs lignes est à recalculer par l'écran).
  */
-export function copyLine(page, line, blank = false, above = false, src = line) {
+export function copyLine(page, line, blank = false, above = false, src = line, force = false) {
   const at = locate(page, line);
-  if (!at || (src === line && !canCopyLine(page, line)) || (above && at.r === 0)) return null;
+  if (!at || (!force && src === line && !canCopyLine(page, line)) || (above && at.r === 0)) return null;
   const { table: t, r } = at;
   // Modèle de la rangée (`src`, même tableau) : hauteur, filets et place des cases ; `line` : où la poser.
   const sat = src === line ? at : locate(page, src);

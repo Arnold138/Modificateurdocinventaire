@@ -275,6 +275,7 @@ public sealed class PageView
         {
             Layout(tb, f);
             ApplyVisual(tb, f, tb.FocusState != FocusState.Unfocused);
+            if (tb.FocusState == FocusState.Unfocused) ScrollToTop(tb);
         }
         DrawLockZones();
         UpdateLots();
@@ -744,6 +745,7 @@ public sealed class PageView
         tb.GotFocus += (_, _) => { ApplyVisual(tb, f, focused: true); ShowFrame(f); ShowLoupe(f); FieldFocused?.Invoke(this, f); };
         tb.LostFocus += (_, _) =>
         {
+            ScrollToTop(tb);
             ApplyVisual(tb, f, focused: false);
             _focusFrame.Visibility = Visibility.Collapsed;
             _loupe.Visibility = Visibility.Collapsed;
@@ -864,14 +866,17 @@ public sealed class PageView
     private void Layout(TextBox tb, Field f)
     {
         var (cell, entry) = _place[f];
-        var (size, _, top) = TextLayout(entry.Line, f, FromBox(tb.Text));
+        var (size, lines, top) = TextLayout(entry.Line, f, FromBox(tb.Text));
         var box = cell.Box;
         tb.FontSize = size;
         Canvas.SetLeft(tb, box.X);
         Canvas.SetTop(tb, box.Y);
         tb.Width = Math.Max(1, box.Width);
-        tb.Height = Math.Max(1, box.Height);
         double pad = Math.Max(0, top + cell.Dy - box.Y);
+        // Texte sur plusieurs lignes (Entrée) : la case montre tout son texte tout de suite, même avant que la rangée
+        // ait fini de grandir (sinon la zone de saisie défile et la 1re ligne semble effacée).
+        double needed = TextWrap.IsMultiline(f) ? pad + lines.Count * size * LineHeightRatio + 4 : 0;
+        tb.Height = Math.Max(1, Math.Max(box.Height, needed));
         double left = Math.Max(0, f.Box.X + cell.Dx + f.Indent - box.X);
         double right = Math.Max(0, box.Right - (f.Box.Right + cell.Dx - f.Indent));
         tb.Padding = f.Align switch
@@ -880,6 +885,22 @@ public sealed class PageView
             TextAlign.Center => new Thickness(0, pad, 0, 0),
             _ => new Thickness(left, pad, TextWrap.IsMultiline(f) ? 3 : 0, 0),
         };
+    }
+
+    /// <summary>Zone de saisie revenue en haut de son texte (elle a pu défiler pendant la frappe).</summary>
+    private static void ScrollToTop(TextBox tb)
+    {
+        static ScrollViewer? Find(DependencyObject d)
+        {
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(d); i++)
+            {
+                var c = VisualTreeHelper.GetChild(d, i);
+                if (c is ScrollViewer sv) return sv;
+                if (Find(c) is { } found) return found;
+            }
+            return null;
+        }
+        Find(tb)?.ChangeView(null, 0, null, true);
     }
 
     private static double Measure(string s, double size, bool bold)

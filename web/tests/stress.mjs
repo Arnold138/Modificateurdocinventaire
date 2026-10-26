@@ -393,9 +393,11 @@ function check(step, op, beforeLots, plan) {
 
 /** Chaque rangée tracée de la colonne des lots : trait gauche de la colonne et trait gauche du tableau présents (3 hauteurs). */
 function pixelCheck(step, op) {
-  for (const pg of pages()) {
-    if (pg.EndLots) continue;
-    const img = drawLotColumns(stretch(imageOf(pg), pg), pg);
+  for (const pg0 of pages()) {
+    if (pg0.EndLots) continue;
+    // Sur une copie : la mesure des traits (gardée dans le projet à la 1re mesure) ne doit pas dépendre de ce contrôle.
+    const pg = structuredClone(pg0);
+    const img = drawLotColumns(stretch(imageOf(pg0), pg), pg);
     for (const f of frames(img, pg)) {
       for (const r of f.rows) {
         const y0 = Math.floor(f.table.RowYs[r] + 0.5) + 3, y1 = Math.floor(f.table.RowYs[r + 1] + 0.5) - 3;

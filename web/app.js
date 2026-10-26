@@ -919,9 +919,12 @@ function afterEdit(view, f = null) {
   const changed = recomputeAll();
   let lots = false;
   if (lotsActive(state.project)) {
-    const before = [...objectLines(state.project)].length;
+    // Cases de lot avant / après (une ligne qui devient un objet en tapant reçoit sa case : la page est redessinée).
+    const cells = () => pages().flatMap((p) => [...allLines(p)].filter(hasLotCell));
+    const before = new Set(cells());
     resyncLots(state.project);
-    lots = [...objectLines(state.project)].length !== before;
+    const after = cells();
+    lots = after.length !== before.size || after.some((l) => !before.has(l));
   }
   if (grew || lots) redraw(view);
   else if (changed.length) view.syncFields(changed);

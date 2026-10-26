@@ -481,7 +481,7 @@ export class PageView {
     this.visual(input, f, false);
 
     input.addEventListener('focus', () => { this.visual(input, f, true); if (this.cb.loupe?.() !== false) this.showLoupe(f); this.cb.onFocus?.(this, f); });
-    input.addEventListener('blur', () => { this.visual(input, f, false); this.loupe.style.display = 'none'; });
+    input.addEventListener('blur', () => { input.scrollTop = 0; this.visual(input, f, false); this.loupe.style.display = 'none'; });
     const remember = () => { this.selection = { f, start: input.selectionStart ?? 0, end: input.selectionEnd ?? 0 }; };
     for (const ev of ['select', 'keyup', 'pointerup', 'focus']) input.addEventListener(ev, remember);
     input.addEventListener('input', () => {
@@ -546,7 +546,10 @@ export class PageView {
     input.style.font = font(t.size, t.bold);
     const lh = LINE_HEIGHT * t.size;
     input.style.lineHeight = lh + 'px';
-    input.style.paddingTop = Math.max(0, t.top + pl.dy - pl.box.Y) + 'px';
+    const padTop = Math.max(0, t.top + pl.dy - pl.box.Y);
+    input.style.paddingTop = padTop + 'px';
+    // Texte sur plusieurs lignes (Entrée) : la case montre tout son texte tout de suite, même avant que la rangée ait grandi.
+    if (isMultiline(f)) input.style.height = Math.max(pl.box.Height, padTop + t.lines.length * lh + 4) + 'px';
     input.style.paddingLeft = f.Align === 'Left' ? Math.max(0, f.Box.X + pl.dx + f.Indent - pl.box.X) + 'px' : '0';
     input.style.paddingRight = f.Align === 'Right' ? Math.max(0, Rect.right(pl.box) - (Rect.right(f.Box) + pl.dx - f.Indent)) + 'px' : isMultiline(f) ? '3px' : '0';
   }

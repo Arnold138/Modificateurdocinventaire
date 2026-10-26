@@ -153,11 +153,11 @@ public static class Rows
     /// <paramref name="above"/> : la rangée est posée juste au-dessus de celle de la ligne (sinon juste en dessous).
     /// Renvoie la nouvelle ligne (la hauteur de son texte sur plusieurs lignes est à recalculer par l'écran).
     /// </summary>
-    public static PrintedLine? Copy(Page page, PrintedLine line, bool blank = false, bool above = false, PrintedLine? from = null)
+    public static PrintedLine? Copy(Page page, PrintedLine line, bool blank = false, bool above = false, PrintedLine? from = null, bool force = false)
     {
         var src0 = from ?? line;
         var at = Locate(page, line);
-        if (at is null || (src0 == line && !CanCopy(page, line)) || (above && at.R == 0)) return null;
+        if (at is null || (!force && src0 == line && !CanCopy(page, line)) || (above && at.R == 0)) return null;
         var (t, r, _, _) = at;
         // Modèle de la rangée (from, même tableau) : hauteur, filets et place des cases ; line : où la poser.
         var sat = src0 == line ? at : Locate(page, src0);

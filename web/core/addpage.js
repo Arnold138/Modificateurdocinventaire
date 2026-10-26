@@ -289,7 +289,7 @@ export function addRows(project, page, line, n, { above = false, img = null, id 
     const ref = r0 !== null ? t.Rows[r0].Lines[0] : dest;
     const H = baseHeight(cur), margin = Math.max(40, Math.floor(H * 0.025 + 0.5));
     const before = cur.Height;
-    const made = copyLine(cur, dest, true, first, ref);
+    const made = copyLine(cur, dest, true, first, ref, true); // « Ajouter des lignes » : aussi sous une ligne encore vide
     if (!made) break;
     made.Copy = false; // case de lot quand on écrit dans la ligne (pas de numéros sur des lignes vides)
     const fits = contentBottom(cur) <= H - margin;

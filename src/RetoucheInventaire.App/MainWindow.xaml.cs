@@ -500,9 +500,11 @@ public sealed partial class MainWindow : Window
         bool lots = false;
         if (Lots.IsActive(_project))
         {
-            int before = Lots.ObjectLines(_project).Count();
+            // Cases de lot avant / après (une ligne qui devient un objet en tapant reçoit sa case : la page est redessinée).
+            var before = _project.Pages.SelectMany(p => p.AllLines()).Where(Lots.HasCell).ToHashSet();
             Lots.Resync(_project);
-            lots = Lots.ObjectLines(_project).Count() != before;
+            var after = _project.Pages.SelectMany(p => p.AllLines()).Where(Lots.HasCell).ToHashSet();
+            lots = !before.SetEquals(after);
         }
         if (grew || lots) _ = RedrawAsync(view);
         else if (changed.Count > 0) view.SyncFields(changed);

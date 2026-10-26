@@ -39,6 +39,9 @@
 
 ## Numéros de lot
 
+- Le trait entre le numéro et la désignation (trait gauche du tableau) est gardé tel qu'imprimé quand il est sur l'image, même un peu décalé (page légèrement de travers) ; là où il manque (rangée ajoutée, trait qui s'arrête), il est tracé avec l'épaisseur et la couleur des traits de la colonne.
+- Un tableau d'objets sans lots peut recevoir une case sur une seule ligne (« + » ou « Ajouter une case de lot ici ») : les autres objets du tableau restent sans case jusqu'à ce qu'on les ajoute (« + ») ou qu'on coche le tableau dans Lots › Pages et tableaux.
+
 - **Pages et tableaux** : seuls les tableaux cochés ont des lots ; « Synchroniser » ne numérote qu'eux. La proposition (tableaux d'objets) écarte les cadres à une colonne, les récapitulatifs (« I - … », « II - … ») et les tableaux sans objet ; elle se corrige d'un toucher. Le nom affiché d'un tableau est sa 1re ligne d'objet telle qu'elle a été lue.
 - **Lignes illisibles** (bandes grisées des en-têtes et totaux lues comme du charabia) : pas d'objet sans montant lisible (chiffres ou « mémoire ») ni début d'objet (« 1 … », « +/- 20 … ») ni texte lisible. Une rangée d'en-tête ou de total n'a jamais d'objet. Une ligne réelle écartée à tort : « + ».
 
@@ -83,7 +86,11 @@
 - **Recadrer** une page relit le texte : ses lignes ajoutées sont perdues (comme les agrandissements).
 - Une page avec des lignes ajoutées est exportée **redressée** (comme une page agrandie).
 
-## Page ajoutée (« Ajouter une page »)
+## Page ajoutée (« Ajouter une page ») et « Ajouter des lignes »
+
+- **Page blanche** : seulement le 1er tableau d'objets du modèle (en-tête + une ligne) ; les tableaux en dessous ne sont pas repris (en-tête de l'étude au-dessus : gardé).
+- **Ajouter des lignes** recopie la **rangée modèle** du tableau : une rangée d'une seule ligne, de hauteur médiane (pas l'en-tête, ni une rangée agrandie). La page garde sa taille en prenant le blanc du bas ; une marge de 2,5 % de la hauteur est gardée sous le dernier tableau, texte ou zone verrouillée. Quand la page est pleine, les lignes restantes partent sur une **page blanche juste après** (sur une page de l'inventaire, elles ne restent donc pas toutes à l'endroit choisi). Si la page ne peut pas servir de modèle (colonnes trop réduites), elle s'allonge.
+- Les lignes ajoutées par « Ajouter des lignes » reçoivent leur case de lot **quand on y écrit** (pas de numéro sur une ligne vide, même avec Synchroniser).
 
 - L'image de la page ajoutée est celle du modèle (même photo ou même page de PDF, même cadrage) redessinée : dans les tableaux d'objets (au moins trois colonnes dont une large), papier propre et traits **retracés** à partir de l'imprimé (épaisseur et couleur prises sur le modèle) ; ailleurs l'imprimé est gardé (en-tête de l'étude, titres). Les traits retracés sont nets et réguliers : un trait irrégulier ou pointillé de l'imprimé devient régulier.
 - Gardés tels qu'imprimés : les **rangées d'en-tête** (et les bandes tramées en haut du tableau). Si une colonne est coupée ou réunie, la case d'en-tête concernée est vidée et son texte est **retapé** (écriture de l'app).

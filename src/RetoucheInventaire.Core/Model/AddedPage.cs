@@ -353,7 +353,7 @@ public static partial class AddedPage
             var reference = r0 is int rr ? t.Rows[rr].Lines[0] : dest;
             int H = PageLayout.BaseHeight(cur), margin = Math.Max(40, (int)Math.Round(H * 0.025, MidpointRounding.AwayFromZero));
             int before = cur.Height;
-            var made = Rows.Copy(cur, dest, blank: true, above: first, from: reference);
+            var made = Rows.Copy(cur, dest, blank: true, above: first, from: reference, force: true); // aussi sous une ligne encore vide
             if (made is null) break;
             made.Copy = false; // case de lot quand on écrit dans la ligne (pas de numéros sur des lignes vides)
             bool fits = ContentBottom(cur) <= H - margin;
