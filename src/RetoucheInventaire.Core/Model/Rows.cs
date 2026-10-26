@@ -44,11 +44,23 @@ public static class Rows
 
     /// <summary>Une ligne d'article (ou un titre) d'un tableau à filets peut être dupliquée ; pas un total ni un en-tête.</summary>
     public static bool CanCopy(Page page, PrintedLine line) =>
-        !line.OutsideTable && (line.Kind is LineKind.Article or LineKind.Titre) && line.FirstText.Length > 0 && Locate(page, line) != null;
+        !line.OutsideTable && (line.Kind is LineKind.Article or LineKind.Titre) && (line.FirstText.Length > 0 || page.Added != null) && Locate(page, line) != null;
 
-    /// <summary>« Séparer ici » : la ligne n'est pas la première de sa rangée.</summary>
+    /// <summary>
+    /// Le trait tracé au-dessus de la ligne i passe bien entre les lignes : toutes les cases d'avant au-dessus, toutes celles
+    /// d'après en dessous (une lecture parasite sur un fond tramé peut chevaucher la ligne d'au-dessus : pas de trait alors).
+    /// </summary>
+    private static bool SplitOk(Row row, int i)
+    {
+        if (i <= 0 || i >= row.Lines.Count) return false;
+        double y = Arrangement.GapMid(row.Lines[i - 1], row.Lines[i]) + Arrangement.Cut;
+        static double Cy(PrintedLine l, Field f) { var b = PageLayout.BaseBox(l, f); return b.Y + b.Height / 2; }
+        return row.Lines.Select((l, k) => (l, k)).All(x => x.l.Cells.All(f => x.k < i ? Cy(x.l, f) < y : Cy(x.l, f) > y));
+    }
+
+    /// <summary>« Séparer ici » : la ligne n'est pas la première de sa rangée, et le trait passe bien entre les lignes.</summary>
     public static bool CanSplit(Page page, PrintedLine line) =>
-        !line.OutsideTable && Locate(page, line) is { I: > 0 };
+        !line.OutsideTable && Locate(page, line) is { } at && SplitOk(at.Row, at.I);
 
     /// <summary>Rangée ajoutée par l'utilisateur qui contient cette ligne (null sinon).</summary>
     public static (Location At, InsertedBand Band)? AddedRowOf(Page page, PrintedLine line)
@@ -59,13 +71,31 @@ public static class Rows
     }
 
     /// <summary>Rangées de pixels (page agrandie) [y0, y1[ → morceaux de l'image d'origine.</summary>
+    /// <summary>
+    /// Rangées de pixels (page agrandie) [y0, y1[ → morceaux : rangées de l'image d'origine, et interlignes d'une rangée déjà
+    /// ajoutée (recopiés comme interlignes : sans eux, copier une ligne ajoutée donnait une rangée réduite à son filet).
+    /// Les bandes d'agrandissement d'un texte tapé ne sont pas recopiées (la copie grandit à son tour si son texte le demande).
+    /// </summary>
     private static List<BandPart> PartsOf(Page page, int y0, int y1)
     {
+        var seq = PageLayout.Pieces(page);
         var parts = new List<BandPart>();
+        int pos = 0, k = 0, gapOf = -1;
         for (int y = y0; y < y1; y++)
         {
-            if (PageLayout.ToBase(page, y) is not int s) continue;
-            if (parts.Count > 0 && !parts[^1].Gap && parts[^1].Src + parts[^1].Height == s) parts[^1].Height++;
+            while (k < seq.Count && y >= pos + seq[k].N) { pos += seq[k].N; k++; }
+            if (k >= seq.Count) break;
+            var x = seq[k];
+            var last = parts.Count > 0 ? parts[^1] : null;
+            if (x.Extra) continue;
+            if (x.Gap)
+            {
+                if (last is { Gap: true } && gapOf == k) last.Height++;
+                else { parts.Add(new BandPart { Src = x.Y0, Height = 1, Gap = true, Span = x.Span, Cols = x.Cols ?? [], X0 = x.X0, X1 = x.X1 }); gapOf = k; }
+                continue;
+            }
+            int s = x.Y0 + (y - pos);
+            if (last is { Gap: false } && last.Src + last.Height == s) last.Height++;
             else parts.Add(new BandPart { Src = s, Height = 1 });
         }
         return parts;
@@ -110,6 +140,10 @@ public static class Rows
         var (t, r, i, row) = at;
         int top = i > 0 ? Arrangement.GapMid(row.Lines[i - 1], line) : Arrangement.CutY(t.RowYs[r]) + Arrangement.Filet;
         int bottom = i + 1 < row.Lines.Count ? Arrangement.GapMid(line, row.Lines[i + 1]) : Arrangement.CutY(t.RowYs[r + 1]);
+        // Lignes qui se chevauchent (lecture parasite sur un fond tramé) : la bande contient toujours toute la ligne, dans sa rangée.
+        var boxes = line.Cells.Select(f => PageLayout.BaseBox(line, f)).ToList();
+        top = Math.Max(Arrangement.CutY(t.RowYs[r]) + Arrangement.Filet, Math.Min(top, (int)Math.Floor(boxes.Min(b => b.Y))));
+        bottom = Math.Min(Arrangement.CutY(t.RowYs[r + 1]), Math.Max(bottom, (int)Math.Ceiling(boxes.Max(b => b.Bottom))));
         return (top, Math.Max(top + 1, bottom));
     }
 
@@ -129,11 +163,13 @@ public static class Rows
         var body = PartsOf(page, top, bottom);
         var cols = t.ColumnXs.Select(x => (int)Math.Floor(x + 0.5)).ToList();
         int x0 = (int)Math.Floor(t.ColumnXs[0]) - 4, x1 = (int)Math.Ceiling(t.ColumnXs[^1]) + 4;
-        var longest = body.Where(p => !p.Gap).Aggregate((BandPart?)null, (a, p) => a is null || p.Height > a.Height ? p : a);
+        // Rangée la plus nette pour prolonger les filets : la plus longue rangée d'image, sinon l'interligne d'une rangée ajoutée.
+        var longest = body.Where(p => !p.Gap).Aggregate((BandPart?)null, (a, p) => a is null || p.Height > a.Height ? p : a) ?? body.FirstOrDefault(p => p.Gap);
+        int span = longest is { Gap: true } ? longest.Span : longest?.Height ?? 0;
         int bodyH = body.Sum(p => p.Height);
         var parts = PartsOf(page, filetTop, filetTop + Arrangement.Filet);
         if (blank && longest is not null)
-            parts.Add(new BandPart { Src = longest.Src, Height = bodyH, Gap = true, Span = longest.Height, Cols = cols, X0 = x0, X1 = x1 });
+            parts.Add(new BandPart { Src = longest.Src, Height = bodyH, Gap = true, Span = span, Cols = cols, X0 = x0, X1 = x1 });
         else parts.AddRange(body);
         // Sous le texte, autant d'espace qu'au-dessus (la ligne copiée peut venir d'une rangée de plusieurs lignes) :
         // un interligne propre, filets verticaux prolongés depuis la rangée la plus nette de la ligne copiée.
@@ -141,7 +177,7 @@ public static class Rows
         double spaceAbove = inkTop - top, below = bodyH - (inkBottom - top);
         int pad = Math.Min(40, Math.Max(0, (int)Math.Ceiling(spaceAbove - below)));
         if (pad > 0 && longest is not null)
-            parts.Add(new BandPart { Src = longest.Src, Height = pad, Gap = true, Span = longest.Height, Cols = cols, X0 = x0, X1 = x1 });
+            parts.Add(new BandPart { Src = longest.Src, Height = pad, Gap = true, Span = span, Cols = cols, X0 = x0, X1 = x1 });
         int y = Arrangement.CutY(t.RowYs[above ? r : r + 1]);
         // Cases de la ligne, relevées avant que la bande ne décale la page.
         var src = line.Cells.Select(f => (F: f, B: PageLayout.BaseBox(line, f), Ink: f.Ink)).ToList();
@@ -177,7 +213,7 @@ public static class Rows
     public static bool Split(Page page, PrintedLine line)
     {
         var at = Locate(page, line);
-        if (at is null || at.I == 0) return false;
+        if (at is null || !SplitOk(at.Row, at.I)) return false;
         var (t, r, i, row) = at;
         int y = Arrangement.GapMid(row.Lines[i - 1], line);
         int filetTop = Arrangement.CutY(t.RowYs[r]);
@@ -232,7 +268,7 @@ public static class Rows
 
     /// <summary>« Séparer en dessous (tracer un trait) » : une ligne suit dans la rangée.</summary>
     public static bool CanSplitBelow(Page page, PrintedLine line) =>
-        !line.OutsideTable && Locate(page, line) is { } at && at.I + 1 < at.Row.Lines.Count;
+        !line.OutsideTable && Locate(page, line) is { } at && at.I + 1 < at.Row.Lines.Count && SplitOk(at.Row, at.I + 1);
 
     /// <summary>Trace un trait sous la ligne : ce qui la suit dans la rangée forme une rangée à part.</summary>
     public static bool SplitBelow(Page page, PrintedLine line) =>
@@ -333,9 +369,12 @@ public static class Rows
     /// </summary>
     public static List<(int Y0, int H)>? RowTrimOf(Page page, PrintedLine line)
     {
-        if (line.OutsideTable || Locate(page, line) is not { } at) return null;
+        // Page ajoutée : rangées vierges, rien d'imprimé à enlever (la hauteur se règle avec « Ligne plus / moins haute »).
+        if (line.OutsideTable || page.Added != null || Locate(page, line) is not { } at) return null;
         var (t, r, _, row) = at;
         if (BandOf(page, row)?.Kind == "Copy" || row.Lines.Any(l => l.Deleted || l.Extra > 0)) return null;
+        // Texte tapé sur plusieurs lignes : la place lui revient, on ne réduit pas.
+        if (row.Lines.Any(l => l.Cells.Any(c => c.IsModified && (c.Text.Contains('\n') || c.Text.Contains('\r'))))) return null;
         if (NormalPads(t) is not { } pads || RowSpan(t, r) is not { } s) return null;
         int min = Math.Max(4, pads.Height / 2);
         var cuts = new List<(int, int)>();

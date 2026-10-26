@@ -9,6 +9,12 @@ public partial class App : Application
     public App()
     {
         InitializeComponent();
+        // Dernier filet : une erreur imprévue ne ferme pas l'app ni ne la fige ; elle est notée et l'écran est réaffiché.
+        UnhandledException += (_, e) =>
+        {
+            e.Handled = true;
+            (_window as MainWindow)?.OnUnexpectedError(e.Exception);
+        };
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)

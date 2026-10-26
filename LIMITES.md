@@ -76,8 +76,21 @@
 - **Ligne TOTAL ajoutée** : additionne les articles et titres (pas les totaux, en-têtes, récapitulatifs, lignes supprimées ni autres lignes TOTAL ajoutées) ; « lignes au-dessus » = du début du tableau (ou du total précédent) jusqu'à elle, sur sa page. Elle ne compte pas dans les totaux imprimés.
 - Le .txt garde une ligne par ligne : séparer ne change rien au .txt (sauf les numéros de lot) ; un titre avec valeurs séparé de son article garde ses valeurs sur sa propre ligne.
 - Tableaux sans filets : ni copie ni séparation (il n'y a pas de rangées à tracer).
+- **Séparer** est refusé quand le texte de deux lignes se chevauche sur l'image (fond tramé lu en plusieurs lignes) : le trait couperait les lettres.
+- Une **ligne ajoutée** (vide ou dupliquée) depuis une rangée elle-même ajoutée reprend la hauteur et les filets de celle-ci ; son agrandissement (texte tapé) reste dans sa rangée et ne fait jamais grandir la rangée suivante.
+- Le **style des traits** de la colonne des lots (épaisseur, couleur) est mesuré une fois par tableau et gardé dans le projet : les lignes ajoutées ne le font plus changer.
+- **Action qui échoue** : sur Windows comme sur iPad, l'action est annulée en entier (le projet revient à l'état d'avant), un message le dit et on peut continuer ; sur Windows, le détail est noté dans `erreurs.log` (dossier des données de l'app) pour la correction.
 - **Recadrer** une page relit le texte : ses lignes ajoutées sont perdues (comme les agrandissements).
 - Une page avec des lignes ajoutées est exportée **redressée** (comme une page agrandie).
+
+## Page ajoutée (« Ajouter une page »)
+
+- L'image de la page ajoutée est celle du modèle (même photo ou même page de PDF, même cadrage) redessinée : dans les tableaux d'objets (au moins trois colonnes dont une large), papier propre et traits **retracés** à partir de l'imprimé (épaisseur et couleur prises sur le modèle) ; ailleurs l'imprimé est gardé (en-tête de l'étude, titres). Les traits retracés sont nets et réguliers : un trait irrégulier ou pointillé de l'imprimé devient régulier.
+- Gardés tels qu'imprimés : les **rangées d'en-tête** (et les bandes tramées en haut du tableau). Si une colonne est coupée ou réunie, la case d'en-tête concernée est vidée et son texte est **retapé** (écriture de l'app).
+- Effacés : le numéro de page (« 2/6 ») et tout ce qui est **sous le dernier tableau** (TOTAL GÉNÉRAL, pied de page). Les rangées tramées d'un total (lues comme plusieurs traits fins) deviennent une seule rangée vide. Une colonne lue en trop au bord du tableau (sans trait sur l'imprimé) est retirée.
+- Les lignes de la page ajoutée sont celles du modèle (une rangée de plusieurs lignes garde ses lignes) : on écrit dans celle qu'on veut. « Réduire la rangée » n'existe pas sur une page ajoutée (rien d'imprimé à enlever) : la hauteur se règle avec **Ligne plus haute / moins haute**.
+- **Recadrer** est désactivé sur une page ajoutée (elle n'a rien à relire). Un tableau encore vide (seulement son en-tête) n'apparaît pas dans le .txt.
+- Une colonne se coupe en deux si elle fait au moins 72 pixels de page ; il reste toujours au moins deux colonnes.
 
 ## Texte sur plusieurs lignes
 

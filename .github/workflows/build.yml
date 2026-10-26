@@ -27,6 +27,15 @@ jobs:
           tests/RetoucheInventaire.Core.Tests/bin/Release/net10.0/RetoucheInventaire.Core.Tests export-fin /tmp/windows-fin
           tests/RetoucheInventaire.Core.Tests/bin/Release/net10.0/RetoucheInventaire.Core.Tests export-pdf /tmp/windows.pdf
           node web/tests/test.mjs /tmp/windows.txt /tmp/windows-lots.txt /tmp/windows-colonne.pgm /tmp/windows-arrange /tmp/windows-rows /tmp/windows-fin /tmp/windows.pdf
+      - name: Banc d'essai (centaines de manipulations, mise en page contrôlée à chaque pas, Windows = iPad au pixel près)
+        run: |
+          B=tests/RetoucheInventaire.Core.Tests/bin/Release/net10.0/RetoucheInventaire.Core.Tests
+          $B stress-fixtures /tmp/banc
+          for g in 1 2 3; do
+            NOVIDEO=1 node web/tests/stress.mjs /tmp/banc/project.json /tmp/banc /tmp/banc-ipad-$g 400 $g
+            $B stress-replay /tmp/banc-ipad-$g/ops.json /tmp/banc/project.json /tmp/banc /tmp/banc-win-$g
+            node web/tests/stress-compare.mjs /tmp/banc-ipad-$g /tmp/banc-win-$g
+          done
 
   # Version iPad : application web publiée sur GitHub Pages (branche gh-pages).
   site:

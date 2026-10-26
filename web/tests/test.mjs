@@ -24,7 +24,8 @@ import { copyLine, splitAt, splitTypedText, removeAddedRow, canCopyLine, canSpli
 import { lotTables, tableHasObjects, setLotTables } from '../core/lots.js';
 import { carryOver, allLines as linesOf, looksLikeTotal } from '../core/model.js';
 import { detectPage } from '../core/imaging.js';
-import { totalExtra, baseHeight } from '../core/layout.js';
+import { totalExtra, baseHeight, tallExtra } from '../core/layout.js';
+import { addBlankPage, blankBase, canBeModel, addColumn, removeColumn, canRemoveColumn } from '../core/addpage.js';
 
 const FIX = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tests', 'fixtures');
 
@@ -831,6 +832,47 @@ test('Tracer un trait en dessous d\'une ligne (1re ligne d\'un bloc)', () => {
   const n = a.Tables[0].Rows.length;
   check(splitBelow(a, comp), 'trait tracé');
   eq(n + 1, a.Tables[0].Rows.length, 'deux rangées');
+});
+
+test('Page ajoutée : vierge sur le modèle, colonnes, ligne plus haute', () => {
+  const p = fromPages(['page1', 'page5']);
+  const model = p.Pages[0], img = load('page1').n.image;
+  check(canBeModel(model), 'modèle possible');
+  const before = buildTxt(p).text;
+  const a = addBlankPage(p, model, 2, img, 'aj1');
+  check(a && p.Pages.length === 3 && p.Pages[2] === a, 'page ajoutée à la fin');
+  eq(baseHeight(model), baseHeight(a), 'même hauteur');
+  eq(before, buildTxt(p).text, 'rien de plus dans le .txt');
+  const ti = a.Added.Tables.findIndex(Boolean), t = a.Tables[ti], info = a.Added.Tables[ti];
+  check(t.Rows.slice(info.Head).flatMap((r) => r.Lines).every((l) => l.Cells.every((c) => c.Text === '')), 'corps vide');
+  const blank = blankBase(img, a);
+  eq(img.w, blank.w, 'largeur'); eq(img.h, blank.h, 'hauteur');
+  const x0 = Math.trunc(t.ColumnXs[0]) + 8, x1 = Math.trunc(t.ColumnXs[1]) - 8;
+  let dark = 0, all = 0;
+  for (let r = info.Head; r + 1 < t.RowYs.length; r++)
+    for (let y = Math.trunc(t.RowYs[r]) + 6; y < Math.trunc(t.RowYs[r + 1]) - 6; y++)
+      for (let x = x0; x < x1; x++) { all++; if (blank.data[y * blank.w + x] < 150) dark++; }
+  check(all > 0 && dark * 1000 < all, `corps vierge (${dark} sur ${all})`);
+  const line = t.Rows[info.Head].Lines[0];
+  line.Cells[0].Text = '1 chaise en bois';
+  if (line.Cells.length > 1) line.Cells[1].Text = '20';
+  check(buildTxt(p).text.includes('1 chaise en bois'), 'ligne tapée dans le .txt');
+  const n = t.ColumnXs.length;
+  check(addColumn(a, t, 0), 'colonne coupée');
+  eq(n + 1, t.ColumnXs.length, 'un filet de plus');
+  check(t.Rows.flatMap((r) => r.Lines).every((l) => new Set(l.Cells.map((c) => c.Column)).size === l.Cells.length), 'une case par colonne');
+  check(removeColumn(a, t, 1), 'colonnes réunies');
+  eq(n, t.ColumnXs.length, 'retour');
+  eq('1 chaise en bois', line.Cells[0].Text, 'texte gardé');
+  check(!canRemoveColumn(a, t, 0), 'bord gardé');
+  line.Tall = 1;
+  const H = a.Height;
+  setExtra(a, line, tallExtra(line));
+  check(a.Height > H, 'ligne plus haute');
+  check(addBlankLine(a, t.Rows[info.Head + 1].Lines[0]) !== null, 'ligne vide sous une ligne vide');
+  check(rowTrimOf(a, line) === null, 'pas de réduction automatique');
+  const b = addBlankPage(p, a, 3, img, 'aj2');
+  eq(JSON.stringify(info.Orig), JSON.stringify(b.Added.Tables[ti].Orig), 'mêmes repères');
 });
 
 test('Réduire la rangée : l\'espace vide imprimé part, la rangée prend la hauteur des autres ; et revient', () => {

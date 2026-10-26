@@ -7,6 +7,7 @@ const ASSETS = [
   'app.css',
   'app.js',
   'core/arrange.js',
+  'core/addpage.js',
   'core/exports.js',
   'core/geometry.js',
   'core/imaging.js',

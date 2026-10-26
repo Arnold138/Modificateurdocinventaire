@@ -148,3 +148,16 @@ Application web installable (« Sur l'écran d'accueil »), sans étape de compi
 
 - `Field.Colors` : morceaux [Start, Start+Length[ en rouge, bleu ou vert ; suivent la saisie comme les traits.
 - Texte non retouché : l'encre du morceau prend la couleur sur l'image (chaque canal garde le plus clair de l'encre et de la couleur). Texte retapé : écrit morceau par morceau en couleur (écran : texte par-dessus le champ quand on n'y tape pas ; export : Win2D / canvas).
+
+## Garde-fou et banc d'essai
+
+- Windows : chaque action (lignes, lots, lots 0, déplacements, totaux, retirer, synchroniser, cases de lot ajoutées/retirées, rangées déplacées) passe par `GuardAsync` : instantané JSON au début ; en cas d'erreur, `RestoreAsync` remet le projet, l'historique est coupé à son niveau d'avant, `_busy` est relâché, l'erreur est notée dans `erreurs.log`. `App.UnhandledException` rattrape le reste (l'app ne se ferme pas). iPad : `run()` revient à l'état d'avant si l'action avait déjà mémorisé un retour.
+- `web/tests/stress.mjs` génère et applique des manipulations reproductibles et contrôle la mise en page après chaque pas ; `tests/.../Stress.cs` rejoue la même liste (`ops.json`) avec le cœur C# ; `stress-compare.mjs` exige le même .txt et les mêmes pages au pixel près.
+- Correctifs trouvés par le banc : `partsOf` copie aussi les morceaux ajoutés (rangée ajoutée copiée depuis une rangée ajoutée), garde `splitOk` (pas de trait à travers des lignes qui se chevauchent), `cleanGap` limité à la rangée, `lineBand` qui contient toute la ligne, mesure des traits de la colonne des lots en coordonnées d'origine (`baseToPage`) puis gardée dans `Table.Rules`, pas de réduction automatique d'une rangée avec texte tapé sur plusieurs lignes.
+
+## Page ajoutée (`Model/AddedPage.cs`, `web/core/addpage.js`)
+
+- `addBlankPage(project, model, at, img)` : copie du modèle ramenée à l'imprimé (rangées ajoutées, agrandies, réduites et ordre manuel défaits), tableaux d'objets vidés à partir des rangées d'en-tête (`Head`), bandes fines du corps réunies, colonnes du bord sans trait retirées (mesure sur `img`), numéro de page effacé, `Page.Added = { From, Tables: [{ Ys, Head, Orig } | null], Erase, Tail, Next }`. Même `SourceEntry` que le modèle (l'archive ne garde la source qu'une fois).
+- `blankBase(img, page)` (appelé par `restoreFlat` / `RestoreFlatAsync`) : image de base redessinée, entiers seulement (identique au pixel près sur les deux plateformes) : papier (`paperOf` de la rangée la plus nette), profils des traits mesurés sur l'imprimé (`cleanRow` / colonne la plus nette), traits horizontaux du corps puis verticaux aux colonnes actuelles ; une colonne ajoutée prend le profil du trait intérieur le plus proche. Ensuite tout fonctionne comme une page normale (bandes insérées, agrandissements, colonne des lots, lots 0, totaux, .txt).
+- `addColumn` / `removeColumn` : `ColumnXs` et une case par colonne sur chaque ligne ; la clé d'image (`imageKey` / `ImageKey`) contient les colonnes des pages ajoutées. `PrintedLine.Tall` : « Ligne plus haute » (`tallExtra`, ajouté à `lineExtra`).
+- Banc d'essai : opérations `addPage`, `removePage`, `fill`, `addCol`, `removeCol`, `taller`, `shorter` (variable `ADDED`, part des manipulations sur les pages ajoutées) ; contrôle en plus : une case par colonne, dans sa colonne.

@@ -104,6 +104,8 @@ public sealed class PrintedLine
     public TotalScope? TotalScope { get; set; }
     /// <summary>Lot 0 placé à la main (poignée, mode Modifier) : recollé après la rangée de cette ligne.</summary>
     public EndAnchor? EndAt { get; set; }
+    /// <summary>« Ligne plus haute » (page ajoutée) : lignes d'écriture en plus sous la ligne, voir <see cref="PageLayout.TallExtra"/>.</summary>
+    public int Tall { get; set; }
 
     [JsonIgnore] public RectD Bounds => Cells.Aggregate(RectD.Empty, (r, f) => r.Union(f.Box));
     [JsonIgnore] public string FirstText => Cells.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c.Text))?.Text.Trim() ?? "";
@@ -180,6 +182,37 @@ public sealed class InsertedBand
     public List<BandPart> Parts { get; set; } = [];
 }
 
+/// <summary>Traits du tableau mesurés sur l'imprimé (épaisseurs, couleur 3 octets + gris) pour tracer la colonne des lots.</summary>
+public sealed class RuleStyle
+{
+    public int V { get; set; }
+    public int H { get; set; }
+    public List<int> Color { get; set; } = [];
+}
+
+/// <summary>Page ajoutée : repères de l'image d'origine (même source que le modèle) pour la redessiner vierge.</summary>
+public sealed class AddedInfo
+{
+    /// <summary>Page modèle (Id) au moment de l'ajout.</summary>
+    public string From { get; set; } = "";
+    /// <summary>Un par tableau de la page : null pour un tableau gardé tel qu'imprimé.</summary>
+    public List<AddedTable?> Tables { get; set; } = [];
+    /// <summary>Zones effacées (numéro de page).</summary>
+    public List<RectD> Erase { get; set; } = [];
+    /// <summary>Bas du dernier tableau vidé (image d'origine) : en dessous, la page est vide.</summary>
+    public double? Tail { get; set; }
+    /// <summary>Compteur des cases ajoutées (colonnes), pour leurs Id.</summary>
+    public int Next { get; set; }
+}
+
+/// <summary>Tableau vidé d'une page ajoutée : filets (image d'origine), rangées d'en-tête gardées, colonnes imprimées.</summary>
+public sealed class AddedTable
+{
+    public List<double> Ys { get; set; } = [];
+    public int Head { get; set; }
+    public List<double> Orig { get; set; } = [];
+}
+
 public sealed class Table
 {
     public RectD Bounds { get; set; }
@@ -187,6 +220,8 @@ public sealed class Table
     public bool HasGrid { get; set; } = true;
     public List<double> ColumnXs { get; set; } = [];
     public List<double> RowYs { get; set; } = [];
+    /// <summary>Traits mesurés une fois sur l'imprimé (colonne des lots) ; null : pas encore mesurés.</summary>
+    public RuleStyle? Rules { get; set; }
     public List<Row> Rows { get; set; } = [];
     /// <summary>Ordre d'affichage des rangées (rangées déplacées à la main), null : l'ordre imprimé.</summary>
     public List<int>? RowOrder { get; set; }
@@ -219,6 +254,8 @@ public sealed class Page
     public List<InsertedBand> Inserts { get; set; } = [];
     /// <summary>Page « lots de fin » (créée automatiquement) : composée depuis une page modèle, voir <see cref="Export.Arrangement"/>.</summary>
     public bool EndLots { get; set; }
+    /// <summary>Page ajoutée (« Ajouter une page ») : vierge sur le modèle d'une autre, voir <see cref="AddedPage"/> ; null pour une page importée.</summary>
+    public AddedInfo? Added { get; set; }
 
     public IEnumerable<PrintedLine> AllLines() =>
         Tables.SelectMany(t => t.Rows).SelectMany(r => r.Lines).Concat(LooseLines);

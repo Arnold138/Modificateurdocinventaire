@@ -24,6 +24,7 @@ import { recognize, warmUp } from './services/ocr.js';
 import { rasterToCanvas, canvasToBlob, renderEdits, freeCanvas, lineExtra, pageRaster } from './services/canvas.js';
 import * as db from './services/db.js';
 import { PageView } from './ui/pageview.js';
+import { addBlankPage, blankBase, canBeModel, addColumn, removeColumn } from './core/addpage.js';
 import { cropDialog } from './ui/crop.js';
 
 const $ = (id) => document.getElementById(id);
@@ -79,7 +80,7 @@ function updateButtons() {
   const n = pages().length, page = currentPage();
   const b = state.busy;
   $('btnPhoto').disabled = $('btnImport').disabled = $('btnProjects').disabled = b;
-  $('btnCrop').disabled = b || page?.Source !== 'Image' || !!page?.EndLots;
+  $('btnCrop').disabled = b || page?.Source !== 'Image' || !!page?.EndLots || !!page?.Added;
   $('btnLock').disabled = b || !page || !!page?.EndLots;
   $('btnMove').disabled = b || !page || !!page?.EndLots;
   $('btnLots').disabled = b || n === 0;
@@ -121,8 +122,18 @@ function updateEditBar() {
 async function run(work) {
   if (state.busy) return;
   setBusy(true);
+  const depth = state.undo.length, top = state.undo[depth - 1];
   try { await work(); }
-  catch (e) { console.error(e); await dialog('Erreur', `<p>${escapeHtml(e?.message ?? String(e))}</p>`, [{ label: 'OK' }]); }
+  catch (e) {
+    console.error(e);
+    // Garde-fou : une action qui échoue en cours de route ne laisse rien à moitié fait, on revient à l'état d'avant.
+    let back = false;
+    if (state.undo.length > depth || (state.undo.length && state.undo[state.undo.length - 1] !== top)) {
+      while (state.undo.length > depth + 1) state.undo.pop();
+      try { await undo(); back = true; } catch (e2) { console.error(e2); }
+    }
+    await dialog('Erreur', `<p>${escapeHtml(e?.message ?? String(e))}</p>${back ? '<p>Rien n\'a changé, vous pouvez continuer.</p>' : ''}`, [{ label: 'OK' }]);
+  }
   finally { setBusy(false); }
 }
 
@@ -181,6 +192,7 @@ function applyZoom(z, cx = null, cy = null) {
   const ux = (vp.scrollLeft + px) / old, uy = (vp.scrollTop + py) / old;
   state.zoom = z;
   $('zoomer').style.transform = `scale(${z})`;
+  $('zoomer').style.setProperty('--uiscale', String(Math.min(2.5, Math.max(1, 1 / z)))); // boutons de la page ajoutée : même taille à l'écran
   const box = $('pages');
   Object.assign($('sizer').style, { width: box.offsetWidth * z + 'px', height: box.offsetHeight * z + 'px' });
   vp.scrollLeft = ux * z - px;
@@ -227,7 +239,7 @@ function pushUndo() {
 }
 
 /** Clé de l'image d'une page : si elle n'a pas changé, l'image en mémoire reste valable. */
-const imageKey = (p) => JSON.stringify([p.Crop, p.Skew, p.QuarterTurns, p.Width, baseHeight(p), p.SourceEntry]);
+const imageKey = (p) => JSON.stringify([p.Crop, p.Skew, p.QuarterTurns, p.Width, baseHeight(p), p.SourceEntry, p.Added ? p.Tables.map((t) => t.ColumnXs) : 0]);
 
 /** Bouton ↶ : revient à l'état d'avant la dernière action. */
 async function undo() {
@@ -354,8 +366,12 @@ async function showPage(n, { flat = null, fit = true, keepScroll = false } = {})
   sync.innerHTML = '<svg><use href="#i-sync"/></svg>Synchroniser…';
   sync.title = 'Remplir les cases vides de cette page ou de toutes les pages (les numéros déjà là ne bougent pas)';
   sync.onclick = () => run(syncDialog);
+  const addPage = document.createElement('button');
+  addPage.innerHTML = '<svg><use href="#i-plus"/></svg>Ajouter une page';
+  addPage.title = 'Nouvelle page vierge sur le modèle de celle-ci (mêmes tableaux, mêmes lignes), pour les objets inventoriés à la main';
+  addPage.onclick = () => run(() => addPageDialog(page));
   if (page.EndLots) head.append(title, sync);
-  else head.append(title, sync, totals, remove);
+  else head.append(title, sync, totals, addPage, remove);
 
   const pp = () => state.plan.pages[k];
   const view = new PageView(viewOf(state.project, state.plan, k), display, {
@@ -391,6 +407,8 @@ async function showPage(n, { flat = null, fit = true, keepScroll = false } = {})
       scheduleSave();
     },
     onLineMenu: (v, f, at) => { if (!state.busy) lineMenu(f, at); },
+    onAddColumn: (v, table, c) => run(() => columnAction(page, table, c, true)),
+    onRemoveColumn: (v, table, k) => run(() => columnAction(page, table, k, false)),
     onMoveRow: (v, table, from, before) => {
       pushUndo();
       const order = rowOrder(table).filter((r) => r !== from);
@@ -482,12 +500,16 @@ function lineChoices(f) {
     items.push({ act: 'untrim', icon: 'i-split', label: 'Remettre la hauteur d\'origine', hint: 'L\'espace vide imprimé revient.' });
   if (line.TotalScope)
     items.push({ act: 'bold', icon: 'i-sum', label: line.TotalScope.Bold ? 'Enlever le gras' : 'Mettre en gras', hint: 'Ligne TOTAL ajoutée : écriture en gras ou comme les autres lignes.' });
+  if (page.Added && locate(page, line) && !line.Deleted) {
+    items.push({ act: 'taller', icon: 'i-addbelow', label: 'Ligne plus haute', hint: 'Une ligne d\'écriture de plus dans cette case ; ce qui suit descend.' });
+    if ((line.Tall ?? 0) > 0) items.push({ act: 'shorter', icon: 'i-merge', label: 'Ligne moins haute', hint: 'Enlève la hauteur ajoutée.' });
+  }
   const added = addedRowOf(page, line);
   if (added?.band.Kind === 'Split' && added.row.Lines[0] === line)
     items.push({ act: 'merge', icon: 'i-merge', label: 'Remettre dans la rangée du dessus', hint: 'Annule « Séparer ici » : le trait ajouté disparaît.' });
   if (added?.band.Kind === 'Copy')
     items.push({ act: 'remove', icon: 'i-trash', label: 'Supprimer cette ligne ajoutée', hint: 'La ligne ajoutée disparaît, la suite remonte.', danger: true });
-  else if (locate(page, line) && firstText(line))
+  else if (locate(page, line) && (firstText(line) || page.Added))
     items.push({ act: 'delete', icon: 'i-trash', label: 'Supprimer cette ligne', hint: 'Objet retiré de la vente : la ligne (et sa suite) disparaît, ce qui suit remonte.', danger: true });
   return { page, line, items };
 }
@@ -524,7 +546,7 @@ async function lineAction(item, f) {
   const hit = findLine(state.project, f);
   if (!hit || !item) return;
   const { page, line } = hit;
-  const name = short(firstText(line));
+  const name = short(firstText(line)) || 'ligne vide';
   if (item.act === 'end') return applyLot(state.view, line, '0');
   if (item.act === 'addLot') {
     pushUndo();
@@ -540,7 +562,18 @@ async function lineAction(item, f) {
     replan(); recomputeAll();
     await refreshView();
     state.view?.flashLine(line);
-    status(item.act === 'trim' ? `Rangée de « ${name} » réduite : même hauteur que les autres. ↶ pour annuler.` : `Rangée de « ${name} » remise à sa hauteur d'origine.`);
+    const rowName = short(locate(page, line)?.row.Lines.map(firstText).find(Boolean) ?? '') || 'cette ligne';
+    status(item.act === 'trim' ? `Rangée de « ${rowName} » réduite : même hauteur que les autres. ↶ pour annuler.` : `Rangée de « ${rowName} » remise à sa hauteur d'origine.`);
+    return scheduleSave();
+  }
+  if (item.act === 'taller' || item.act === 'shorter') {
+    pushUndo();
+    line.Tall = Math.max(0, (line.Tall ?? 0) + (item.act === 'taller' ? 1 : -1));
+    setExtra(page, line, lineExtra(line));
+    replan(); recomputeAll();
+    await refreshView();
+    state.view?.flashLine(line);
+    status(item.act === 'taller' ? 'Ligne plus haute : ce qui suit est descendu. ↶ pour annuler.' : 'Ligne remise à sa hauteur.');
     return scheduleSave();
   }
   if (item.act === 'bold') {
@@ -897,6 +930,45 @@ function goTo(n) {
   run(() => showPage(n));
 }
 
+// ---------- Page ajoutée (objets inventoriés à la main) ----------
+
+/** « Ajouter une page » : page vierge sur le modèle de la page affichée, placée où on veut. */
+async function addPageDialog(model) {
+  if (!canBeModel(model)) return status('Cette page n\'a pas de tableau d\'objets : affichez une page avec un tableau (désignation, prix) pour la prendre comme modèle.');
+  const list = pages();
+  const end = list.reduce((k, p, i) => (p.EndLots ? k : i + 1), 0); // à la fin, avant les pages « Lots de fin »
+  const options = [`<option value="${end}" selected>à la fin de l'inventaire${list.some((p) => p.EndLots) ? ' (avant « Lots de fin »)' : ''}</option>`,
+    `<option value="0">au début (avant la page 1)</option>`,
+    ...list.map((p, i) => `<option value="${i + 1}">après la page ${i + 1} · ${escapeHtml(short(p.SourceName))}</option>`)].join('');
+  const html = `<p>Nouvelle page <b>vierge</b> sur le modèle de cette page : mêmes tableaux, mêmes lignes, mêmes en-têtes. Tout le reste est vide, à remplir à la main.</p>
+    <p><label>Placer la page <select id="addAt">${options}</select></label></p>
+    <p class="muted">Sur la page ajoutée : « + » à droite d'une ligne (ligne au-dessus, en dessous, plus haute, case de lot…), « + » au-dessus d'une colonne pour la couper en deux, « − » sous un trait pour réunir deux colonnes.</p>`;
+  const choice = await dialog('Ajouter une page', html, [{ label: 'Annuler', value: null }, { label: 'Ajouter', value: 'ok', className: 'accent' }]);
+  if (choice !== 'ok') return;
+  const at = Math.max(0, Math.min(list.length, +$('addAt').value || 0));
+  const flat = state.flats.get(model) ?? (await restoreFlat(model));
+  pushUndo();
+  const page = addBlankPage(state.project, model, at, flat);
+  if (!page) { state.undo.pop(); updateButtons(); return status('Impossible d\'ajouter une page sur ce modèle.'); }
+  syncEndPages(state.project);
+  replan(); recomputeAll();
+  await showPage(pages().indexOf(page));
+  status(`Page ${pages().indexOf(page) + 1} ajoutée : touchez une case pour écrire. ↶ pour annuler.`);
+  scheduleSave();
+}
+
+/** « + » au-dessus d'une colonne (la couper en deux) ou « × » sur un trait (réunir deux colonnes), page ajoutée. */
+async function columnAction(page, table, c, add) {
+  pushUndo();
+  const ok = add ? addColumn(page, table, c) : removeColumn(page, table, c);
+  if (!ok) { state.undo.pop(); updateButtons(); return status(add ? 'Colonne trop étroite pour être coupée en deux.' : 'Ce trait ne peut pas être retiré (il faut garder au moins deux colonnes).'); }
+  state.flats.delete(page);
+  replan(); recomputeAll();
+  await refreshView();
+  status(add ? 'Colonne ajoutée : une case vide sur chaque ligne. ↶ pour annuler.' : 'Colonnes réunies (textes mis ensemble). ↶ pour annuler.');
+  scheduleSave();
+}
+
 async function removePage(page) {
   if (state.busy || !(await confirmDialog('Retirer cette page ?', `« ${page.SourceName} » sera retirée du projet et des exports.`, 'Retirer'))) return;
   const i = pages().indexOf(page);
@@ -1092,7 +1164,8 @@ async function orientedSource(page) {
 async function restoreFlat(page) {
   const src = await orientedSource(page);
   if (!src) return null;
-  return render(src, page.Crop ?? Quad.full(src.w, src.h), page.Skew, page.Width, baseHeight(page));
+  const flat = render(src, page.Crop ?? Quad.full(src.w, src.h), page.Skew, page.Width, baseHeight(page));
+  return page.Added ? blankBase(flat, page) : flat; // page ajoutée : tableaux vidés, filets retracés
 }
 
 // ---------- Enregistrement continu ----------

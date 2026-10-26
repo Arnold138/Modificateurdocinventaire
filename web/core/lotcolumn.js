@@ -3,6 +3,7 @@
 // Portage de LotColumn.cs, en entiers : résultat identique, pixel pour pixel, à la version Windows.
 import { Rect } from './geometry.js';
 import { columnWidth, numberBox, hasLotCell, rowOrder } from './lots.js';
+import { toBase, baseToPage } from './layout.js';
 
 const R = (v) => Math.floor(v + 0.5);
 const half = (n) => Math.trunc(n / 2);
@@ -42,8 +43,9 @@ export function frames(image, page) {
     if (right - left < 8) continue;
     const rows = framedRows(t);
     if (rows.length === 0) continue;
-    const m = measureRules(image, t);
-    out.push({ table: t, left, right, rows, vThick: m.vThick, hThick: m.hThick, color: m.color });
+    // Traits mesurés une fois, sur l'imprimé (gardés dans le projet) : la colonne garde le même style quoi qu'on ajoute.
+    if (!t.Rules) { const m = measureRules(image, t, page); t.Rules = { V: m.vThick, H: m.hThick, Color: m.color }; }
+    out.push({ table: t, left, right, rows, vThick: t.Rules.V, hThick: t.Rules.H, color: t.Rules.Color });
   }
   return out;
 }
@@ -138,7 +140,11 @@ const gray = (img, x, y) => {
 };
 
 /** Épaisseur et couleur des filets, mesurées sur l'image (cœur des traits). Couleur : 3 octets + gris. */
-export function measureRules(img, t) {
+/**
+ * `page` : les traits sont mesurés seulement sur les rangées imprimées (pas dans une rangée ajoutée ni une bande
+ * d'agrandissement, où le trait recopié est plus fin) : l'épaisseur ne change pas quand on ajoute des lignes.
+ */
+export function measureRules(img, t, page = null) {
   const vRuns = [], hRuns = [];
   let s0 = 0, s1 = 0, s2 = 0, sg = 0, n = 0;
   const ch = img.ch;
@@ -149,10 +155,17 @@ export function measureRules(img, t) {
   };
 
   const xr = R(t.ColumnXs[0]);
-  const top = t.RowYs[0], bottom = t.RowYs[t.RowYs.length - 1];
+  let top = t.RowYs[0], bottom = t.RowYs[t.RowYs.length - 1];
+  // Mesures aux mêmes endroits de l'image imprimée, quoi qu'on ajoute (positions prises sur la page d'origine).
+  const map = page && (page.Inserts?.length || page.Tables.some((u) => u.Rows.some((r) => r.Lines.some((l) => (l.Extra ?? 0) > 0)))) ? baseToPage(page) : null;
+  if (map) {
+    top += (toBase(page, R(top)) ?? R(top)) - R(top);
+    bottom += (toBase(page, R(bottom)) ?? R(bottom)) - R(bottom);
+  }
   for (let k = 1; k <= 11; k++) {
-    const y = R(top + ((bottom - top) * k) / 12);
-    if (y < 0 || y >= img.h || t.RowYs.some((ry) => Math.abs(ry - y) < 6)) continue;
+    const yb = R(top + ((bottom - top) * k) / 12);
+    const y = map ? map.get(yb) : yb;
+    if (y === undefined || y < 0 || y >= img.h || t.RowYs.some((ry) => Math.abs(ry - y) < 6)) continue;
     const a = Math.max(0, xr - 6), b = Math.min(img.w - 1, xr + 6);
     if (a >= b) continue;
     const g = (i) => gray(img, i, y);
@@ -163,7 +176,8 @@ export function measureRules(img, t) {
   }
 
   const x0 = t.ColumnXs[0], x1 = t.ColumnXs[1];
-  for (const ryD of t.RowYs) {
+  for (const [i, ryD] of t.RowYs.entries()) {
+    if (page && t.Rows[i]?.Inserted) continue; // filet recopié d'une rangée ajoutée : pas mesuré
     const ry = R(ryD);
     for (let k = 1; k <= 5; k++) {
       const x = R(x0 + ((x1 - x0) * k) / 6);
