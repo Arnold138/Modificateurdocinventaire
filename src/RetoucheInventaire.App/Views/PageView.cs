@@ -786,7 +786,6 @@ public sealed class PageView
         var tb = new TextBox
         {
             Style = (Style)Application.Current.Resources["FieldBox"],
-            Text = ToBox(f.Text),
             TextAlignment = f.Align switch { TextAlign.Right => TextAlignment.Right, TextAlign.Center => TextAlignment.Center, _ => TextAlignment.Left },
             FontWeight = TextPlacement.IsBold(line) ? FontWeights.Bold : FontWeights.Normal,
         };
@@ -799,6 +798,9 @@ public sealed class PageView
             tb.IsSpellCheckEnabled = true;
             tb.Language = "fr-FR";
         }
+        // Texte posé APRÈS « Entrée = nouvelle ligne » : une zone sur une seule ligne garde seulement la 1re ligne du texte
+        // (c'est ce qui effaçait le texte tapé sur plusieurs lignes quand la page était redessinée, ex. après « + »).
+        tb.Text = ToBox(f.Text);
         if (f.Column > 0 && (f.OriginalText.Length == 0 || f.OriginalText.Any(char.IsDigit)))
         {
             // Clavier tactile numérique pour les colonnes de valeurs (les lettres restent accessibles).

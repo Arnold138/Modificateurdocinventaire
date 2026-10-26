@@ -121,6 +121,15 @@ export function lotRegions(page, enabled) {
     if (rows.length === 0) continue;
     const top = Math.min(...rows.map((r) => t.RowYs[r])), bottom = Math.max(...rows.map((r) => t.RowYs[r + 1]));
     boxes.push(Rect.fromEdges(t.ColumnXs[0] - w - 8, top - 8, t.ColumnXs[0] - 1, bottom + 8));
+    // Traits d'une case de lot d'une seule ligne : sur toute la largeur du tableau.
+    for (const r of rows) {
+      const row = t.Rows[r];
+      for (const l of row?.Lines ?? []) {
+        if (!ownBox(row, l)) continue;
+        const s = lotSegment(t, r, l);
+        for (const y of [s.top, s.bottom]) boxes.push(Rect.fromEdges(t.ColumnXs[0] - 1, y - 6, t.ColumnXs[t.ColumnXs.length - 1] + 6, y + 6));
+      }
+    }
   }
   for (const t of page.Tables.filter((x) => x.Closed)) {
     const y = t.RowYs[t.RowYs.length - 1];
@@ -150,12 +159,14 @@ export function drawLotColumns(image, page) {
       }
       fill(output, f.left - hv, y0 - hh, f.right - (f.left - hv), f.hThick, f.color);
       fill(output, f.left - hv, y1 - hh, f.right - (f.left - hv), f.hThick, f.color);
-      // Case de lot d'une seule ligne dans une grande case : fermée en haut et en bas, à sa hauteur.
+      // Case de lot d'une seule ligne dans une grande case : fermée en haut et en bas, à sa hauteur, et la ligne est
+      // délimitée sur toute la largeur du tableau (comme une rangée à part).
       const row = f.table.Rows[r];
+      const tableRight = rightRuleOf(image, f.table, y0, y1) + hv;
       for (const l of row?.Lines ?? []) {
         if (!ownBox(row, l)) continue;
         const s = lotSegment(f.table, r, l);
-        for (const y of [R(s.top), R(s.bottom)]) if (y - y0 > 3 && y1 - y > 3) fill(output, f.left - hv, y - hh, f.right - (f.left - hv), f.hThick, f.color);
+        for (const y of [R(s.top), R(s.bottom)]) if (y - y0 > 3 && y1 - y > 3) fill(output, f.left - hv, y - hh, tableRight - (f.left - hv), f.hThick, f.color);
       }
     }
   }
@@ -166,6 +177,16 @@ export function drawLotColumns(image, page) {
  * Trait gauche du tableau dans la rangée [y0, y1[ : abscisse de son premier pixel sombre près de `right` (il peut
  * être un peu décalé : page légèrement de travers), mesurée sur trois hauteurs ; null s'il n'y est pas (rangée ajoutée).
  */
+/** Bord droit du tableau dans la rangée [y0, y1[ : le dernier trait vertical vraiment imprimé (une colonne lue en trop n'en a pas). */
+function rightRuleOf(img, t, y0, y1) {
+  const ys = [y0 + Math.trunc((y1 - y0) / 3), y0 + Math.trunc((2 * (y1 - y0)) / 3)].filter((y) => y >= 0 && y < img.h);
+  for (let c = t.ColumnXs.length - 1; c > 0; c--) {
+    const x = R(t.ColumnXs[c]);
+    if (ys.length > 0 && ys.every((y) => { for (let xx = Math.max(0, x - 3); xx <= Math.min(img.w - 1, x + 3); xx++) if (gray(img, xx, y) < 150) return true; return false; })) return x;
+  }
+  return R(t.ColumnXs[t.ColumnXs.length - 1]);
+}
+
 export function ruleLeftOf(img, right, y0, y1) {
   let found = null;
   for (const y of [y0 + 2, (y0 + y1) >> 1, y1 - 3]) {

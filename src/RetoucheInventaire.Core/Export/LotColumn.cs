@@ -132,6 +132,18 @@ public static class LotColumn
             if (rows.Count == 0) continue;
             double top = rows.Min(r => t.RowYs[r]), bottom = rows.Max(r => t.RowYs[r + 1]);
             boxes.Add(RectD.FromEdges(t.ColumnXs[0] - w - 8, top - 8, t.ColumnXs[0] - 1, bottom + 8));
+            // Traits d'une case de lot d'une seule ligne : sur toute la largeur du tableau.
+            foreach (int r in rows)
+            {
+                if (r >= t.Rows.Count) continue;
+                var row = t.Rows[r];
+                foreach (var l in row.Lines)
+                {
+                    if (!Lots.OwnBox(row, l)) continue;
+                    var s = Lots.LotSegment(t, r, l);
+                    foreach (double y in new[] { s.Top, s.Bottom }) boxes.Add(RectD.FromEdges(t.ColumnXs[0] - 1, y - 6, t.ColumnXs[^1] + 6, y + 6));
+                }
+            }
         }
         foreach (var t in page.Tables.Where(t => t.Closed))
         {
@@ -167,15 +179,17 @@ public static class LotColumn
                 }
                 Fill(output, f.Left - half, y0 - hh, f.Right - (f.Left - half), f.HThick, f.Color);
                 Fill(output, f.Left - half, y1 - hh, f.Right - (f.Left - half), f.HThick, f.Color);
-                // Case de lot d'une seule ligne dans une grande case : fermée en haut et en bas, à sa hauteur.
+                // Case de lot d'une seule ligne dans une grande case : fermée en haut et en bas, à sa hauteur, et la ligne est
+                // délimitée sur toute la largeur du tableau (comme une rangée à part).
                 if (r >= f.Table.Rows.Count) continue;
                 var row = f.Table.Rows[r];
+                int tableRight = RightRuleOf(image, f.Table, y0, y1) + half;
                 foreach (var l in row.Lines)
                 {
                     if (!Lots.OwnBox(row, l)) continue;
                     var s = Lots.LotSegment(f.Table, r, l);
                     foreach (int y in new[] { R(s.Top), R(s.Bottom) })
-                        if (y - y0 > 3 && y1 - y > 3) Fill(output, f.Left - half, y - hh, f.Right - (f.Left - half), f.HThick, f.Color);
+                        if (y - y0 > 3 && y1 - y > 3) Fill(output, f.Left - half, y - hh, tableRight - (f.Left - half), f.HThick, f.Color);
                 }
             }
         }
@@ -190,6 +204,22 @@ public static class LotColumn
     /// Trait gauche du tableau dans la rangée [y0, y1[ : abscisse de son premier pixel sombre près de <paramref name="right"/>
     /// (il peut être un peu décalé : page légèrement de travers), mesurée sur trois hauteurs ; null s'il n'y est pas.
     /// </summary>
+    /// <summary>Bord droit du tableau dans la rangée [y0, y1[ : le dernier trait vertical vraiment imprimé (une colonne lue en trop n'en a pas).</summary>
+    private static int RightRuleOf(Raster img, Table t, int y0, int y1)
+    {
+        var ys = new[] { y0 + (y1 - y0) / 3, y0 + 2 * (y1 - y0) / 3 }.Where(y => y >= 0 && y < img.Height).ToList();
+        for (int c = t.ColumnXs.Count - 1; c > 0; c--)
+        {
+            int x = R(t.ColumnXs[c]);
+            if (ys.Count > 0 && ys.All(y =>
+            {
+                for (int xx = Math.Max(0, x - 3); xx <= Math.Min(img.Width - 1, x + 3); xx++) if (Gray(img, xx, y) < 150) return true;
+                return false;
+            })) return x;
+        }
+        return R(t.ColumnXs[^1]);
+    }
+
     public static int? RuleLeftOf(Raster img, int right, int y0, int y1)
     {
         int? found = null;
