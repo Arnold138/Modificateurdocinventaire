@@ -359,7 +359,8 @@ public static class Rows
             if (RowSpan(t, r) is not { Lines: 1 } s) continue;
             top.Add(s.InkTop - s.Top); bottom.Add(s.Bottom - s.InkBottom); height.Add(s.InkBottom - s.InkTop);
         }
-        return top.Count > 0 ? (Median(top), Median(bottom), Median(height)) : null;
+        // Jamais moins de 4 px entre l'écriture et ce qu'on enlève (l'encre lue peut toucher le filet : marge négative).
+        return top.Count > 0 ? (Math.Max(4, Median(top)), Math.Max(4, Median(bottom)), Median(height)) : null;
     }
 
     /// <summary>Rangées de pixels [y0, y0 + h[ toutes prises dans l'image d'origine, d'un seul tenant (pas dans une bande ajoutée).</summary>

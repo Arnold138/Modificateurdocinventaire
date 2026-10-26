@@ -65,6 +65,8 @@ export function reclassify(page) { for (const t of page.Tables) classify(t); }
  */
 export function upgradePage(page) {
   let n = 0;
+  // Page ajoutée d'une version précédente : « objet quand on y écrit » s'appelle maintenant AutoLot.
+  if (page.Added) for (const l of allLines(page)) if (l.ForceLot && !firstText(l)) { l.ForceLot = false; l.AutoLot = true; }
   for (const t of page.Tables) {
     if (t.HasGrid === false || !(t.ColumnXs?.length >= 2) || !(t.RowYs?.length >= 2)) continue;
     const sizes = t.Rows.flatMap((r) => r.Lines).map((l) => l.Cells[0]?.FontSize ?? 0).filter((v) => v > 0).sort((a, b) => a - b);

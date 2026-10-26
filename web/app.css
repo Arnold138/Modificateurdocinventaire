@@ -86,6 +86,7 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 .gbtn.trash { background: #fdecec; color: #b42828; }
 .gbtn.add { background: transparent; color: #9aa3ad; border: 1px dashed #c5cbd2; }
 .gbtn.add:active, .gbtn.add:hover { color: var(--accent); border-color: var(--accent); }
+.gbtn.add.strong { background: #fff; color: var(--accent); border: 1.5px solid var(--accent); }
 /* Numéros de lot écrits sur la page, dans la colonne : texte noir comme l'imprimé. */
 .layer.lots { pointer-events: none; }
 .lotfield { position: absolute; pointer-events: auto; margin: 0; border: 0; border-radius: 0; padding: 0; outline: none; color: #000; text-align: center;
@@ -235,6 +236,11 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 .addctl:hover, .addctl:active { background: var(--accent); color: #fff; }
 .addctl.rule { color: #b42828; border-color: #e3a1a1; }
 .addctl.rule:hover, .addctl.rule:active { background: #b42828; color: #fff; }
+/* Colonne des lots : tracer / ne pas tracer sur une rangée sans case (petit, discret). */
+.addctl.frame { width: 24px; height: 24px; opacity: .55; border-width: 1px; }
+.addctl.frame:hover, .addctl.frame:active { opacity: 1; }
+.addctl.frame.off { color: #b42828; border-color: #e3a1a1; }
+.addctl.frame svg { width: 14px; height: 14px; }
 /* Bouton « Ajouter des lignes » sous un tableau de la page ajoutée, et choix du nombre. */
 .addctl.rows { width: auto; border-radius: 15px; padding: 0 12px 0 8px; gap: 4px; display: inline-flex; align-items: center; font: 600 14px system-ui, sans-serif; transform-origin: left center; }
 .counts { display: flex; gap: 8px; margin: 6px 0; }

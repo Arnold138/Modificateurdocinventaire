@@ -107,6 +107,10 @@ public sealed class PageView
     public event Action<PageView, Table, int>? ColumnRemoved;
     /// <summary>Page ajoutée : « Ajouter des lignes » sous le tableau (la ligne : la dernière du tableau).</summary>
     public event Action<PageView, PrintedLine>? RowsRequested;
+    /// <summary>Colonne des lots tracée (vrai) ou non (faux) sur une rangée sans case (« + » / corbeille dans la colonne).</summary>
+    public event Action<PageView, Table, List<int>, bool>? FrameToggled;
+    /// <summary>Réglage « colonne tracée » du projet.</summary>
+    public Func<bool>? LotFrameEnabled { get; set; }
 
     /// <summary>Une action du menu « Ligne » (clic droit, appui long ou bouton « Ligne ») : dupliquer, séparer…</summary>
     public sealed record LineCommand(string Label, string Hint, string Glyph, Action Run, bool Danger = false);
@@ -301,6 +305,7 @@ public sealed class PageView
     private void DrawAddedControls()
     {
         _addedLayer.Children.Clear();
+        DrawFrameToggles();
         var A = _view.Page.Added;
         if (A is null) return;
         Button Make(string glyph, string tip, double cx, double cy, bool danger, Action<Button> click)
@@ -378,6 +383,38 @@ public sealed class PageView
                 var line = t.Rows[st.R].Lines.FirstOrDefault(l => !l.Deleted && l.Cells.Count > 0);
                 if (line is null) continue;
                 Make("\uE710", "Ligne : ajouter au-dessus, en dessous, plus haute, case de lot…", cx, (st.Top + st.Bottom) / 2, false, b => ShowLineCommands(line.Cells[0], b));
+            }
+        }
+    }
+
+    /// <summary>Dans la colonne des lots, sur chaque rangée sans case sous le 1er objet : corbeille (ne pas tracer ici) ou « + ».</summary>
+    private void DrawFrameToggles()
+    {
+        if (!_lotsActive() || LotFrameEnabled?.Invoke() == false || MoveMode) return;
+        double w = Lots.ColumnWidth(_view.Page);
+        foreach (var vt in _view.Tables)
+        {
+            var t = vt.Table;
+            if (t.LotsOff || vt.Strips.Count == 0) continue;
+            foreach (var (rows, framed) in LotColumn.FrameToggles(t))
+            {
+                var ss = vt.Strips.Where(s => rows.Contains(s.R)).ToList();
+                if (ss.Count == 0) continue;
+                var st = new Arrangement.Strip(rows[0], ss.Min(s => s.Top), ss.Max(s => s.Bottom));
+                var b = new Button
+                {
+                    Width = 24, Height = 24, Padding = new Thickness(0), CornerRadius = new CornerRadius(12), Opacity = 0.6,
+                    Content = new FontIcon { Glyph = framed ? "\uE74D" : "\uE710", FontSize = 11 },
+                    Background = new SolidColorBrush(Colors.White), Foreground = framed ? TrashInk : Accent,
+                    BorderBrush = framed ? TrashInk : Accent, BorderThickness = new Thickness(1),
+                    RenderTransformOrigin = new Point(0.5, 0.5), RenderTransform = new ScaleTransform { ScaleX = _uiScale, ScaleY = _uiScale },
+                };
+                ToolTipService.SetToolTip(b, framed ? "Ne pas tracer la colonne des lots sur cette rangée" : "Tracer la colonne des lots sur cette rangée");
+                Canvas.SetLeft(b, Lots.TableLeft(t) - w / 2 - 12);
+                Canvas.SetTop(b, (st.Top + st.Bottom) / 2 - 12);
+                bool on = !framed;
+                b.Click += (_, _) => FrameToggled?.Invoke(this, t, rows, on);
+                _addedLayer.Children.Add(b);
             }
         }
     }
@@ -541,6 +578,7 @@ public sealed class PageView
     {
         MoveMode = on;
         RefreshGutter();
+        DrawAddedControls();
     }
 
     /// <summary>
@@ -559,15 +597,18 @@ public sealed class PageView
             AddBadge(line, b.CenterY);
             if (!active || (entry.Table.LotsOff && !Lots.ItemTable(entry.Table))) continue; // tableau d'objets sans lots : « + » quand même
             bool has = Lots.HasCell(line);
-            if (!has && !Lots.CanAdd(line, entry.Table.Rows.FirstOrDefault(r => r.Lines.Contains(line)))) continue;
+            var row = entry.Table.Rows.FirstOrDefault(r => r.Lines.Contains(line));
+            if (!has && !Lots.CanAdd(line, row)) continue;
+            // Ligne ajoutée ou page ajoutée : « + » bien visible (comme le « + » des lignes à droite), même sur une ligne vide.
+            bool strong = !has && (_view.Page.Added != null || row?.Inserted == true);
             double h = Math.Max(26, Math.Min(40, b.Height + 6));
             var button = new Button
             {
                 Width = 42, Height = h, Padding = new Thickness(0), MinWidth = 0, MinHeight = 0,
                 CornerRadius = new CornerRadius(10),
-                Background = has ? TrashFill : Clear,
-                BorderBrush = has ? Clear : AddInk, BorderThickness = new Thickness(has ? 0 : 1),
-                Content = new FontIcon { Glyph = has ? "" : "", FontSize = 16, Foreground = has ? TrashInk : AddInk },
+                Background = has ? TrashFill : strong ? new SolidColorBrush(Colors.White) : Clear,
+                BorderBrush = has ? Clear : strong ? Accent : AddInk, BorderThickness = new Thickness(has ? 0 : strong ? 1.5 : 1),
+                Content = new FontIcon { Glyph = has ? "" : "", FontSize = 16, Foreground = has ? TrashInk : strong ? Accent : AddInk },
             };
             ToolTipService.SetToolTip(button, has ? "Pas un objet : retirer cette case" : "Ajouter une case de lot sur cette ligne");
             Canvas.SetLeft(button, GutterWidth - 6 - 42);

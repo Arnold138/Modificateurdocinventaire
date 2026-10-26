@@ -61,6 +61,9 @@ public static class PageAnalyzer
     public static void Upgrade(Page page)
     {
         int n = 0;
+        // Page ajoutée d'une version précédente : « objet quand on y écrit » s'appelle maintenant AutoLot.
+        if (page.Added != null)
+            foreach (var l in page.AllLines().Where(l => l.ForceLot && l.FirstText.Length == 0)) { l.ForceLot = false; l.AutoLot = true; }
         foreach (var t in page.Tables)
         {
             if (!t.HasGrid || t.ColumnXs.Count < 2 || t.RowYs.Count < 2) continue;

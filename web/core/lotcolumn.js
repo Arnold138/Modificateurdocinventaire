@@ -3,6 +3,7 @@
 // Portage de LotColumn.cs, en entiers : résultat identique, pixel pour pixel, à la version Windows.
 import { Rect } from './geometry.js';
 import { columnWidth, numberBox, hasLotCell, rowOrder } from './lots.js';
+import { looksLikeTotal } from './model.js';
 import { toBase, baseToPage } from './layout.js';
 
 const R = (v) => Math.floor(v + 0.5);
@@ -24,11 +25,43 @@ export const framedTables = (page) =>
 export function framedRows(table) {
   const order = rowOrder(table).filter((r) => r + 1 < table.RowYs.length);
   const has = order.map((r) => table.Rows[r].Lines.some(hasLotCell));
-  const first = has.indexOf(true), last = has.lastIndexOf(true);
+  const first = has.indexOf(true);
   if (first < 0) return [];
+  let last = has.lastIndexOf(true);
+  // Colonne prolongée à la main (« + » dans la colonne) sous le dernier objet, ex. jusqu'au total.
+  for (let k = order.length - 1; k > last; k--) if (table.Rows[order[k]].LotFrame === true) { last = k; break; }
   let from = first;
   while (from > 0 && table.Rows[order[from - 1]].Lines.length > 0 && table.Rows[order[from - 1]].Lines.every((l) => l.Kind === 'EnTete')) from--;
-  return order.slice(from, last + 1);
+  return order.slice(from, last + 1).filter((r, k) => has[from + k] || frameAuto(table.Rows[r]));
+}
+
+/**
+ * Rangée sans case de lot entre deux objets : colonne tracée ou non. Par défaut, pas sur une ligne de total (la colonne
+ * s'arrête au total) ; au choix sinon (« + » / corbeille dans la colonne : Row.LotFrame vrai / faux).
+ */
+const frameAuto = (row) => (row.LotFrame === true ? true : row.LotFrame === false ? false : !row.Lines.some(looksLikeTotal));
+
+/**
+ * Rangées écrites où l'on peut tracer ou retirer la colonne (sans case de lot, sous le 1er objet) : { rows, framed }. Les rangées
+ * minces qui se suivent (bande de total découpée en plusieurs, < 30 px) n'ont qu'un bouton.
+ */
+export function frameToggles(table) {
+  const order = rowOrder(table).filter((r) => r + 1 < table.RowYs.length);
+  const first = order.findIndex((r) => table.Rows[r].Lines.some(hasLotCell));
+  if (first < 0) return [];
+  const framed = new Set(framedRows(table));
+  const thin = (r) => table.RowYs[r + 1] - table.RowYs[r] < 30;
+  const out = [];
+  let prev = -1;
+  for (let k = first + 1; k < order.length; k++) {
+    const r = order[k];
+    // Rangée vide (ligne ajoutée pas encore remplie) : pas de bouton, le « + » de la marge y met une case de lot.
+    if (table.Rows[r].Lines.some(hasLotCell) || !table.Rows[r].Lines.some((l) => l.Cells.some((c) => c.Text.trim()))) { prev = -1; continue; }
+    const g = out[out.length - 1];
+    if (prev >= 0 && g && (thin(r) || thin(prev))) { g.rows.push(r); g.framed ||= framed.has(r); } else out.push({ rows: [r], framed: framed.has(r) });
+    prev = r;
+  }
+  return out;
 }
 
 /** Signature de ce qui est tracé (pour savoir s'il faut redessiner l'écran). */

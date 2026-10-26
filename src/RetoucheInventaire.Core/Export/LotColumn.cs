@@ -30,11 +30,43 @@ public static class LotColumn
     {
         var order = Lots.RowOrder(table).Where(r => r + 1 < table.RowYs.Count).ToList();
         var has = order.Select(r => table.Rows[r].Lines.Any(Lots.HasCell)).ToList();
-        int first = has.IndexOf(true), last = has.LastIndexOf(true);
+        int first = has.IndexOf(true);
         if (first < 0) return [];
+        int last = has.LastIndexOf(true);
+        // Colonne prolongée à la main (« + » dans la colonne) sous le dernier objet, ex. jusqu'au total.
+        for (int k = order.Count - 1; k > last; k--) if (table.Rows[order[k]].LotFrame == true) { last = k; break; }
         int from = first;
         while (from > 0 && table.Rows[order[from - 1]].Lines.Count > 0 && table.Rows[order[from - 1]].Lines.All(l => l.Kind == LineKind.EnTete)) from--;
-        return order.GetRange(from, last + 1 - from);
+        return order.GetRange(from, last + 1 - from).Where((r, k) => has[from + k] || FrameAuto(table.Rows[r])).ToList();
+    }
+
+    /// <summary>Rangée sans case entre deux objets : par défaut pas sur un total ; au choix sinon (Row.LotFrame).</summary>
+    private static bool FrameAuto(Row row) => row.LotFrame ?? !row.Lines.Any(Analysis.LineClassifier.LooksLikeTotal);
+
+    /// <summary>
+    /// Rangées écrites où l'on peut tracer ou retirer la colonne (sans case de lot, sous le 1er objet). Les rangées minces qui se
+    /// suivent (bande de total découpée en plusieurs, &lt; 30 px) n'ont qu'un bouton.
+    /// </summary>
+    public static List<(List<int> Rows, bool Framed)> FrameToggles(Table table)
+    {
+        var order = Lots.RowOrder(table).Where(r => r + 1 < table.RowYs.Count).ToList();
+        int first = order.FindIndex(r => table.Rows[r].Lines.Any(Lots.HasCell));
+        if (first < 0) return [];
+        var framed = FramedRows(table).ToHashSet();
+        bool Thin(int r) => table.RowYs[r + 1] - table.RowYs[r] < 30;
+        var rows = new List<List<int>>();
+        var flags = new List<bool>();
+        int prev = -1;
+        for (int k = first + 1; k < order.Count; k++)
+        {
+            int r = order[k];
+            // Rangée vide (ligne ajoutée pas encore remplie) : pas de bouton, le « + » de la marge y met une case de lot.
+            if (table.Rows[r].Lines.Any(Lots.HasCell) || !table.Rows[r].Lines.Any(l => l.Cells.Any(c => c.Text.Trim().Length > 0))) { prev = -1; continue; }
+            if (prev >= 0 && rows.Count > 0 && (Thin(r) || Thin(prev))) { rows[^1].Add(r); flags[^1] |= framed.Contains(r); }
+            else { rows.Add([r]); flags.Add(framed.Contains(r)); }
+            prev = r;
+        }
+        return rows.Select((g, i) => (g, flags[i])).ToList();
     }
 
     /// <summary>Signature de ce qui est tracé (pour savoir s'il faut redessiner l'écran).</summary>

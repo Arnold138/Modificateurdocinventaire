@@ -36,7 +36,10 @@ function plainText(t) {
   return words.length >= 2 && letters > 3 * signs;
 }
 
-const isObject = (line, pick) => !line.NoLot && !line.OutsideTable && !line.Deleted && (line === pick || (!!line.ForceLot && firstText(line).length > 0));
+// ForceLot : « + » sur une ligne écrite ; LotHere : « + » sur une ligne encore vide (la case est là avant le texte) ;
+// AutoLot : ligne d'une page ajoutée, objet dès qu'on y écrit.
+const isObject = (line, pick) => !line.NoLot && !line.OutsideTable && !line.Deleted
+  && (line === pick || !!line.LotHere || ((!!line.ForceLot || !!line.AutoLot) && firstText(line).length > 0));
 
 /** Objet d'une rangée : la règle, ou la 1re ligne d'une rangée ajoutée ou séparée (même vide : « Ajouter une ligne vide »). */
 const pickOf = (row) => defaultPick(row)
@@ -104,7 +107,9 @@ const ITEM_START = /^\s*(\+\/-\s*)?\d{1,3}\s+\p{L}/u;
 export function canAddLot(line, row = null) {
   if (hasLotCell(line) || line.OutsideTable || (line.Kind !== 'Article' && line.Kind !== 'Titre')) return false;
   const t = firstText(line);
-  if (t.length === 0 || isRomanHeading(t)) return false;
+  // Ligne encore vide d'une rangée ajoutée ou d'une page ajoutée : « + » pour y mettre une case avant d'écrire.
+  if (t.length === 0) return line.Kind === 'Article' && (!!row?.Inserted || !!line.AutoLot);
+  if (isRomanHeading(t)) return false;
   return !row || row.Lines.find((l) => firstText(l).length > 0) === line || ITEM_START.test(t);
 }
 
@@ -191,6 +196,7 @@ export function setLot(project, line, value) {
 export function removeLot(project, line) {
   line.NoLot = true;
   line.ForceLot = false;
+  line.LotHere = false;
   line.Lot = '';
   line.LotManual = false;
   resyncLots(project);
@@ -200,6 +206,7 @@ export function removeLot(project, line) {
 export function addLot(project, line) {
   line.NoLot = false;
   line.ForceLot = true;
+  if (firstText(line).length === 0) line.LotHere = true; // ligne encore vide : la case reste en attendant le texte
   line.Lot = '';
   line.LotManual = false;
   if (!lotsActive(project)) line.LotSlot = true;

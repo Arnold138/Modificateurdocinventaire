@@ -136,7 +136,7 @@ const clearField = (f) => {
 };
 const clearLine = (l, force) => {
   for (const f of l.Cells) clearField(f);
-  Object.assign(l, { Kind: 'Article', KindChosenByUser: false, Lot: '', LotManual: false, LotSlot: false, NoLot: false, ForceLot: force, Extra: 0, ExtraAt: 0, Copy: false, Deleted: false, TotalScope: null, EndAt: null, Tall: 0 });
+  Object.assign(l, { Kind: 'Article', KindChosenByUser: false, Lot: '', LotManual: false, LotSlot: false, NoLot: false, ForceLot: false, AutoLot: force, LotHere: false, Extra: 0, ExtraAt: 0, Copy: false, Deleted: false, TotalScope: null, EndAt: null, Tall: 0 });
 };
 
 /**

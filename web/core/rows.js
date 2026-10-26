@@ -319,7 +319,8 @@ function normalPads(t) {
     if (!s || s.lines !== 1) return;
     top.push(s.inkTop - s.top); bottom.push(s.bottom - s.inkBottom); height.push(s.inkBottom - s.inkTop);
   });
-  return top.length ? { top: median(top), bottom: median(bottom), height: median(height) } : null;
+  // Jamais moins de 4 px entre l'écriture et ce qu'on enlève (l'encre lue peut toucher le filet : marge négative).
+  return top.length ? { top: Math.max(4, median(top)), bottom: Math.max(4, median(bottom)), height: median(height) } : null;
 }
 
 /** Rangées de pixels [y0, y0 + h[ toutes prises dans l'image d'origine, d'un seul tenant (pas dans une bande ajoutée). */

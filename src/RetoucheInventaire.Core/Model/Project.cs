@@ -82,6 +82,10 @@ public sealed class PrintedLine
     public bool NoLot { get; set; }
     /// <summary>Numéro ajouté par l'utilisateur (« + ») sur une ligne que la règle n'avait pas retenue.</summary>
     public bool ForceLot { get; set; }
+    /// <summary>« + » sur une ligne encore vide : la case est là avant le texte.</summary>
+    public bool LotHere { get; set; }
+    /// <summary>Ligne d'une page ajoutée : objet dès qu'on y écrit.</summary>
+    public bool AutoLot { get; set; }
 
     /// <summary>
     /// Hauteur ajoutée sous cette ligne (texte saisi sur plusieurs lignes) : tout ce qui est en dessous descend d'autant.
@@ -145,6 +149,8 @@ public sealed class Row
     public List<PrintedLine> Lines { get; set; } = [];
     /// <summary>Rangée ajoutée par l'utilisateur : identifiant de sa bande (<see cref="Page.Inserts"/>), null pour une rangée imprimée.</summary>
     public string? Inserted { get; set; }
+    /// <summary>Colonne des lots sur cette rangée sans case : null = règle (pas sur un total), vrai / faux = choisi (« + » / corbeille).</summary>
+    public bool? LotFrame { get; set; }
 }
 
 /// <summary>

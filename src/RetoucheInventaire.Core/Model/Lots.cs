@@ -141,7 +141,7 @@ public static class Lots
     }
 
     private static bool IsObject(PrintedLine line, PrintedLine? pick) =>
-        !line.NoLot && !line.OutsideTable && !line.Deleted && (line == pick || (line.ForceLot && line.FirstText.Length > 0));
+        !line.NoLot && !line.OutsideTable && !line.Deleted && (line == pick || line.LotHere || ((line.ForceLot || line.AutoLot) && line.FirstText.Length > 0));
 
     /// <summary>
     /// Ligne sans numéro à laquelle on peut en ajouter un (« + ») : article ou titre (pas un total, un en-tête, un récapitulatif),
@@ -151,7 +151,9 @@ public static class Lots
     {
         if (HasCell(line) || line.OutsideTable || line.Kind is not (LineKind.Article or LineKind.Titre)) return false;
         var t = line.FirstText;
-        if (t.Length == 0 || Analysis.LineClassifier.IsRomanHeading(t)) return false;
+        // Ligne encore vide d'une rangée ajoutée ou d'une page ajoutée : « + » pour y mettre une case avant d'écrire.
+        if (t.Length == 0) return line.Kind == LineKind.Article && (row?.Inserted != null || line.AutoLot);
+        if (Analysis.LineClassifier.IsRomanHeading(t)) return false;
         return row is null || row.Lines.FirstOrDefault(l => l.FirstText.Length > 0) == line || Analysis.LineClassifier.LooksLikeItem(t);
     }
 
@@ -247,6 +249,7 @@ public static class Lots
     {
         line.NoLot = true;
         line.ForceLot = false;
+        line.LotHere = false;
         line.Lot = "";
         line.LotManual = false;
         Resync(project);
@@ -257,6 +260,7 @@ public static class Lots
     {
         line.NoLot = false;
         line.ForceLot = true;
+        if (line.FirstText.Length == 0) line.LotHere = true; // ligne encore vide : la case reste en attendant le texte
         line.Lot = "";
         line.LotManual = false;
         if (!IsActive(project)) line.LotSlot = true;

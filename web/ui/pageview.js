@@ -5,7 +5,8 @@
 import { Rect } from '../core/geometry.js';
 import { isModified, addLockZone, removeLockZoneAt, looksLikeTotal } from '../core/model.js';
 import { paperColor } from '../core/exports.js';
-import { canAddLot, hasLotCell, isZeroLot, itemTable } from '../core/lots.js';
+import { canAddLot, hasLotCell, isZeroLot, itemTable, columnWidth, tableLeft } from '../core/lots.js';
+import { frameToggles } from '../core/lotcolumn.js';
 import { font, lotSize, textLayout, isMultiline, LINE_HEIGHT, strikeSegments, rasterToCanvas, freeCanvas, cleanPatch } from '../services/canvas.js';
 import { adjustStrikes, colorRuns, hasColors, textColor } from '../core/strikes.js';
 import { baseBox } from '../core/layout.js';
@@ -141,6 +142,30 @@ export class PageView {
     this.drawAddedControls();
   }
 
+  // ---------- Colonne des lots : tracée ou non sur une rangée sans case (total…) ----------
+
+  /** Dans la colonne des lots, sur chaque rangée sans case sous le 1er objet : corbeille (ne pas tracer ici) ou « + » (tracer ici). */
+  drawFrameToggles() {
+    if (!(this.cb.lotsActive?.() ?? false) || this.cb.lotFrame?.() === false || this.moveMode) return;
+    const w = columnWidth(this.page);
+    for (const vt of this.view.tables) {
+      const t = vt.table;
+      if (t.LotsOff || !vt.strips?.length) continue;
+      for (const { rows, framed } of frameToggles(t)) {
+        const ss = vt.strips.filter((s) => rows.includes(s.r));
+        if (!ss.length) continue;
+        const st = { top: Math.min(...ss.map((s) => s.top)), bottom: Math.max(...ss.map((s) => s.bottom)) };
+        const b = el('button', 'addctl frame ' + (framed ? 'off' : 'on'), this.overlay);
+        b.innerHTML = `<svg><use href="#${framed ? 'i-trash' : 'i-plus'}"/></svg>`;
+        b.title = framed ? 'Ne pas tracer la colonne des lots sur cette rangée' : 'Tracer la colonne des lots sur cette rangée';
+        b.setAttribute('aria-label', b.title);
+        Object.assign(b.style, { left: tableLeft(t) - w / 2 - 12 + 'px', top: (st.top + st.bottom) / 2 - 12 + 'px' });
+        b.addEventListener('pointerdown', (e) => e.preventDefault());
+        b.onclick = (e) => { e.stopPropagation(); this.cb.onFrameToggle?.(this, t, rows, !framed); };
+      }
+    }
+  }
+
   // ---------- Page ajoutée : « + » des lignes et des colonnes ----------
 
   /**
@@ -150,6 +175,7 @@ export class PageView {
    */
   drawAddedControls() {
     for (const b of this.overlay.querySelectorAll('.addctl')) b.remove();
+    this.drawFrameToggles();
     const A = this.page.Added;
     if (!A) return;
     const mk = (cls, icon, label, cx, cy, onClick) => {
@@ -212,6 +238,7 @@ export class PageView {
     this.moveMode = !!on;
     this.gutter.classList.toggle('moving', this.moveMode);
     this.refreshGutter();
+    this.drawAddedControls();
   }
 
   /** Textes changés ailleurs (totaux recalculés) : les cases affichées suivent. */
@@ -324,8 +351,10 @@ export class PageView {
       }
       if (!active || (entry.table.LotsOff && !itemTable(entry.table))) continue; // tableau d'objets sans lots : « + » quand même
       const has = hasLotCell(line);
-      if (!has && !canAddLot(line, entry.table.Rows?.find((r) => r.Lines.includes(line)))) continue;
-      const btn = el('button', has ? 'gbtn trash' : 'gbtn add', this.gutter);
+      const row = entry.table.Rows?.find((r) => r.Lines.includes(line));
+      if (!has && !canAddLot(line, row)) continue;
+      // Ligne ajoutée ou page ajoutée : « + » bien visible (comme le « + » des lignes à droite), même sur une ligne vide.
+      const btn = el('button', has ? 'gbtn trash' : 'gbtn add' + (this.page.Added || row?.Inserted ? ' strong' : ''), this.gutter);
       btn.innerHTML = `<svg><use href="#${has ? 'i-trash' : 'i-plus'}"/></svg>`;
       btn.setAttribute('aria-label', has ? `Retirer la case de lot ${line.Lot}` : 'Ajouter une case de lot');
       btn.title = has ? 'Pas un objet : retirer cette case' : 'Ajouter une case de lot sur cette ligne';

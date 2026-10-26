@@ -186,6 +186,7 @@ public static class Stress
             case "lot": Lots.Set(project, line, a.GetProperty("v").GetString()!); break;
             case "addLot": Lots.Add(project, line); break;
             case "addLotHere": Lots.AddHere(project, table, line); break;
+            case "frameToggle": foreach (var x in a.GetProperty("rows").EnumerateArray()) table.Rows[x.GetInt32()].LotFrame = a.GetProperty("on").GetBoolean(); break;
             case "sync":
             {
                 var pg = a.GetProperty("page");

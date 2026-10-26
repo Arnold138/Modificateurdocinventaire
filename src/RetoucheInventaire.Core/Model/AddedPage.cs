@@ -159,7 +159,7 @@ public static partial class AddedPage
     {
         foreach (var f in l.Cells) ClearField(f);
         l.Kind = LineKind.Article; l.KindChosenByUser = false; l.Lot = ""; l.LotManual = false; l.LotSlot = false; l.NoLot = false;
-        l.ForceLot = force; l.Extra = 0; l.ExtraAt = 0; l.Copy = false; l.Deleted = false; l.TotalScope = null; l.EndAt = null; l.Tall = 0;
+        l.ForceLot = false; l.AutoLot = force; l.LotHere = false; l.Extra = 0; l.ExtraAt = 0; l.Copy = false; l.Deleted = false; l.TotalScope = null; l.EndAt = null; l.Tall = 0;
     }
 
     private static T Clone<T>(T x) => JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(x, ProjectStore.Json), ProjectStore.Json)!;

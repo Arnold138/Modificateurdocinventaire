@@ -15,7 +15,7 @@ import {
   objectLines, lotsActive, setLot, resyncLots, addLot, createEmptyLots, fillLotsAutomatically, numberLots, isZeroLot,
   hasLotCell, itemTable, addLotHere, rowOrder, lotTables, setLotTables, defaultLotChoice, columnWidth, numberBox,
 } from '../core/lots.js';
-import { drawLotColumns, framedRows, frames } from '../core/lotcolumn.js';
+import { drawLotColumns, framedRows, frames, frameToggles } from '../core/lotcolumn.js';
 import { setExtra, stretch, extraFor, baseHeight, tallExtra } from '../core/layout.js';
 import { addBlankPage, blankBase, canBeModel, addColumn, removeColumn, canAddColumn, canRemoveColumn, addedTable, addRows } from '../core/addpage.js';
 import { planArrangement, composePage, unitCrop, viewOf, syncEndPages } from '../core/arrange.js';
@@ -176,6 +176,7 @@ const ACTIONS = {
   shorter(t) { const { page, line } = resolve(t); line.Tall = Math.max(0, (line.Tall ?? 0) - 1); setExtra(page, line, extraOf(line)); },
   del(t) { resolve(t).line.Deleted = true; },
   addLotHere(t) { const { table, line } = resolve(t); addLotHere(project, table, line); },
+  frameToggle(t, a) { for (const r of a.rows) resolve(t).table.Rows[r].LotFrame = a.on; },
   restore(t) { resolve(t).line.Deleted = false; },
   lot(t, a) { setLot(project, resolve(t).line, a.v); },
   addLot(t) { addLot(project, resolve(t).line); },
@@ -288,6 +289,7 @@ function choose() {
   if (r < 0.79) { const x = pick(all.filter((y) => !hasLotCell(y.line) && itemTable(y.table) && (y.line.Kind === 'Article' || y.line.Kind === 'Titre'))); return x && ['addLotHere', x, {}]; }
   if (r < 0.83) return ['sync', all[0], { page: chance(0.5) ? all[Math.floor(random() * all.length)].p : null }];
   if (r < 0.84) {
+    if (chance(0.3)) { const x = pick(all.filter((y) => !y.table.LotsOff && frameToggles(y.table).length)); if (x) { const g = pick(frameToggles(x.table)); return ['frameToggle', x, { rows: g.rows, on: !g.framed }]; } }
     if (chance(0.7)) { const x = pick(all.filter((y) => canCopyLine(y.page, y.line))); return x && ['addRows', x, { n: pick([1, 3, 5, 10, 15]), above: chance(0.2) && x.o > 0, id: `ln${++pageN}` }]; }
     return ['number', all[0], {}];
   }

@@ -457,6 +457,16 @@ public sealed partial class MainWindow : Window
         view.LineCommands = LineCommandsFor;
         view.ColumnAdded += async (v, table, c) => await ColumnActionAsync(v.Page, table, c, true);
         view.RowsRequested += async (v, line) => await AddRowsDialogAsync(v.Page, line);
+        view.LotFrameEnabled = () => _project.LotFrame;
+        view.FrameToggled += async (v, table, rows, on) => await GuardAsync("Colonne des lots", async () =>
+        {
+            PushUndo();
+            foreach (int r in rows) table.Rows[r].LotFrame = on;
+            Replan();
+            await RefreshViewAsync();
+            SetStatus(on ? "Colonne des lots tracée sur cette rangée. ↶ pour annuler." : "Colonne des lots arrêtée sur cette rangée (ex. au total). ↶ pour annuler.");
+            ScheduleAutosave();
+        });
         view.ColumnRemoved += async (v, table, c) => await ColumnActionAsync(v.Page, table, c, false);
         view.SetUiScale(PageScroller.ZoomFactor);
         view.SetLockMode(LockToggle.IsChecked == true);

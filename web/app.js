@@ -376,6 +376,15 @@ async function showPage(n, { flat = null, fit = true, keepScroll = false } = {})
   const pp = () => state.plan.pages[k];
   const view = new PageView(viewOf(state.project, state.plan, k), display, {
     lotsActive: () => lotsActive(state.project),
+    lotFrame: () => lotFrameEnabled(state.project),
+    onFrameToggle: (v, table, rows, on) => {
+      pushUndo();
+      for (const r of rows) table.Rows[r].LotFrame = on;
+      replan();
+      refreshView();
+      status(on ? 'Colonne des lots tracée sur cette rangée. ↶ pour annuler.' : 'Colonne des lots arrêtée sur cette rangée (ex. au total). ↶ pour annuler.');
+      scheduleSave();
+    },
     zoom: () => state.zoom,
     loupe: () => prefs.loupe,
     mapY: (y) => mapY(pp(), y),
