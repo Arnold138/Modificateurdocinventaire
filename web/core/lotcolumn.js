@@ -76,6 +76,13 @@ export function drawLotColumns(image, page) {
     for (const r of f.rows) {
       const y0 = R(f.table.RowYs[r]), y1 = R(f.table.RowYs[r + 1]);
       fill(output, f.left - hv, y0 - hh, f.vThick, y1 - y0 + f.hThick, f.color);
+      // Trait entre le numéro et la désignation (trait gauche du tableau) : partout où l'image ne l'a pas (rangée
+      // ajoutée, trait imprimé qui s'arrête ou décalé), il est tracé, ligne de pixels par ligne de pixels.
+      for (let y = Math.max(0, y0 - hh); y < Math.min(output.h, y1 - hh + f.hThick); y++) {
+        let dark = false;
+        for (let x = Math.max(0, f.right - 8); x <= Math.min(output.w - 1, f.right + 3) && !dark; x++) dark = gray(output, x, y) < 150;
+        if (!dark) fill(output, f.right - f.vThick, y, f.vThick, 1, f.color); // dans la colonne, contre le tableau
+      }
       fill(output, f.left - hv, y0 - hh, f.right - (f.left - hv), f.hThick, f.color);
       fill(output, f.left - hv, y1 - hh, f.right - (f.left - hv), f.hThick, f.color);
     }
@@ -84,17 +91,35 @@ export function drawLotColumns(image, page) {
 }
 
 /**
+ * Trait gauche du tableau dans la rangée [y0, y1[ : abscisse de son premier pixel sombre près de `right` (il peut
+ * être un peu décalé : page légèrement de travers), mesurée sur trois hauteurs ; null s'il n'y est pas (rangée ajoutée).
+ */
+function ruleLeftOf(img, right, y0, y1) {
+  let found = null;
+  for (const y of [y0 + 2, (y0 + y1) >> 1, y1 - 3]) {
+    if (y < y0 || y >= y1 || y < 0 || y >= img.h) continue;
+    for (let x = Math.max(0, right - 8); x <= Math.min(img.w - 1, right + 3); x++)
+      if (gray(img, x, y) < 150) { found = found === null ? x : Math.min(found, x); break; }
+  }
+  return found;
+}
+
+/**
  * Fond de chaque case : celui de la rangée (gris hachuré de l'en-tête, papier ailleurs), recopié depuis
- * le morceau le plus clair de la 1re colonne (jamais du texte, même si l'OCR ne l'a pas lu).
+ * le morceau le plus clair de la 1re colonne (jamais du texte, même si l'OCR ne l'a pas lu). Le fond s'arrête avant
+ * le trait gauche du tableau, là où il est sur l'image (il reste visible).
  */
 function drawBackgrounds(source, output, f) {
   const t = f.table;
-  const x0 = f.left - half(f.vThick) + f.vThick, x1 = f.right - half(f.vThick);
-  const w = x1 - x0;
-  if (w <= 0) return;
+  const x0 = f.left - half(f.vThick) + f.vThick, full = f.right - half(f.vThick);
+  if (full - x0 <= 0) return;
   for (const r of f.rows) {
     const y0 = R(t.RowYs[r]) - half(f.hThick) + f.hThick, y1 = R(t.RowYs[r + 1]) - half(f.hThick);
     if (y1 <= y0) continue;
+    const rule = ruleLeftOf(source, f.right, y0, y1);
+    const x1 = rule === null ? full : Math.min(full, rule);
+    const w = x1 - x0;
+    if (w <= 0) continue;
     const ink = (r < t.Rows.length ? t.Rows[r].Lines : []).flatMap((l) => l.Cells).filter((c) => !Rect.isEmpty(c.Ink)).map((c) => c.Ink);
     const start = R(t.ColumnXs[0]) + f.vThick + 2, end = R(t.ColumnXs[1]) - f.vThick - 2 - w;
     let best = -1, bestSum = -1;

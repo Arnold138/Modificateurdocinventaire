@@ -7,7 +7,8 @@
 import { Rect } from './geometry.js';
 import { allLines, assignIds, firstText } from './model.js';
 import { setExtra, removeBand, insertsOf, cleanRow, paperOf, baseHeight } from './layout.js';
-import { removeAddedRow } from './rows.js';
+import { removeAddedRow, copyLine, locate } from './rows.js';
+import { cutBand } from './layout.js';
 
 const R = (v) => Math.floor(v + 0.5);
 const DARK = 150;
@@ -139,10 +140,31 @@ const clearLine = (l, force) => {
 };
 
 /**
+ * Rangée modèle d'un tableau : une rangée d'une seule ligne, de hauteur médiane parmi elles (pas l'en-tête, ni une ligne
+ * agrandie, ni un total ajouté). C'est elle que « Ajouter des lignes » recopie (vierge). Null s'il n'y en a pas.
+ */
+export function referenceRow(t, head = 0) {
+  const c = [];
+  for (let r = head; r < t.Rows.length && r + 1 < t.RowYs.length; r++) {
+    const ls = t.Rows[r].Lines;
+    if (ls.length !== 1 || ls[0].Cells.length === 0 || ls[0].Deleted || ls[0].TotalScope || ls[0].Kind === 'EnTete' || (ls[0].Extra ?? 0) > 0 || (ls[0].Tall ?? 0) > 0) continue;
+    if (ls[0].Kind !== 'Article' && ls[0].Kind !== 'Titre') continue;
+    c.push({ r, h: t.RowYs[r + 1] - t.RowYs[r] });
+  }
+  if (!c.length) return null;
+  c.sort((a, b) => a.h - b.h || a.r - b.r);
+  return c[Math.trunc((c.length - 1) / 2)].r;
+}
+
+/** Rangées d'en-tête d'un tableau (page ajoutée : celles gardées telles qu'imprimées). */
+const headOf = (page, t) => page.Added?.Tables?.[page.Tables.indexOf(t)]?.Head ?? headRows(t);
+
+/**
  * Crée la page vierge sur le modèle de `model` et l'insère à la position `at` (indice dans project.Pages).
+ * `empty` : page blanche — seulement le 1er tableau d'objets, son en-tête et une ligne (la rangée modèle) ; dessous, rien.
  * Renvoie la nouvelle page (null si le modèle ne convient pas).
  */
-export function addBlankPage(project, model, at, img = null, id = null) {
+export function addBlankPage(project, model, at, img = null, id = null, empty = false) {
   if (!canBeModel(model)) return null;
   const page = JSON.parse(JSON.stringify(model));
   // 1. Page d'origine, sans ce qui a été ajouté ou retiré à la main (rangées ajoutées, agrandies, réduites, déplacées).
@@ -185,6 +207,24 @@ export function addBlankPage(project, model, at, img = null, id = null) {
     });
   });
   info.Tables.length = page.Tables.length;
+  if (empty) {
+    // Page blanche : le 1er tableau d'objets garde son en-tête et une seule ligne (la rangée modèle, posée sous l'en-tête) ;
+    // les tableaux en dessous disparaissent, et tout ce qui est sous cette ligne devient papier.
+    const ti0 = info.Tables.findIndex(Boolean), t0 = page.Tables[ti0], x0 = info.Tables[ti0];
+    const head = x0.Head, top = t0.RowYs[head];
+    const r0 = referenceRow(t0, head) ?? Math.min(head, t0.Rows.length - 1);
+    const h = t0.RowYs[r0 + 1] - t0.RowYs[r0], dy = top - t0.RowYs[r0];
+    const row = t0.Rows[r0];
+    for (const l of row.Lines) for (const f of l.Cells) f.Box = { ...f.Box, Y: f.Box.Y + dy };
+    t0.Rows = [...t0.Rows.slice(0, head), row];
+    t0.RowYs = [...t0.RowYs.slice(0, head + 1), top + h];
+    rowBounds(t0);
+    x0.Ys = [...t0.RowYs];
+    const keep = page.Tables.map((t, ti) => ti === ti0 || !gridTable(t) || t.RowYs[0] < t0.RowYs[0]);
+    page.Tables = page.Tables.filter((t, ti) => keep[ti]);
+    info.Tables = info.Tables.filter((x, ti) => keep[ti]);
+    info.Tail = top + h;
+  }
   // Sous le dernier tableau vidé (total général, pied de page) : page vide.
   if (info.Tail == null) {
     const bottoms = info.Tables.filter(Boolean).map((x) => x.Ys[x.Ys.length - 1]);
@@ -215,10 +255,62 @@ export function addBlankPage(project, model, at, img = null, id = null) {
   page.Added = info;
   page.EndLots = false;
   const k = project.Pages.indexOf(model);
-  page.SourceName = `Page ajoutée (modèle : page ${k + 1})`;
+  page.SourceName = `${empty ? 'Page blanche' : 'Page ajoutée'} (modèle : page ${k + 1})`;
   assignIds(page);
   project.Pages.splice(Math.max(0, Math.min(project.Pages.length, at)), 0, page);
   return page;
+}
+
+// ---------- Ajouter des lignes (1, 5, 10, 15…) ----------
+
+/** Bas de ce qui est écrit ou tracé sur la page (tableaux, textes, zones verrouillées). */
+function contentBottom(page) {
+  let b = 0;
+  for (const t of page.Tables) if (gridTable(t)) b = Math.max(b, t.RowYs[t.RowYs.length - 1]);
+  for (const l of allLines(page)) for (const f of l.Cells) if (f.Text.trim() || !Rect.isEmpty(f.Ink)) b = Math.max(b, f.Box.Y + f.Box.Height);
+  for (const z of page.LockZones ?? []) b = Math.max(b, z.Y + z.Height);
+  return b;
+}
+
+/**
+ * « Ajouter des lignes » : `n` rangées vierges sous (ou, pour la 1re, au-dessus de) la rangée de `line`, chacune recopiée de
+ * la rangée modèle du tableau (même hauteur, mêmes colonnes, mêmes filets, case de lot quand on écrit). La page garde sa
+ * taille : la place est prise dans le blanc du bas. Quand elle est pleine, la suite part sur une page blanche ajoutée juste
+ * après (même mise en page). Renvoie { added, pages, last } : lignes ajoutées, pages créées, dernière ligne ajoutée.
+ */
+export function addRows(project, page, line, n, { above = false, img = null, id = null } = {}) {
+  const out = { added: 0, pages: [], last: null };
+  let cur = page, dest = line, first = above;
+  for (let guard = 0; out.added < n && guard < 4 * n + 10; guard++) {
+    const at = locate(cur, dest);
+    if (!at) break;
+    const t = at.table;
+    const r0 = referenceRow(t, headOf(cur, t));
+    const ref = r0 !== null ? t.Rows[r0].Lines[0] : dest;
+    const H = baseHeight(cur), margin = Math.max(40, Math.floor(H * 0.025 + 0.5));
+    const before = cur.Height;
+    const made = copyLine(cur, dest, true, first, ref);
+    if (!made) break;
+    made.Copy = false; // case de lot quand on écrit dans la ligne (pas de numéros sur des lignes vides)
+    const fits = contentBottom(cur) <= H - margin;
+    // Page pleine mais pas de page suivante possible (tableau trop modifié pour servir de modèle) : la page s'allonge.
+    if (fits || !canBeModel(cur) || out.pages.length > 20) {
+      // La page garde sa taille : autant de blanc retiré en bas qu'il a été ajouté.
+      const k = fits ? Math.min(cur.Height - before, cur.Height - H) : 0;
+      if (k > 0) cutBand(cur, cur.Height - k, k, null);
+      out.added++; out.last = made; dest = made; first = false;
+      continue;
+    }
+    removeAddedRow(cur, made); // plus de place : cette ligne part sur la page suivante
+    const next = addBlankPage(project, cur, project.Pages.indexOf(cur) + 1, cur.Added ? null : img, id ? `${id}-${out.pages.length + 1}` : null, true);
+    if (!next) break;
+    out.pages.push(next);
+    cur = next;
+    const t0 = next.Tables[next.Added.Tables.findIndex(Boolean)];
+    dest = t0.Rows[t0.Rows.length - 1].Lines[0];
+    out.added++; out.last = dest; first = false; // la page blanche porte déjà une ligne
+  }
+  return out;
 }
 
 /** Tableau vidé de la page ajoutée (on peut y ajouter ou retirer des colonnes). */

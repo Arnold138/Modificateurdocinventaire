@@ -5,7 +5,7 @@
 import { Rect } from '../core/geometry.js';
 import { isModified, addLockZone, removeLockZoneAt, looksLikeTotal } from '../core/model.js';
 import { paperColor } from '../core/exports.js';
-import { canAddLot, hasLotCell, isZeroLot } from '../core/lots.js';
+import { canAddLot, hasLotCell, isZeroLot, itemTable } from '../core/lots.js';
 import { font, lotSize, textLayout, isMultiline, LINE_HEIGHT, strikeSegments, rasterToCanvas, freeCanvas, cleanPatch } from '../services/canvas.js';
 import { adjustStrikes, colorRuns, hasColors, textColor } from '../core/strikes.js';
 import { baseBox } from '../core/layout.js';
@@ -177,6 +177,18 @@ export class PageView {
       const by = bottom + 22 <= H - 8 ? bottom + 22 : bottom - 18;
       if (xs.length > 3)
         for (let k = 1; k + 1 < xs.length; k++) mk('rule', 'i-minus', 'Retirer ce trait (réunir les deux colonnes)', xs[k], by, () => this.cb.onRemoveColumn?.(this, t, k));
+      // « Ajouter des lignes » sous le tableau (à gauche, loin des « − »).
+      const lastStrip = vt.strips.filter((st) => st.r >= info.Head).sort((p, q) => p.bottom - q.bottom).pop();
+      const lastLine = lastStrip ? t.Rows[lastStrip.r]?.Lines.find((l) => !l.Deleted && l.Cells.length) : null;
+      if (lastLine) {
+        const b = el('button', 'addctl rows', this.overlay);
+        b.innerHTML = '<svg><use href="#i-plus"/></svg><span>Ajouter des lignes</span>';
+        b.title = 'Ajouter 1, 5, 10, 15… lignes vides sous le tableau';
+        const clash = xs.length > 3 && xs.slice(1, -1).some((x) => x < xs[0] + 220);
+        Object.assign(b.style, { left: xs[0] + 'px', top: (clash ? by + 36 : by) - 15 + 'px' });
+        b.addEventListener('pointerdown', (e) => e.preventDefault());
+        b.onclick = (e) => { e.stopPropagation(); this.cb.onAddRows?.(this, lastLine); };
+      }
       // Lignes : à droite du tableau, au milieu de chaque rangée (pas l'en-tête).
       const right = xs[xs.length - 1];
       const cx = right + 24 <= W - 4 ? right + 22 : W - 18;
@@ -310,7 +322,7 @@ export class PageView {
         d.style.background = badge[1];
         d.style.top = Rect.cy(b) - 12 + 'px';
       }
-      if (!active || entry.table.LotsOff) continue;
+      if (!active || (entry.table.LotsOff && !itemTable(entry.table))) continue; // tableau d'objets sans lots : « + » quand même
       const has = hasLotCell(line);
       if (!has && !canAddLot(line, entry.table.Rows?.find((r) => r.Lines.includes(line)))) continue;
       const btn = el('button', has ? 'gbtn trash' : 'gbtn add', this.gutter);

@@ -153,13 +153,17 @@ public static class Rows
     /// <paramref name="above"/> : la rangée est posée juste au-dessus de celle de la ligne (sinon juste en dessous).
     /// Renvoie la nouvelle ligne (la hauteur de son texte sur plusieurs lignes est à recalculer par l'écran).
     /// </summary>
-    public static PrintedLine? Copy(Page page, PrintedLine line, bool blank = false, bool above = false)
+    public static PrintedLine? Copy(Page page, PrintedLine line, bool blank = false, bool above = false, PrintedLine? from = null)
     {
+        var src0 = from ?? line;
         var at = Locate(page, line);
-        if (at is null || !CanCopy(page, line) || (above && at.R == 0)) return null;
+        if (at is null || (src0 == line && !CanCopy(page, line)) || (above && at.R == 0)) return null;
         var (t, r, _, _) = at;
-        var (top, bottom) = LineBand(at, line);
-        int filetTop = Arrangement.CutY(t.RowYs[r]);
+        // Modèle de la rangée (from, même tableau) : hauteur, filets et place des cases ; line : où la poser.
+        var sat = src0 == line ? at : Locate(page, src0);
+        if (sat is null || sat.Table != t) return null;
+        var (top, bottom) = LineBand(sat, src0);
+        int filetTop = Arrangement.CutY(t.RowYs[sat.R]);
         var body = PartsOf(page, top, bottom);
         var cols = t.ColumnXs.Select(x => (int)Math.Floor(x + 0.5)).ToList();
         int x0 = (int)Math.Floor(t.ColumnXs[0]) - 4, x1 = (int)Math.Ceiling(t.ColumnXs[^1]) + 4;
@@ -173,20 +177,20 @@ public static class Rows
         else parts.AddRange(body);
         // Sous le texte, autant d'espace qu'au-dessus (la ligne copiée peut venir d'une rangée de plusieurs lignes) :
         // un interligne propre, filets verticaux prolongés depuis la rangée la plus nette de la ligne copiée.
-        double inkTop = Arrangement.LineTop(line), inkBottom = InkBottom(line);
+        double inkTop = Arrangement.LineTop(src0), inkBottom = InkBottom(src0);
         double spaceAbove = inkTop - top, below = bodyH - (inkBottom - top);
         int pad = Math.Min(40, Math.Max(0, (int)Math.Ceiling(spaceAbove - below)));
-        if (pad > 0 && longest is not null)
+        if (pad > 0 && longest is not null && src0 == line) // rangée modèle : exactement sa hauteur
             parts.Add(new BandPart { Src = longest.Src, Height = pad, Gap = true, Span = span, Cols = cols, X0 = x0, X1 = x1 });
         int y = Arrangement.CutY(t.RowYs[above ? r : r + 1]);
         // Cases de la ligne, relevées avant que la bande ne décale la page.
-        var src = line.Cells.Select(f => (F: f, B: PageLayout.BaseBox(line, f), Ink: f.Ink)).ToList();
+        var src = src0.Cells.Select(f => (F: f, B: PageLayout.BaseBox(src0, f), Ink: f.Ink)).ToList();
         var band = PageLayout.InsertBand(page, y, parts, "Copy");
         // Ligne recopiée : mêmes cases, posées dans la nouvelle rangée (même place par rapport à leur rangée).
         int dy = y + Arrangement.Filet - top;
         var copy = new PrintedLine
         {
-            Kind = blank ? LineKind.Article : line.Kind, KindChosenByUser = !blank && line.KindChosenByUser, Copy = true,
+            Kind = blank ? LineKind.Article : src0.Kind, KindChosenByUser = !blank && src0.KindChosenByUser, Copy = true,
             Cells = src.Select(c => new Field
             {
                 Id = $"{page.Id}-{band.Id}-{c.F.Column}", Column = c.F.Column,

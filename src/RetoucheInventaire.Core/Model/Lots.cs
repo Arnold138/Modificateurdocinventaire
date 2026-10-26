@@ -50,9 +50,35 @@ public static class Lots
     /// Le tableau est un tableau d'objets (proposé pour les lots) : au moins deux colonnes de montants et des objets selon la
     /// règle ; pas un cadre de texte (en-tête de l'étude, signature), ni un récapitulatif (« I - MOBILIER… 148 760 »).
     /// </summary>
+    /// <summary>Tableau d'objets (au moins trois colonnes dont une large, la désignation) : on peut y ajouter une case même si ses lots sont éteints.</summary>
+    public static bool ItemTable(Table? t)
+    {
+        if (t is null || !t.HasGrid || t.RowYs.Count < 2 || t.ColumnXs.Count < 4) return false;
+        double widest = 0;
+        for (int c = 0; c + 1 < t.ColumnXs.Count; c++) widest = Math.Max(widest, t.ColumnXs[c + 1] - t.ColumnXs[c]);
+        return widest * 100 >= 35 * (t.ColumnXs[^1] - t.ColumnXs[0]);
+    }
+
+    /// <summary>
+    /// « + » sur une ligne (ex. un objet dans une grande case) : une case vide apparaît à sa hauteur, rien d'autre ne bouge.
+    /// Dans un tableau qui n'avait pas de lots, le tableau les reçoit, mais seule cette ligne a une case.
+    /// </summary>
+    public static void AddHere(InventoryProject project, Table? table, PrintedLine line)
+    {
+        if (table is { LotsOff: true })
+        {
+            table.LotsOff = false;
+            foreach (var o in ObjectLines(project).ToList())
+                if (o.Table == table && o.Line != line && !HasCell(o.Line)) o.Line.NoLot = true;
+        }
+        Add(project, line);
+    }
+
     public static bool TableHasObjects(Table table)
     {
         if (!table.HasGrid || table.RowYs.Count < 2 || table.ColumnXs.Count < 4) return false;
+        // Une colonne large (la désignation) : pas un cadre de titre sur fond tramé, lu comme une suite de colonnes étroites.
+        if (!ItemTable(table)) return false;
         var withValues = table.Rows.SelectMany(r => r.Lines).Where(l => l.Kind != LineKind.EnTete && l.Cells.Skip(1).Any(c => !string.IsNullOrWhiteSpace(c.Text))).ToList();
         if (withValues.Count > 0 && withValues.Count(l => RecapLike.IsMatch(l.FirstText)) * 2 >= withValues.Count) return false;
         return table.Rows.Any(row => { var pick = PickOf(row); return row.Lines.Any(l => IsObject(l, pick)); });

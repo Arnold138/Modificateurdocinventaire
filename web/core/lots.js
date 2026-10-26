@@ -66,6 +66,8 @@ const RECAP_LIKE = /^\W{0,2}[IVXLliJj1|!{\[]{1,5}\s*[-–.]\s+\S/;
  */
 export function tableHasObjects(table) {
   if (table.HasGrid === false || !(table.RowYs?.length >= 2) || !(table.ColumnXs?.length >= 4)) return false;
+  // Une colonne large (la désignation) : pas un cadre de titre sur fond tramé, lu comme une suite de colonnes étroites.
+  if (!itemTable(table)) return false;
   const withValues = table.Rows.flatMap((r) => r.Lines).filter((l) => l.Kind !== 'EnTete' && l.Cells.slice(1).some((c) => !blank(c.Text)));
   if (withValues.length > 0 && withValues.filter((l) => RECAP_LIKE.test(firstText(l))).length * 2 >= withValues.length) return false;
   return table.Rows.some((row) => { const pick = pickOf(row); return row.Lines.some((l) => isObject(l, pick)); });
@@ -202,6 +204,27 @@ export function addLot(project, line) {
   line.LotManual = false;
   if (!lotsActive(project)) line.LotSlot = true;
   resyncLots(project);
+}
+
+/** Tableau d'objets (au moins trois colonnes dont une large, la désignation) : on peut y ajouter une case même si ses lots sont éteints. */
+export function itemTable(t) {
+  if (!t || t.HasGrid === false || !(t.RowYs?.length >= 2) || !(t.ColumnXs?.length >= 4)) return false;
+  let widest = 0;
+  for (let c = 0; c + 1 < t.ColumnXs.length; c++) widest = Math.max(widest, t.ColumnXs[c + 1] - t.ColumnXs[c]);
+  return widest * 100 >= 35 * (t.ColumnXs[t.ColumnXs.length - 1] - t.ColumnXs[0]);
+}
+
+/**
+ * « + » sur une ligne (ex. un objet dans une grande case) : une case vide apparaît à sa hauteur, rien d'autre ne bouge.
+ * Dans un tableau qui n'avait pas de lots, le tableau les reçoit, mais seule cette ligne a une case (les autres objets
+ * gardent « pas de case » : on les ajoute un par un avec « + », ou avec Lots › Pages et tableaux).
+ */
+export function addLotHere(project, table, line) {
+  if (table?.LotsOff) {
+    table.LotsOff = false;
+    for (const o of objectLines(project)) if (o.table === table && o.line !== line && !hasLotCell(o.line)) o.line.NoLot = true;
+  }
+  addLot(project, line);
 }
 
 /** Met les cases en place (une par objet) sans toucher à aucun numéro. */

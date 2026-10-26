@@ -134,12 +134,15 @@ function inkBottomOf(l) {
  * `above` : la rangée est posée juste au-dessus de celle de la ligne (sinon juste en dessous).
  * Renvoie la nouvelle ligne (la hauteur de son texte sur plusieurs lignes est à recalculer par l'écran).
  */
-export function copyLine(page, line, blank = false, above = false) {
+export function copyLine(page, line, blank = false, above = false, src = line) {
   const at = locate(page, line);
-  if (!at || !canCopyLine(page, line) || (above && at.r === 0)) return null;
+  if (!at || (src === line && !canCopyLine(page, line)) || (above && at.r === 0)) return null;
   const { table: t, r } = at;
-  const { top, bottom } = lineBand(at, line);
-  const filetTop = cutY(t.RowYs[r]);
+  // Modèle de la rangée (`src`, même tableau) : hauteur, filets et place des cases ; `line` : où la poser.
+  const sat = src === line ? at : locate(page, src);
+  if (!sat || sat.table !== t) return null;
+  const { top, bottom } = lineBand(sat, src);
+  const filetTop = cutY(t.RowYs[sat.r]);
   const body = partsOf(page, top, bottom);
   const cols = t.ColumnXs.map((x) => Math.floor(x + 0.5)), x0 = Math.floor(t.ColumnXs[0]) - 4, x1 = Math.ceil(t.ColumnXs[t.ColumnXs.length - 1]) + 4;
   // Rangée la plus nette pour prolonger les filets : la plus longue rangée d'image, sinon l'interligne d'une rangée ajoutée.
@@ -150,20 +153,20 @@ export function copyLine(page, line, blank = false, above = false) {
     ...(blank && longest ? [{ Src: longest.Src, Height: bodyH, Gap: true, Span: span, Cols: cols, X0: x0, X1: x1 }] : body)];
   // Sous le texte, autant d'espace qu'au-dessus (la ligne copiée peut venir d'une rangée de plusieurs lignes) :
   // un interligne propre, filets verticaux prolongés depuis la rangée la plus nette de la ligne copiée.
-  const inkTop = lineTop(line), inkBottom = inkBottomOf(line);
+  const inkTop = lineTop(src), inkBottom = inkBottomOf(src);
   const spaceAbove = inkTop - top, below = bodyH - (inkBottom - top);
   const pad = Math.min(40, Math.max(0, Math.ceil(spaceAbove - below)));
-  if (pad > 0 && longest) parts.push({ Src: longest.Src, Height: pad, Gap: true, Span: span, Cols: cols, X0: x0, X1: x1 });
+  if (pad > 0 && longest && src === line) parts.push({ Src: longest.Src, Height: pad, Gap: true, Span: span, Cols: cols, X0: x0, X1: x1 });
   const y = cutY(t.RowYs[above ? r : r + 1]);
   // Cases de la ligne, relevées avant que la bande ne décale la page.
-  const src = line.Cells.map((f) => ({ f, b: baseBox(line, f), ink: f.Ink }));
+  const cells = src.Cells.map((f) => ({ f, b: baseBox(src, f), ink: f.Ink }));
   const band = insertBand(page, y, parts, 'Copy');
   // Ligne recopiée : mêmes cases, posées dans la nouvelle rangée (même place par rapport à leur rangée).
   const dy = y + FILET - top;
   const copy = {
-    Kind: blank ? 'Article' : line.Kind, KindChosenByUser: !blank && !!line.KindChosenByUser, OutsideTable: false,
+    Kind: blank ? 'Article' : src.Kind, KindChosenByUser: !blank && !!src.KindChosenByUser, OutsideTable: false,
     Lot: '', LotManual: false, LotSlot: false, NoLot: false, ForceLot: false, Extra: 0, ExtraAt: 0, Copy: true,
-    Cells: src.map(({ f, b, ink }) => ({
+    Cells: cells.map(({ f, b, ink }) => ({
       ...f, Id: `${page.Id}-${band.Id}-${f.Column}`, Locked: false,
       Box: { ...b, Y: b.Y + dy },
       Ink: Rect.isEmpty(ink) || blank ? Rect.empty() : { ...ink, Y: ink.Y + dy },

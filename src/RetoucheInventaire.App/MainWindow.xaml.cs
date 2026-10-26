@@ -435,7 +435,9 @@ public sealed partial class MainWindow : Window
         view.LotAdded += async (_, line) => await GuardAsync("Ajouter une case de lot", async () =>
         {
             PushUndo();
-            Lots.Add(_project, line);
+            Lots.AddHere(_project, CurrentPage is { } cp ? Rows.Locate(cp, line)?.Table : null, line); // tableau sans lots : seule cette ligne
+            Replan();
+            RecomputeTotals();
             await RefreshViewAsync();
             SetStatus("Case de lot ajoutée : tapez le numéro.");
             ScheduleAutosave();
@@ -454,6 +456,7 @@ public sealed partial class MainWindow : Window
         view.UnitMoved += async (v, table, unit, before) => await PlaceZeroAsync(v.Page, table, unit, before);
         view.LineCommands = LineCommandsFor;
         view.ColumnAdded += async (v, table, c) => await ColumnActionAsync(v.Page, table, c, true);
+        view.RowsRequested += async (v, line) => await AddRowsDialogAsync(v.Page, line);
         view.ColumnRemoved += async (v, table, c) => await ColumnActionAsync(v.Page, table, c, false);
         view.SetUiScale(PageScroller.ZoomFactor);
         view.SetLockMode(LockToggle.IsChecked == true);
@@ -695,6 +698,8 @@ public sealed partial class MainWindow : Window
             if (Rows.Locate(page, line) is { R: > 0 })
                 list.Add(new("Ajouter une ligne vide au-dessus", "Rangée complète (case de lot, désignation, prix) au-dessus de cette rangée.", "\uE710",
                     () => _ = LineActionAsync("blankAbove", 0, f)));
+            list.Add(new("Ajouter des lignes… (1, 5, 10, 15)", "Plusieurs lignes vides d'un coup, mêmes colonnes et même hauteur que les lignes du tableau.", "\uE8FD",
+                () => _ = AddRowsDialogAsync(page, line)));
             list.Add(new("Dupliquer la ligne", "Copie juste en dessous (texte et prix), à corriger. La suite descend.", "\uE8C8",
                 () => _ = LineActionAsync("copy", 0, f)));
         }
@@ -702,7 +707,7 @@ public sealed partial class MainWindow : Window
             list.Add(new("Séparer ici", $"« {Short(rest)} » passe dans sa propre ligne, juste en dessous.", "\uE8C6",
                 () => _ = LineActionAsync("typed", typed, f)));
         else if (Rows.CanSplit(page, line))
-            list.Add(new("Séparer au-dessus (tracer un trait)", "Un trait au-dessus de cette ligne : elle devient une rangée à part, avec sa case de lot et ses prix.", "\uE8C6",
+            list.Add(new("Couper ici (trait au-dessus de cette ligne)", "Un trait au-dessus de cette ligne : elle devient une rangée à part (sortie de la grande case), avec sa case de lot et ses prix.", "\uE8C6",
                 () => _ = LineActionAsync("split", 0, f)));
         if (Rows.CanSplitBelow(page, line))
             list.Add(new("Séparer en dessous (tracer un trait)", "Un trait sous cette ligne : ce qui suit devient une rangée à part.", "\uE8C6",
@@ -710,8 +715,8 @@ public sealed partial class MainWindow : Window
         if (Lots.HasCell(line) && !Lots.IsZero(line))
             list.Add(new("Mettre à la fin (lot 0)", "Objet absent : sa ligne part à la fin, ce qui suit remonte.", "\uE74B",
                 () => _ = LineActionAsync("end", 0, f)));
-        if (Lots.IsActive(_project) && Rows.Locate(page, line) is { } at0 && !at0.Table.LotsOff && !Lots.HasCell(line) && line.FirstText.Length > 0)
-            list.Add(new("Ajouter une case de lot", "La case manque sur cet objet : elle apparaît vide (tapez le numéro ou « Synchroniser »).", "\uE710",
+        if (Lots.IsActive(_project) && Rows.Locate(page, line) is { } at0 && (!at0.Table.LotsOff || Lots.ItemTable(at0.Table)) && !Lots.HasCell(line) && line.FirstText.Length > 0)
+            list.Add(new("Ajouter une case de lot ici", "Une case vide à la hauteur de cette ligne (même dans une grande case) : tapez le numéro. Les autres numéros ne bougent pas.", "\uE710",
                 () => _ = LineActionAsync("addLot", 0, f)));
         if (Rows.RowTrimOf(page, line) != null)
             list.Add(new("Réduire la rangée (enlever l'espace vide)", "La rangée prend la hauteur des autres ; ce qui suit remonte.", "\uE73F",
@@ -775,7 +780,7 @@ public sealed partial class MainWindow : Window
         if (act == "addLot")
         {
             PushUndo();
-            Lots.Add(_project, line);
+            Lots.AddHere(_project, Rows.Locate(page, line)?.Table, line);
             Replan();
             RecomputeTotals();
             await RefreshViewAsync();
@@ -972,11 +977,13 @@ public sealed partial class MainWindow : Window
             TextWrapping = TextWrapping.Wrap,
             Inlines =
             {
-                new Microsoft.UI.Xaml.Documents.Run { Text = "Nouvelle page " },
-                new Microsoft.UI.Xaml.Documents.Run { Text = "vierge", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold },
-                new Microsoft.UI.Xaml.Documents.Run { Text = " sur le modèle de cette page : mêmes tableaux, mêmes lignes, mêmes en-têtes. Tout le reste est vide, à remplir à la main." },
+                new Microsoft.UI.Xaml.Documents.Run { Text = "Nouvelle page sur le modèle de cette page (mêmes colonnes, mêmes traits, mêmes en-têtes), à remplir à la main :" },
             },
         });
+        var blankChoice = Choice("addKind", "Page blanche", "L'en-tête du tableau et une ligne ; vous ajoutez les lignes qu'il faut (« + » à droite d'une ligne › Ajouter des lignes : 1, 5, 10, 15…).", true);
+        var fullChoice = Choice("addKind", "Page remplie de lignes vides", "Tous les tableaux et toutes les lignes du modèle, vides.", false);
+        panel.Children.Add(blankChoice);
+        panel.Children.Add(fullChoice);
         panel.Children.Add(new TextBlock { Text = "Placer la page :" });
         panel.Children.Add(where);
         panel.Children.Add(new TextBlock
@@ -993,7 +1000,7 @@ public sealed partial class MainWindow : Window
         int at = positions[Math.Max(0, where.SelectedIndex)];
         var flat = _flats.TryGetValue(model, out var cached) ? cached : await RestoreFlatAsync(model);
         PushUndo();
-        var page = AddedPage.AddBlankPage(_project, model, at, flat);
+        var page = AddedPage.AddBlankPage(_project, model, at, flat, null, blankChoice.IsChecked == true);
         if (page is null)
         {
             _undo.RemoveAt(_undo.Count - 1);
@@ -1006,6 +1013,60 @@ public sealed partial class MainWindow : Window
         RecomputeTotals();
         await ShowPageAsync(_project.Pages.IndexOf(page));
         SetStatus($"Page {_project.Pages.IndexOf(page) + 1} ajoutée : touchez une case pour écrire. ↶ pour annuler.");
+        ScheduleAutosave();
+    }
+
+    /// <summary>« Ajouter des lignes » : combien (1, 5, 10, 15 ou au choix), en dessous ou au-dessus de la ligne.</summary>
+    private Task AddRowsDialogAsync(ModelPage page, PrintedLine line) => GuardAsync("Ajouter des lignes", () => AddRowsDialogAsyncCore(page, line));
+
+    private async Task AddRowsDialogAsyncCore(ModelPage page, PrintedLine line)
+    {
+        if (_busy) return;
+        var number = new NumberBox { Value = 10, Minimum = 1, Maximum = 200, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline, Header = "Autre nombre", MinWidth = 160 };
+        var quick = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        foreach (int k in new[] { 1, 5, 10, 15 })
+        {
+            var b = new Button { Content = k.ToString(), MinWidth = 56, MinHeight = 44, FontSize = 17 };
+            b.Click += (_, _) => number.Value = k;
+            quick.Children.Add(b);
+        }
+        var aboveBox = new CheckBox { Content = "au-dessus de cette ligne (sinon en dessous)" };
+        var panel = new StackPanel { Spacing = 10, MaxWidth = 480 };
+        panel.Children.Add(new TextBlock { Text = "Combien de lignes vides ?" });
+        panel.Children.Add(quick);
+        panel.Children.Add(number);
+        panel.Children.Add(aboveBox);
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Mêmes colonnes, même hauteur et mêmes traits que les lignes du tableau ; la case de lot apparaît quand on écrit. La page garde sa taille : si elle est pleine, la suite part sur une page blanche juste après.",
+            FontSize = 13, Opacity = 0.7, TextWrapping = TextWrapping.Wrap,
+        });
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot, Title = "Ajouter des lignes", Content = panel,
+            PrimaryButtonText = "Ajouter", CloseButtonText = "Annuler", DefaultButton = ContentDialogButton.Primary,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        int n = double.IsNaN(number.Value) ? 10 : Math.Clamp((int)number.Value, 1, 200);
+        bool above = aboveBox.IsChecked == true && (Rows.Locate(page, line)?.R ?? 0) > 0;
+        Raster? flat = page.Added != null ? null : _flats.TryGetValue(page, out var cached) ? cached : await RestoreFlatAsync(page);
+        PushUndo();
+        var res = AddedPage.AddRows(_project, page, line, n, above, flat);
+        if (res.Added == 0)
+        {
+            _undo.RemoveAt(_undo.Count - 1);
+            UpdateCommands();
+            SetStatus("Impossible d'ajouter des lignes ici : choisissez une ligne d'un tableau.");
+            return;
+        }
+        Arrangement.SyncEndPages(_project);
+        Replan();
+        RecomputeTotals();
+        await RefreshViewAsync();
+        if (res.Last != null && CurrentPage == page) _view?.FlashLine(res.Last);
+        string more = res.Pages.Count == 0 ? "" :
+            $" La page était pleine : la suite est sur {(res.Pages.Count > 1 ? "les pages " + string.Join(", ", res.Pages.Select(p => _project.Pages.IndexOf(p) + 1)) : $"la page {_project.Pages.IndexOf(res.Pages[0]) + 1}")} (page blanche ajoutée).";
+        SetStatus($"{res.Added} ligne(s) ajoutée(s).{more} ↶ pour annuler.");
         ScheduleAutosave();
     }
 

@@ -10,7 +10,7 @@ import { buildPdf } from './core/pdf.js';
 import { buildTxt, txtBlob, composeIntoSource, outputName } from './core/exports.js';
 import { decodeText, parseDelimited, readXlsx, buildDataPage } from './core/importers.js';
 import { packProject, unpackProject, EXTENSION } from './core/store.js';
-import { objectLines, lotsActive, numberLots, clearLots, setLot, resyncLots, removeLot, addLot, repairName, naturalCompare, createEmptyLots, fillLotsAutomatically, emptyLots, isZeroLot, rowOrder, lotTables, defaultLotChoice, setLotTables } from './core/lots.js';
+import { itemTable, addLotHere, objectLines, lotsActive, numberLots, clearLots, setLot, resyncLots, removeLot, addLot, repairName, naturalCompare, createEmptyLots, fillLotsAutomatically, emptyLots, isZeroLot, rowOrder, lotTables, defaultLotChoice, setLotTables } from './core/lots.js';
 import { unzipSync } from './vendor/fflate.js';
 import { stretch, setExtra, baseHeight, totalExtra } from './core/layout.js';
 import { toggleStrike, isStruck, setColor, RED, BLACK, TEXT_COLORS } from './core/strikes.js';
@@ -24,7 +24,7 @@ import { recognize, warmUp } from './services/ocr.js';
 import { rasterToCanvas, canvasToBlob, renderEdits, freeCanvas, lineExtra, pageRaster } from './services/canvas.js';
 import * as db from './services/db.js';
 import { PageView } from './ui/pageview.js';
-import { addBlankPage, blankBase, canBeModel, addColumn, removeColumn } from './core/addpage.js';
+import { addBlankPage, blankBase, canBeModel, addColumn, removeColumn, addRows } from './core/addpage.js';
 import { cropDialog } from './ui/crop.js';
 
 const $ = (id) => document.getElementById(id);
@@ -401,13 +401,14 @@ async function showPage(n, { flat = null, fit = true, keepScroll = false } = {})
     },
     onLotAdd: (v, line) => {
       pushUndo();
-      addLot(state.project, line);
+      addLotHere(state.project, locate(page, line)?.table ?? null, line); // tableau sans lots : seule cette ligne reçoit une case
       refreshView();
       status('Case de lot ajoutée : tapez le numéro.');
       scheduleSave();
     },
     onLineMenu: (v, f, at) => { if (!state.busy) lineMenu(f, at); },
     onAddColumn: (v, table, c) => run(() => columnAction(page, table, c, true)),
+    onAddRows: (v, line) => run(() => rowsDialog(page, line)),
     onRemoveColumn: (v, table, k) => run(() => columnAction(page, table, k, false)),
     onMoveRow: (v, table, from, before) => {
       pushUndo();
@@ -481,19 +482,20 @@ function lineChoices(f) {
     items.push({ act: 'blankBelow', icon: 'i-addbelow', label: 'Ajouter une ligne vide en dessous', hint: 'Rangée complète (case de lot, désignation, prix) sous cette rangée. La suite descend.' });
     if (locate(page, line)?.r > 0)
       items.push({ act: 'blankAbove', icon: 'i-addabove', label: 'Ajouter une ligne vide au-dessus', hint: 'Rangée complète (case de lot, désignation, prix) au-dessus de cette rangée.' });
+    items.push({ act: 'rows', icon: 'i-rows', label: 'Ajouter des lignes… (1, 5, 10, 15)', hint: 'Plusieurs lignes vides d\'un coup, mêmes colonnes et même hauteur que les lignes du tableau.' });
     items.push({ act: 'copy', icon: 'i-copy', label: 'Dupliquer la ligne', hint: 'Copie juste en dessous (texte et prix), à corriger. La suite descend.' });
   }
   if (typedRest && canCopyLine(page, line))
     items.push({ act: 'typed', from: typed, icon: 'i-split', label: 'Séparer ici', hint: `« ${short(typedRest)} » passe dans sa propre ligne, juste en dessous.` });
   else if (canSplit(page, line))
-    items.push({ act: 'split', icon: 'i-split', label: 'Séparer au-dessus (tracer un trait)', hint: 'Un trait au-dessus de cette ligne : elle devient une rangée à part, avec sa case de lot et ses prix.' });
+    items.push({ act: 'split', icon: 'i-split', label: 'Couper ici (trait au-dessus de cette ligne)', hint: 'Un trait au-dessus de cette ligne : elle devient une rangée à part (sortie de la grande case), avec sa case de lot et ses prix.' });
   if (canSplitBelow(page, line))
     items.push({ act: 'splitBelow', icon: 'i-split', label: 'Séparer en dessous (tracer un trait)', hint: 'Un trait sous cette ligne : ce qui suit devient une rangée à part.' });
   if (hasLotCell(line) && !isZeroLot(line))
     items.push({ act: 'end', icon: 'i-addbelow', label: 'Mettre à la fin (lot 0)', hint: 'Objet absent : sa ligne part à la fin, ce qui suit remonte.' });
   const at0 = locate(page, line);
-  if (lotsActive(state.project) && at0 && !at0.table.LotsOff && !hasLotCell(line) && firstText(line))
-    items.push({ act: 'addLot', icon: 'i-plus', label: 'Ajouter une case de lot', hint: 'La case manque sur cet objet : elle apparaît vide (tapez le numéro ou « Synchroniser »).' });
+  if (lotsActive(state.project) && at0 && (!at0.table.LotsOff || itemTable(at0.table)) && !hasLotCell(line) && firstText(line))
+    items.push({ act: 'addLot', icon: 'i-plus', label: 'Ajouter une case de lot ici', hint: 'Une case vide à la hauteur de cette ligne (même dans une grande case) : tapez le numéro. Les autres numéros ne bougent pas.' });
   if (rowTrimOf(page, line))
     items.push({ act: 'trim', icon: 'i-merge', label: 'Réduire la rangée (enlever l\'espace vide)', hint: 'La rangée prend la hauteur des autres ; ce qui suit remonte.' });
   else if (trimsOf(page, line).length)
@@ -548,9 +550,10 @@ async function lineAction(item, f) {
   const { page, line } = hit;
   const name = short(firstText(line)) || 'ligne vide';
   if (item.act === 'end') return applyLot(state.view, line, '0');
+  if (item.act === 'rows') return rowsDialog(page, line);
   if (item.act === 'addLot') {
     pushUndo();
-    addLot(state.project, line);
+    addLotHere(state.project, locate(page, line)?.table ?? null, line);
     replan(); recomputeAll();
     await refreshView();
     status(`Case de lot ajoutée sur « ${name} » : tapez le numéro, ou « Synchroniser… » (les autres numéros ne bougent pas).`);
@@ -940,20 +943,52 @@ async function addPageDialog(model) {
   const options = [`<option value="${end}" selected>à la fin de l'inventaire${list.some((p) => p.EndLots) ? ' (avant « Lots de fin »)' : ''}</option>`,
     `<option value="0">au début (avant la page 1)</option>`,
     ...list.map((p, i) => `<option value="${i + 1}">après la page ${i + 1} · ${escapeHtml(short(p.SourceName))}</option>`)].join('');
-  const html = `<p>Nouvelle page <b>vierge</b> sur le modèle de cette page : mêmes tableaux, mêmes lignes, mêmes en-têtes. Tout le reste est vide, à remplir à la main.</p>
+  const html = `<p>Nouvelle page sur le modèle de cette page (mêmes colonnes, mêmes traits, mêmes en-têtes), à remplir à la main :</p>
+    <label class="choice"><input type="radio" name="addKind" value="empty" checked> <span><b>Page blanche</b><small>L'en-tête du tableau et une ligne ; vous ajoutez les lignes qu'il faut (« + » à droite d'une ligne › Ajouter des lignes : 1, 5, 10, 15…).</small></span></label>
+    <label class="choice"><input type="radio" name="addKind" value="full"> <span><b>Page remplie de lignes vides</b><small>Tous les tableaux et toutes les lignes du modèle, vides.</small></span></label>
     <p><label>Placer la page <select id="addAt">${options}</select></label></p>
     <p class="muted">Sur la page ajoutée : « + » à droite d'une ligne (ligne au-dessus, en dessous, plus haute, case de lot…), « + » au-dessus d'une colonne pour la couper en deux, « − » sous un trait pour réunir deux colonnes.</p>`;
   const choice = await dialog('Ajouter une page', html, [{ label: 'Annuler', value: null }, { label: 'Ajouter', value: 'ok', className: 'accent' }]);
   if (choice !== 'ok') return;
   const at = Math.max(0, Math.min(list.length, +$('addAt').value || 0));
+  const empty = (document.querySelector('input[name=addKind]:checked')?.value ?? 'empty') === 'empty';
   const flat = state.flats.get(model) ?? (await restoreFlat(model));
   pushUndo();
-  const page = addBlankPage(state.project, model, at, flat);
+  const page = addBlankPage(state.project, model, at, flat, null, empty);
   if (!page) { state.undo.pop(); updateButtons(); return status('Impossible d\'ajouter une page sur ce modèle.'); }
   syncEndPages(state.project);
   replan(); recomputeAll();
   await showPage(pages().indexOf(page));
   status(`Page ${pages().indexOf(page) + 1} ajoutée : touchez une case pour écrire. ↶ pour annuler.`);
+  scheduleSave();
+}
+
+/** « Ajouter des lignes » : combien (1, 5, 10, 15 ou au choix), en dessous ou au-dessus de la ligne. */
+async function rowsDialog(page, line) {
+  const html = `<p>Combien de lignes vides ?</p>
+    <div class="counts">${[1, 5, 10, 15].map((n) => `<button data-n="${n}" class="${n === 10 ? 'on' : ''}">${n}</button>`).join('')}</div>
+    <p><label>Autre nombre : <input type="number" id="rowsN" min="1" max="200" value="10" inputmode="numeric"></label></p>
+    <p><label><input type="checkbox" id="rowsAbove"> au-dessus de cette ligne (sinon en dessous)</label></p>
+    <p class="muted">Mêmes colonnes, même hauteur et mêmes traits que les lignes du tableau ; la case de lot apparaît quand on écrit. La page garde sa taille : si elle est pleine, la suite part sur une page blanche juste après.</p>`;
+  const choice = await dialog('Ajouter des lignes', html, [{ label: 'Annuler', value: null }, { label: 'Ajouter', value: 'ok', className: 'accent' }], (e) => {
+    const b = e.target.closest('button[data-n]');
+    if (!b) return;
+    $('rowsN').value = b.dataset.n;
+    for (const x of $('dialogBody').querySelectorAll('button[data-n]')) x.classList.toggle('on', x === b);
+  });
+  if (choice !== 'ok') return;
+  const n = Math.max(1, Math.min(200, Math.trunc(+$('rowsN').value || 0)));
+  const above = $('rowsAbove').checked && (locate(page, line)?.r ?? 0) > 0;
+  const flat = page.Added ? null : state.flats.get(page) ?? (await restoreFlat(page));
+  pushUndo();
+  const res = addRows(state.project, page, line, n, { above, img: flat });
+  if (!res.added) { state.undo.pop(); updateButtons(); return status('Impossible d\'ajouter des lignes ici : choisissez une ligne d\'un tableau.'); }
+  syncEndPages(state.project);
+  replan(); recomputeAll();
+  await refreshView();
+  if (res.last && pages()[state.index] === page) state.view?.flashLine(res.last);
+  const more = res.pages.length ? ` La page était pleine : la suite est sur ${res.pages.length > 1 ? `les pages ${res.pages.map((p) => pages().indexOf(p) + 1).join(', ')}` : `la page ${pages().indexOf(res.pages[0]) + 1}`} (page blanche ajoutée).` : '';
+  status(`${res.added} ligne(s) ajoutée(s).${more} ↶ pour annuler.`);
   scheduleSave();
 }
 

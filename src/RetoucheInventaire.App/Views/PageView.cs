@@ -105,6 +105,8 @@ public sealed class PageView
     public event Action<PageView, Table, int>? ColumnAdded;
     /// <summary>Page ajoutée : « − » sous le trait k (réunir les colonnes k−1 et k).</summary>
     public event Action<PageView, Table, int>? ColumnRemoved;
+    /// <summary>Page ajoutée : « Ajouter des lignes » sous le tableau (la ligne : la dernière du tableau).</summary>
+    public event Action<PageView, PrintedLine>? RowsRequested;
 
     /// <summary>Une action du menu « Ligne » (clic droit, appui long ou bouton « Ligne ») : dupliquer, séparer…</summary>
     public sealed record LineCommand(string Label, string Hint, string Glyph, Action Run, bool Danger = false);
@@ -344,6 +346,28 @@ public sealed class PageView
                     int rule = k;
                     Make("\uE738", "Retirer ce trait (réunir les deux colonnes)", xs[k], by, true, _ => ColumnRemoved?.Invoke(this, t, rule));
                 }
+            // « Ajouter des lignes » sous le tableau (à gauche, loin des « − »).
+            var lastStrip = vt.Strips.Where(st => st.R >= info.Head).OrderBy(st => st.Bottom).LastOrDefault();
+            var lastLine = lastStrip != null && lastStrip.R < t.Rows.Count ? t.Rows[lastStrip.R].Lines.FirstOrDefault(l => !l.Deleted && l.Cells.Count > 0) : null;
+            if (lastLine != null)
+            {
+                bool clash = xs.Count > 3 && xs.Skip(1).Take(xs.Count - 2).Any(x => x < xs[0] + 220);
+                var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+                content.Children.Add(new FontIcon { Glyph = "\uE710", FontSize = 13 });
+                content.Children.Add(new TextBlock { Text = "Ajouter des lignes", FontWeight = FontWeights.SemiBold });
+                var rb = new Button
+                {
+                    Height = 30, Padding = new Thickness(10, 0, 12, 0), CornerRadius = new CornerRadius(15), Content = content,
+                    Background = new SolidColorBrush(Colors.White), Foreground = Accent, BorderBrush = Accent, BorderThickness = new Thickness(1.5),
+                    RenderTransformOrigin = new Point(0, 0.5), RenderTransform = new ScaleTransform { ScaleX = _uiScale, ScaleY = _uiScale },
+                };
+                ToolTipService.SetToolTip(rb, "Ajouter 1, 5, 10, 15… lignes vides sous le tableau");
+                Canvas.SetLeft(rb, xs[0]);
+                Canvas.SetTop(rb, (clash ? by + 36 : by) - 15);
+                var target = lastLine;
+                rb.Click += (_, _) => RowsRequested?.Invoke(this, target);
+                _addedLayer.Children.Add(rb);
+            }
             // Lignes : à droite du tableau, au milieu de chaque rangée (pas l'en-tête).
             double right = xs[^1];
             double cx = right + 24 <= _view.Width - 4 ? right + 22 : _view.Width - 18;
@@ -532,7 +556,7 @@ public sealed class PageView
             if (line.OutsideTable || entry.CarriedOnly || line.Cells.Count == 0) continue;
             if (LineBand(entry) is not RectD b) continue;
             AddBadge(line, b.CenterY);
-            if (!active || entry.Table.LotsOff) continue;
+            if (!active || (entry.Table.LotsOff && !Lots.ItemTable(entry.Table))) continue; // tableau d'objets sans lots : « + » quand même
             bool has = Lots.HasCell(line);
             if (!has && !Lots.CanAdd(line, entry.Table.Rows.FirstOrDefault(r => r.Lines.Contains(line)))) continue;
             double h = Math.Max(26, Math.Min(40, b.Height + 6));

@@ -168,7 +168,36 @@ public static partial class AddedPage
     /// Crée la page vierge sur le modèle de <paramref name="model"/> et l'insère à la position <paramref name="at"/>.
     /// <paramref name="img"/> : image de base du modèle (colonnes du bord lues en trop retirées). Null si le modèle ne convient pas.
     /// </summary>
-    public static Page? AddBlankPage(InventoryProject project, Page model, int at, Raster? img = null, string? id = null)
+    /// <summary>
+    /// Rangée modèle d'un tableau : une rangée d'une seule ligne, de hauteur médiane parmi elles (pas l'en-tête, ni une ligne
+    /// agrandie, ni un total ajouté). C'est elle que « Ajouter des lignes » recopie (vierge). Null s'il n'y en a pas.
+    /// </summary>
+    public static int? ReferenceRow(Table t, int head = 0)
+    {
+        var c = new List<(int R, double H)>();
+        for (int r = head; r < t.Rows.Count && r + 1 < t.RowYs.Count; r++)
+        {
+            var ls = t.Rows[r].Lines;
+            if (ls.Count != 1 || ls[0].Cells.Count == 0 || ls[0].Deleted || ls[0].TotalScope != null || ls[0].Kind == LineKind.EnTete || ls[0].Extra > 0 || ls[0].Tall > 0) continue;
+            if (ls[0].Kind is not (LineKind.Article or LineKind.Titre)) continue;
+            c.Add((r, t.RowYs[r + 1] - t.RowYs[r]));
+        }
+        if (c.Count == 0) return null;
+        c.Sort((a, b) => a.H != b.H ? a.H.CompareTo(b.H) : a.R.CompareTo(b.R));
+        return c[(c.Count - 1) / 2].R;
+    }
+
+    private static int HeadOf(Page page, Table t)
+    {
+        int ti = page.Tables.IndexOf(t);
+        return page.Added != null && ti >= 0 && ti < page.Added.Tables.Count && page.Added.Tables[ti] is { } x ? x.Head : HeadRows(t);
+    }
+
+    /// <summary>
+    /// Crée la page vierge sur le modèle de <paramref name="model"/> et l'insère à la position <paramref name="at"/>.
+    /// <paramref name="empty"/> : page blanche — seulement le 1er tableau d'objets, son en-tête et une ligne (la rangée modèle).
+    /// </summary>
+    public static Page? AddBlankPage(InventoryProject project, Page model, int at, Raster? img = null, string? id = null, bool empty = false)
     {
         if (!CanBeModel(model)) return null;
         var page = Clone(model);
@@ -219,6 +248,29 @@ public static partial class AddedPage
             }
         }
         if (info.Tables.Count > page.Tables.Count) info.Tables.RemoveRange(page.Tables.Count, info.Tables.Count - page.Tables.Count);
+        if (empty)
+        {
+            // Page blanche : le 1er tableau d'objets garde son en-tête et une seule ligne (la rangée modèle, posée sous l'en-tête) ;
+            // les tableaux en dessous disparaissent, et tout ce qui est sous cette ligne devient papier.
+            int ti0 = info.Tables.FindIndex(x => x != null);
+            var t0 = page.Tables[ti0];
+            var x0 = info.Tables[ti0]!;
+            int head = x0.Head;
+            double top = t0.RowYs[head];
+            int r0 = ReferenceRow(t0, head) ?? Math.Min(head, t0.Rows.Count - 1);
+            double h = t0.RowYs[r0 + 1] - t0.RowYs[r0], dy = top - t0.RowYs[r0];
+            var row = t0.Rows[r0];
+            foreach (var l in row.Lines) foreach (var f in l.Cells) f.Box = f.Box with { Y = f.Box.Y + dy };
+            t0.Rows = [.. t0.Rows.Take(head), row];
+            t0.RowYs = [.. t0.RowYs.Take(head + 1), top + h];
+            RowBounds(t0);
+            x0.Ys = t0.RowYs.ToList();
+            double t0Top = t0.RowYs[0];
+            var keep = page.Tables.Select((t, ti) => ti == ti0 || !GridTable(t) || t.RowYs[0] < t0Top).ToList();
+            page.Tables = page.Tables.Where((t, ti) => keep[ti]).ToList();
+            info.Tables = info.Tables.Where((x, ti) => keep[ti]).ToList();
+            info.Tail = top + h;
+        }
         // Sous le dernier tableau vidé (total général, pied de page) : page vide.
         if (info.Tail is null)
         {
@@ -259,10 +311,71 @@ public static partial class AddedPage
         info.Next = 0;
         page.Added = info;
         page.EndLots = false;
-        page.SourceName = $"Page ajoutée (modèle : page {project.Pages.IndexOf(model) + 1})";
+        page.SourceName = $"{(empty ? "Page blanche" : "Page ajoutée")} (modèle : page {project.Pages.IndexOf(model) + 1})";
         PageAnalyzer.AssignIds(page);
         project.Pages.Insert(Math.Clamp(at, 0, project.Pages.Count), page);
         return page;
+    }
+
+    // ---------- Ajouter des lignes (1, 5, 10, 15…) ----------
+
+    /// <summary>Bas de ce qui est écrit ou tracé sur la page (tableaux, textes, zones verrouillées).</summary>
+    private static double ContentBottom(Page page)
+    {
+        double b = 0;
+        foreach (var t in page.Tables) if (GridTable(t)) b = Math.Max(b, t.RowYs[^1]);
+        foreach (var l in page.AllLines()) foreach (var f in l.Cells) if (f.Text.Trim().Length > 0 || !f.Ink.IsEmpty) b = Math.Max(b, f.Box.Y + f.Box.Height);
+        foreach (var z in page.LockZones) b = Math.Max(b, z.Y + z.Height);
+        return b;
+    }
+
+    public sealed record RowsResult(int Added, List<Page> Pages, PrintedLine? Last);
+
+    /// <summary>
+    /// « Ajouter des lignes » : <paramref name="n"/> rangées vierges sous (ou, pour la 1re, au-dessus de) la rangée de
+    /// <paramref name="line"/>, chacune recopiée de la rangée modèle du tableau. La page garde sa taille (la place est prise dans
+    /// le blanc du bas) ; quand elle est pleine, la suite part sur une page blanche ajoutée juste après.
+    /// </summary>
+    public static RowsResult AddRows(InventoryProject project, Page page, PrintedLine line, int n, bool above = false, Raster? img = null, string? id = null)
+    {
+        int added = 0;
+        var pages = new List<Page>();
+        PrintedLine? last = null;
+        var cur = page;
+        var dest = line;
+        bool first = above;
+        for (int guard = 0; added < n && guard < 4 * n + 10; guard++)
+        {
+            var at = Rows.Locate(cur, dest);
+            if (at is null) break;
+            var t = at.Table;
+            int? r0 = ReferenceRow(t, HeadOf(cur, t));
+            var reference = r0 is int rr ? t.Rows[rr].Lines[0] : dest;
+            int H = PageLayout.BaseHeight(cur), margin = Math.Max(40, (int)Math.Round(H * 0.025, MidpointRounding.AwayFromZero));
+            int before = cur.Height;
+            var made = Rows.Copy(cur, dest, blank: true, above: first, from: reference);
+            if (made is null) break;
+            made.Copy = false; // case de lot quand on écrit dans la ligne (pas de numéros sur des lignes vides)
+            bool fits = ContentBottom(cur) <= H - margin;
+            // Page pleine mais pas de page suivante possible (tableau trop modifié pour servir de modèle) : la page s'allonge.
+            if (fits || !CanBeModel(cur) || pages.Count > 20)
+            {
+                // La page garde sa taille : autant de blanc retiré en bas qu'il a été ajouté.
+                int k = fits ? Math.Min(cur.Height - before, cur.Height - H) : 0;
+                if (k > 0) PageLayout.CutBand(cur, cur.Height - k, k, null);
+                added++; last = made; dest = made; first = false;
+                continue;
+            }
+            Rows.RemoveAdded(cur, made); // plus de place : cette ligne part sur la page suivante
+            var next = AddBlankPage(project, cur, project.Pages.IndexOf(cur) + 1, cur.Added != null ? null : img, id != null ? $"{id}-{pages.Count + 1}" : null, true);
+            if (next is null) break;
+            pages.Add(next);
+            cur = next;
+            var t0 = next.Tables[next.Added!.Tables.FindIndex(x => x != null)];
+            dest = t0.Rows[^1].Lines[0];
+            added++; last = dest; first = false; // la page blanche porte déjà une ligne
+        }
+        return new RowsResult(added, pages, last);
     }
 
     /// <summary>Tableau vidé de la page ajoutée (on peut y ajouter ou retirer des colonnes).</summary>

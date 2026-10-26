@@ -1243,6 +1243,34 @@ public static class Tests
         Check(b.Added!.Tables[ti]!.Orig.SequenceEqual(info.Orig), "copie d'une page ajoutée : mêmes repères d'origine");
     }
 
+    public static void T_Ajouter_des_lignes_page_blanche()
+    {
+        var p = new InventoryProject();
+        p.Pages.Add(Fixtures.Analyze("page1"));
+        var img = Fixtures.Load("page1").Image;
+        var blank = AddedPage.AddBlankPage(p, p.Pages[0], 1, img, "bl", empty: true)!;
+        var t = blank.Tables[blank.Added!.Tables.FindIndex(x => x != null)];
+        int head = blank.Added.Tables[blank.Tables.IndexOf(t)]!.Head;
+        Equal(head + 1, t.Rows.Count, "page blanche : en-tête et une ligne");
+        Equal(blank.Height, PageLayout.BaseHeight(blank), "même taille que le modèle");
+        double h = t.RowYs[^1] - t.RowYs[^2];
+        var res = AddedPage.AddRows(p, blank, t.Rows[^1].Lines[0], 60, id: "suite");
+        Equal(60, res.Added, "60 lignes ajoutées");
+        Check(res.Pages.Count >= 1, "page pleine : la suite sur une page blanche");
+        Equal(PageLayout.BaseHeight(blank), blank.Height, "la page garde sa taille");
+        Check(t.Rows.Skip(head).All(r => Math.Abs(r.Bounds.Height - h) < 1.5), "toutes les lignes ont la hauteur de la ligne modèle");
+        Check(p.Pages.IndexOf(res.Pages[0]) == p.Pages.IndexOf(blank) + 1, "page suivante juste après");
+        // Sur une page de l'inventaire : 3 lignes sous une ligne, la page garde sa taille.
+        var a = p.Pages[0];
+        var ta = a.Tables.First(x => x.Rows.Count > 5 && x.ColumnXs.Count >= 4);
+        int n0 = ta.Rows.Count, H = a.Height;
+        var line = ta.Rows[3].Lines[0];
+        var r2 = AddedPage.AddRows(p, a, line, 3, img: img, id: "n");
+        Equal(3, r2.Added, "3 lignes");
+        Check(ta.Rows.Count > n0 || r2.Pages.Count > 0, "lignes ajoutées dans le tableau ou sur la page suivante");
+        Check(a.Height <= Math.Max(H, PageLayout.BaseHeight(a)) || !AddedPage.CanBeModel(a), "la page ne grandit pas");
+    }
+
     public static void T_Reduire_la_rangee()
     {
         var p = new InventoryProject();

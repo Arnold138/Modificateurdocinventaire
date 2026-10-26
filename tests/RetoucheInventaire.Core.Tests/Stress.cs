@@ -158,8 +158,15 @@ public static class Stress
             case "removeAdded": Rows.RemoveAdded(page, line); break;
             case "addPage":
             {
-                var pg = AddedPage.AddBlankPage(project, page, a.GetProperty("at").GetInt32(), _raw[page.Id], a.GetProperty("id").GetString());
+                bool empty = a.TryGetProperty("empty", out var e) && e.GetBoolean();
+                var pg = AddedPage.AddBlankPage(project, page, a.GetProperty("at").GetInt32(), _raw[page.Id], a.GetProperty("id").GetString(), empty);
                 if (pg != null) { _raw[pg.Id] = _raw[page.Id]; _baseH[pg.Id] = PageLayout.BaseHeight(pg); }
+                break;
+            }
+            case "addRows":
+            {
+                var res = AddedPage.AddRows(project, page, line, a.GetProperty("n").GetInt32(), a.GetProperty("above").GetBoolean(), _raw[page.Id], a.GetProperty("id").GetString());
+                foreach (var pg in res.Pages) { _raw[pg.Id] = _raw[page.Id]; _baseH[pg.Id] = PageLayout.BaseHeight(pg); }
                 break;
             }
             case "removePage": if (page.Added != null) pages.RemoveAt(p); break;
@@ -178,6 +185,7 @@ public static class Stress
             case "restore": line.Deleted = false; break;
             case "lot": Lots.Set(project, line, a.GetProperty("v").GetString()!); break;
             case "addLot": Lots.Add(project, line); break;
+            case "addLotHere": Lots.AddHere(project, table, line); break;
             case "sync":
             {
                 var pg = a.GetProperty("page");
