@@ -600,7 +600,7 @@ public sealed class PageView
             var row = entry.Table.Rows.FirstOrDefault(r => r.Lines.Contains(line));
             if (!has && !Lots.CanAdd(line, row)) continue;
             // Ligne ajoutée ou page ajoutée : « + » bien visible (comme le « + » des lignes à droite), même sur une ligne vide.
-            bool strong = !has && (_view.Page.Added != null || row?.Inserted == true);
+            bool strong = !has && (_view.Page.Added != null || !string.IsNullOrEmpty(row?.Inserted));
             double h = Math.Max(26, Math.Min(40, b.Height + 6));
             var button = new Button
             {
