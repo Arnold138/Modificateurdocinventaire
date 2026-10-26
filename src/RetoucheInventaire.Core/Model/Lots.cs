@@ -32,7 +32,7 @@ public static class Lots
                     var row = table.Rows[r];
                     var pick = PickOf(row);
                     foreach (var line in row.Lines)
-                        if (IsObject(line, pick)) yield return (page, table, r, line);
+                        if (IsObject(line, pick, page.Added != null)) yield return (page, table, r, line);
                 }
             }
     }
@@ -140,8 +140,10 @@ public static class Lots
         return words >= 2 && letters > 3 * signs;
     }
 
-    private static bool IsObject(PrintedLine line, PrintedLine? pick) =>
-        !line.NoLot && !line.OutsideTable && !line.Deleted && (line == pick || line.LotHere || ((line.ForceLot || line.AutoLot) && line.FirstText.Length > 0));
+    // ForceLot : « + » sur une ligne écrite ; LotHere : « + » sur une ligne encore vide (la case est là avant le texte).
+    // Page ajoutée (added) : pas de case toute seule, seulement avec « + » (on peut n'y écrire qu'un titre).
+    private static bool IsObject(PrintedLine line, PrintedLine? pick, bool added = false) =>
+        !line.NoLot && !line.OutsideTable && !line.Deleted && ((line == pick && !added) || line.LotHere || (line.ForceLot && line.FirstText.Length > 0));
 
     /// <summary>
     /// Ligne sans numéro à laquelle on peut en ajouter un (« + ») : article ou titre (pas un total, un en-tête, un récapitulatif),
@@ -301,14 +303,53 @@ public static class Lots
         return Math.Max(8, Math.Min(desired, avail));
     }
 
-    /// <summary>Case du numéro de lot : dans la colonne, à la hauteur de la ligne d'objet.</summary>
+    /// <summary>
+    /// Ligne d'une grande case qui a sa propre case de lot (pas la 1re ligne écrite de la rangée, ajoutée avec « + » ou
+    /// avec d'autres cases dans la rangée) : une petite case fermée à sa hauteur, pas toute la grande case.
+    /// </summary>
+    public static bool OwnBox(Row row, PrintedLine line)
+    {
+        if (!HasCell(line)) return false;
+        var first = row.Lines.FirstOrDefault(l => HasCell(l) || l.Cells.Any(c => !string.IsNullOrWhiteSpace(c.Text)));
+        if (first is null || first == line) return false;
+        return line.ForceLot || line.LotHere || row.Lines.Count(HasCell) >= 2;
+    }
+
+    /// <summary>Hauteur de la case de lot de <paramref name="line"/> dans la rangée r : sa petite case, ou la rangée (jusqu'à la 1re petite case).</summary>
+    public static (double Top, double Bottom, bool Own) LotSegment(Table table, int r, PrintedLine line)
+    {
+        var row = table.Rows[r];
+        int i = row.Lines.IndexOf(line);
+        double top = table.RowYs[r], bottom = table.RowYs[r + 1];
+        if (OwnBox(row, line))
+        {
+            var prev = i > 0 ? row.Lines[i - 1] : null;
+            var next = i + 1 < row.Lines.Count ? row.Lines[i + 1] : null;
+            return (prev != null ? (prev.Bounds.Bottom + line.Bounds.Y) / 2 : top, next != null ? (line.Bounds.Bottom + next.Bounds.Y) / 2 : bottom, true);
+        }
+        var own = row.Lines.Where((l, k) => k > i && OwnBox(row, l)).FirstOrDefault();
+        return (top, own != null ? LotSegment(table, r, own).Top : bottom, false);
+    }
+
+    /// <summary>
+    /// Case du numéro de lot : dans la colonne, à la hauteur de la ligne d'objet (en haut, réglage par défaut), ou au milieu
+    /// ou en bas de sa case (clic droit : PrintedLine.LotAlign).
+    /// </summary>
     public static RectD NumberBox(Table table, PrintedLine line, double columnWidth)
     {
         var b = line.Bounds;
         b = b with { Height = b.Height - line.Extra }; // à la hauteur de la 1re ligne de texte, même si la case a grandi
         double right = TableLeft(table), left = Math.Max(0, right - columnWidth);
         double h = Math.Max(8, b.Height);
-        return new RectD(left + 2, b.CenterY - h / 2, Math.Max(4, right - left - 4), h);
+        double cy = b.CenterY;
+        int r = line.LotAlign is "Middle" or "Bottom" ? table.Rows.FindIndex(x => x.Lines.Contains(line)) : -1;
+        if (r >= 0 && r + 1 < table.RowYs.Count)
+        {
+            var s = LotSegment(table, r, line);
+            cy = line.LotAlign == "Middle" ? (s.Top + s.Bottom) / 2 : s.Bottom - (cy - s.Top);
+            if (s.Bottom - s.Top >= h) cy = Math.Min(s.Bottom - h / 2, Math.Max(s.Top + h / 2, cy));
+        }
+        return new RectD(left + 2, cy - h / 2, Math.Max(4, right - left - 4), h);
     }
 
     /// <summary>Numéros de lot d'une page, avec la case où les écrire.</summary>

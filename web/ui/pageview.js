@@ -306,6 +306,8 @@ export class PageView {
       input.addEventListener('change', commit);
       input.addEventListener('blur', commit);
       input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } });
+      // Clic droit sur la case : place du numéro (haut, milieu, bas) ou retirer la case.
+      input.addEventListener('contextmenu', (e) => { e.preventDefault(); if (line.Cells[0]) this.cb.onLineMenu?.(this, line.Cells[0], { x: e.clientX, y: e.clientY }); });
       this.lotInputs.set(line, input);
     }
     if (focused && this.lotInputs.has(focused)) this.lotInputs.get(focused).focus({ preventScroll: true });

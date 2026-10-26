@@ -39,6 +39,18 @@ export function canCopyLine(page, line) {
   return locate(page, line) !== null;
 }
 
+/** Ligne d'un tableau où l'on peut ajouter des lignes vides (toute ligne du tableau, même vide, un total ou un titre). */
+export function canAddRows(page, line) {
+  const at = line && !line.OutsideTable && line.Kind !== 'Ignoree' ? locate(page, line) : null;
+  return !!at && !line.Deleted;
+}
+
+/** Au-dessus : partout sauf au-dessus de l'en-tête du tableau. */
+export function canAddAbove(page, line) {
+  const at = line ? locate(page, line) : null;
+  return !!at && (at.r > 0 || !at.row.Lines.some((l) => l.Kind === 'EnTete'));
+}
+
 /** « Séparer ici » : la ligne n'est pas la première de sa rangée. */
 /**
  * Le trait tracé au-dessus de la ligne i passe bien entre les lignes : toutes les cases d'avant au-dessus, toutes celles
@@ -136,7 +148,7 @@ function inkBottomOf(l) {
  */
 export function copyLine(page, line, blank = false, above = false, src = line, force = false) {
   const at = locate(page, line);
-  if (!at || (!force && src === line && !canCopyLine(page, line)) || (above && at.r === 0)) return null;
+  if (!at || (!force && src === line && !canCopyLine(page, line)) || (above && !canAddAbove(page, line))) return null;
   const { table: t, r } = at;
   // Modèle de la rangée (`src`, même tableau) : hauteur, filets et place des cases ; `line` : où la poser.
   const sat = src === line ? at : locate(page, src);
@@ -166,6 +178,7 @@ export function copyLine(page, line, blank = false, above = false, src = line, f
   const copy = {
     Kind: blank ? 'Article' : src.Kind, KindChosenByUser: !blank && !!src.KindChosenByUser, OutsideTable: false,
     Lot: '', LotManual: false, LotSlot: false, NoLot: false, ForceLot: false, Extra: 0, ExtraAt: 0, Copy: true,
+    AutoLot: !!page.Added, // ligne d'une page ajoutée : case de lot seulement avec « + »
     Cells: cells.map(({ f, b, ink }) => ({
       ...f, Id: `${page.Id}-${band.Id}-${f.Column}`, Locked: false,
       Box: { ...b, Y: b.Y + dy },

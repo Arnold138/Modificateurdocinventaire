@@ -84,8 +84,11 @@ public sealed class PrintedLine
     public bool ForceLot { get; set; }
     /// <summary>« + » sur une ligne encore vide : la case est là avant le texte.</summary>
     public bool LotHere { get; set; }
-    /// <summary>Ligne d'une page ajoutée : objet dès qu'on y écrit.</summary>
+    /// <summary>Ligne d'une page ajoutée (« + » à gauche même vide ; pas de case toute seule).</summary>
     public bool AutoLot { get; set; }
+
+    /// <summary>Numéro de lot dans sa case : null = en haut (à la hauteur de la ligne), « Middle » ou « Bottom » (clic droit).</summary>
+    public string? LotAlign { get; set; }
 
     /// <summary>
     /// Hauteur ajoutée sous cette ligne (texte saisi sur plusieurs lignes) : tout ce qui est en dessous descend d'autant.
@@ -228,6 +231,9 @@ public sealed class Table
     public List<double> RowYs { get; set; } = [];
     /// <summary>Traits mesurés une fois sur l'imprimé (colonne des lots) ; null : pas encore mesurés.</summary>
     public RuleStyle? Rules { get; set; }
+
+    /// <summary>Un trait a été tracé sous la dernière rangée (tableau ouvert en bas sur l'imprimé) : bande recopiée à l'export.</summary>
+    public bool Closed { get; set; }
     public List<Row> Rows { get; set; } = [];
     /// <summary>Ordre d'affichage des rangées (rangées déplacées à la main), null : l'ordre imprimé.</summary>
     public List<int>? RowOrder { get; set; }

@@ -41,7 +41,8 @@ public static class LotColumn
     }
 
     /// <summary>Rangée sans case entre deux objets : par défaut pas sur un total ; au choix sinon (Row.LotFrame).</summary>
-    private static bool FrameAuto(Row row) => row.LotFrame ?? !row.Lines.Any(Analysis.LineClassifier.LooksLikeTotal);
+    // Page ajoutée (lignes AutoLot) : un titre écrit entre deux objets n'a pas la colonne (au choix avec « + »).
+    private static bool FrameAuto(Row row) => row.LotFrame ?? (!row.Lines.Any(Analysis.LineClassifier.LooksLikeTotal) && !(row.Lines.Count > 0 && row.Lines.All(l => l.AutoLot)));
 
     /// <summary>
     /// Rangées écrites où l'on peut tracer ou retirer la colonne (sans case de lot, sous le 1er objet). Les rangées minces qui se
@@ -90,6 +91,35 @@ public static class LotColumn
         return frames;
     }
 
+    /// <summary>
+    /// Tableau ouvert en bas (il continue page suivante sur l'imprimé, ou une ligne a été ajoutée dessous) : un trait est
+    /// tracé sous sa dernière rangée, comme les autres filets. Rien ne change si le trait est déjà là.
+    /// </summary>
+    public static Raster CloseTables(Raster image, Page page)
+    {
+        Raster? output = null;
+        foreach (var t in page.Tables)
+        {
+            if (!t.HasGrid || t.ColumnXs.Count < 2 || t.RowYs.Count < 2) continue;
+            int y = R(t.RowYs[^1]);
+            int x0 = R(t.ColumnXs[0]), x1 = R(t.ColumnXs[^1]);
+            t.Closed = false;
+            if (x1 - x0 < 40 || y < 4 || y + 4 >= image.Height) continue;
+            int dark = 0, n = 0;
+            for (int x = x0 + 4; x < x1 - 4; x += 3)
+            {
+                n++;
+                for (int yy = y - 4; yy <= y + 4; yy++) if (Gray(image, x, yy) < 150) { dark++; break; }
+            }
+            if (n == 0 || dark * 2 >= n) continue;
+            var (v, h, c) = t.Rules is { } ru ? (ru.V, ru.H, ru.Color.Select(b => (byte)b).ToArray()) : MeasureRules(image, t, page);
+            output ??= new Raster(image.Width, image.Height, image.Channels, (byte[])image.Data.Clone());
+            Fill(output, x0 - v / 2, y - h / 2, x1 - x0 + v, h, c);
+            t.Closed = true; // pour l'export : cette bande change (recopiée dans la photo d'origine)
+        }
+        return output ?? image;
+    }
+
     /// <summary>Zones de la page redressée qui changent (à recopier dans la photo d'origine).</summary>
     public static List<RectD> Regions(Page page, bool enabled)
     {
@@ -102,6 +132,11 @@ public static class LotColumn
             if (rows.Count == 0) continue;
             double top = rows.Min(r => t.RowYs[r]), bottom = rows.Max(r => t.RowYs[r + 1]);
             boxes.Add(RectD.FromEdges(t.ColumnXs[0] - w - 8, top - 8, t.ColumnXs[0] - 1, bottom + 8));
+        }
+        foreach (var t in page.Tables.Where(t => t.Closed))
+        {
+            double y = t.RowYs[^1];
+            boxes.Add(RectD.FromEdges(t.ColumnXs[0] - 8, y - 8, t.ColumnXs[^1] + 8, y + 8));
         }
         foreach (var t in page.Tables.Where(t => !framed.Contains(t)))
             foreach (var l in t.Rows.SelectMany(r => r.Lines).Where(l => l.Lot.Length > 0))
@@ -132,6 +167,16 @@ public static class LotColumn
                 }
                 Fill(output, f.Left - half, y0 - hh, f.Right - (f.Left - half), f.HThick, f.Color);
                 Fill(output, f.Left - half, y1 - hh, f.Right - (f.Left - half), f.HThick, f.Color);
+                // Case de lot d'une seule ligne dans une grande case : fermée en haut et en bas, à sa hauteur.
+                if (r >= f.Table.Rows.Count) continue;
+                var row = f.Table.Rows[r];
+                foreach (var l in row.Lines)
+                {
+                    if (!Lots.OwnBox(row, l)) continue;
+                    var s = Lots.LotSegment(f.Table, r, l);
+                    foreach (int y in new[] { R(s.Top), R(s.Bottom) })
+                        if (y - y0 > 3 && y1 - y > 3) Fill(output, f.Left - half, y - hh, f.Right - (f.Left - half), f.HThick, f.Color);
+                }
             }
         }
         return output;
@@ -145,7 +190,7 @@ public static class LotColumn
     /// Trait gauche du tableau dans la rangée [y0, y1[ : abscisse de son premier pixel sombre près de <paramref name="right"/>
     /// (il peut être un peu décalé : page légèrement de travers), mesurée sur trois hauteurs ; null s'il n'y est pas.
     /// </summary>
-    private static int? RuleLeftOf(Raster img, int right, int y0, int y1)
+    public static int? RuleLeftOf(Raster img, int right, int y0, int y1)
     {
         int? found = null;
         foreach (int y in new[] { y0 + 2, (y0 + y1) >> 1, y1 - 3 })
@@ -206,7 +251,7 @@ public static class LotColumn
         }
     }
 
-    private static void Fill(Raster img, int x, int y, int w, int h, byte[] color)
+    internal static void Fill(Raster img, int x, int y, int w, int h, byte[] color)
     {
         int ch = img.Channels;
         for (int yy = Math.Max(0, y); yy < Math.Min(img.Height, y + h); yy++)

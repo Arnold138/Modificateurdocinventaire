@@ -9,6 +9,7 @@ import { Rect } from './geometry.js';
 import { allLines, looksLikeTotal } from './model.js';
 import { rowOrder, hasLotCell, isZeroLot, lotsActive, objectLines, columnWidth, numberBox, tableLeft } from './lots.js';
 import { baseBox } from './layout.js';
+import { framedTables, framedRows, lotFrameEnabled, ruleLeftOf } from './lotcolumn.js';
 
 export const CUT = 2;    // une rangée commence 2 px au-dessus du milieu de son filet du haut
 export const FILET = 5;  // hauteur réservée au filet du haut
@@ -528,7 +529,71 @@ export function composePage(project, plan, k, image, crops) {
       for (let x = Math.max(0, e.rect.x0); x < Math.min(w, e.rect.x1); x++) paint(out, x, my, paper);
     }
   }
+  if (!project.Pages[k].EndLots) closeLotColumns(project, project.Pages[k], pp, image, out, paper);
   return out;
+}
+
+/**
+ * Colonne des lots après les déplacements (rangée déplacée, lot 0 parti) : chaque rangée tracée garde son cadre complet
+ * (haut, bas, gauche) là où elle arrive, et le trait laissé par une rangée partie disparaît du haut des autres rangées.
+ */
+function closeLotColumns(project, page, pp, image, out, paper) {
+  if (!lotFrameEnabled(project)) return;
+  const w = columnWidth(page);
+  const units = pp.pieces.filter((pc) => pc.kind === 'unit');
+  for (const t of framedTables(page)) {
+    if (!t.Rules) continue;
+    const right = R(t.ColumnXs[0]), left = R(t.ColumnXs[0] - w);
+    if (right - left < 8) continue;
+    const vT = t.Rules.V, hT = t.Rules.H, hv = Math.trunc(vT / 2), hh = Math.trunc(hT / 2);
+    const color = t.Rules.Color;
+    // Rangée r sur la page affichée : [début, fin[ de sa bande (null si elle est partie entière).
+    const strip = (r) => {
+      const a = cutY(t.RowYs[r]), b = cutY(t.RowYs[r + 1]);
+      let s = null, e = null;
+      for (const pc of pp.pieces) {
+        if (pc.kind !== 'copy') continue;
+        const y0 = Math.max(a, pc.y0), y1 = Math.min(b, pc.y1);
+        if (y1 <= y0) continue;
+        const d0 = pc.dst + y0 - pc.y0;
+        if (s === null || d0 < s) s = d0;
+        if (e === null || d0 + y1 - y0 > e) e = d0 + y1 - y0;
+      }
+      return s === null ? null : { s, e };
+    };
+    const framed = new Set(framedRows(t));
+    const bands = [];
+    for (const r of framed) { const st = strip(r); if (st) bands.push({ y0: st.s + CUT - hh, y1: st.e + CUT - hh + hT, st }); }
+    const inside = (y) => bands.some((b) => y >= b.y0 && y < b.y1) || units.some((u) => y >= u.dst && y < u.dst + u.h);
+    // Haut des rangées sans cadre : le trait d'une rangée tracée qui n'est plus là est effacé (encre seulement).
+    for (const r of rowOrder(t)) {
+      if (r + 1 >= t.RowYs.length || framed.has(r)) continue;
+      const st = strip(r);
+      if (!st) continue;
+      const rule = ruleLeftOf(image, right, R(t.RowYs[r]) + hh + 1, R(t.RowYs[r + 1]) - hh);
+      const xEnd = Math.min(right - vT, rule === null ? right : rule);
+      for (let y = st.s; y < Math.min(st.e, st.s + CUT - hh + hT + 1, out.h); y++) {
+        if (y < 0 || inside(y)) continue;
+        for (let x = Math.max(0, left - hv - 1); x < xEnd; x++) if (lum(out, x, y) < 160) paint(out, x, y, paper);
+      }
+    }
+    // Cadre de chaque rangée tracée, à sa place d'arrivée.
+    for (const { st } of bands) {
+      const top = st.s + CUT, bottom = st.e + CUT;
+      fillRect(out, left - hv, top - hh, vT, bottom - top + hT, color);
+      fillRect(out, left - hv, top - hh, right - (left - hv), hT, color);
+      fillRect(out, left - hv, bottom - hh, right - (left - hv), hT, color);
+    }
+  }
+}
+
+function fillRect(img, x, y, w, h, color) {
+  for (let yy = Math.max(0, y); yy < Math.min(img.h, y + h); yy++)
+    for (let xx = Math.max(0, x); xx < Math.min(img.w, x + w); xx++) {
+      const o = (yy * img.w + xx) * img.ch;
+      if (img.ch === 1) img.data[o] = color[3];
+      else { img.data[o] = color[0]; img.data[o + 1] = color[1]; img.data[o + 2] = color[2]; img.data[o + 3] = 255; }
+    }
 }
 
 /** Rangée refaite pour un lot 0 : filet et fond du tableau d'arrivée, contenu des cases recopié colonne par colonne. */

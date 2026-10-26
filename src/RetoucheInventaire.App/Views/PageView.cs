@@ -526,6 +526,8 @@ public sealed class PageView
             e.Handled = true;
             Commit();
         };
+        // Clic droit sur la case : place du numéro (haut, milieu, bas) ou retirer la case.
+        tb.ContextRequested += (_, e) => { e.Handled = true; if (line.Cells.Count > 0) ShowLineCommands(line.Cells[0], tb); };
         _lotBoxes[line] = tb;
         _lotLayer.Children.Add(tb);
     }

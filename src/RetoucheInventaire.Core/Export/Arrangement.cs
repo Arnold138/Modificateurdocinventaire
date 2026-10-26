@@ -71,7 +71,7 @@ public static class Arrangement
     public sealed record PagePlan(int Height, List<Piece> Pieces, int? Template = null);
     public sealed record Erase(int P, int X0, int Y0, int X1, int Y1);
     /// <summary>Units : tout ce qui quitte sa place (lots 0 recollés et lignes supprimées) ; Moving : les lots 0 recollés.</summary>
-    public sealed record Plan(List<PagePlan> Pages, List<Unit> Units, List<Unit> Moving, Destination? Dest, List<Erase> Erase, int EndNeeded);
+    public sealed record Plan(List<PagePlan> Pages, List<Unit> Units, List<Unit> Moving, Destination? Dest, List<Erase> Erase, int EndNeeded, InventoryProject? Project = null);
 
     private static int R(double v) => (int)Math.Floor(v + 0.5);
     internal static int CutY(double y) => R(y) - Cut;
@@ -429,7 +429,7 @@ public static class Arrangement
                 var (x0, y0, x1, y1) = CellRect(u.Table, c);
                 return new Erase(u.P, x0, y0, x1, y1);
             })).ToList();
-        return new Plan(pages, cutting, moving, dest, erase, endNeeded);
+        return new Plan(pages, cutting, moving, dest, erase, endNeeded, project);
     }
 
     /// <summary>Partie d'une case (zone d'édition) à l'intérieur de sa colonne, en pixels entiers.</summary>
@@ -710,7 +710,68 @@ public static class Arrangement
                 for (int x = Math.Max(0, e.X0); x < Math.Min(w, e.X1); x++) Paint(output, x, my.Value, around);
             }
         }
+        if (plan.Project is { } project && k < project.Pages.Count && !project.Pages[k].EndLots) CloseLotColumns(project, project.Pages[k], pp, image, output, paper);
         return output;
+    }
+
+    /// <summary>
+    /// Colonne des lots après les déplacements (rangée déplacée, lot 0 parti) : chaque rangée tracée garde son cadre complet
+    /// (haut, bas, gauche) là où elle arrive, et le trait laissé par une rangée partie disparaît du haut des autres rangées.
+    /// </summary>
+    private static void CloseLotColumns(InventoryProject project, Page page, PagePlan pp, Raster image, Raster output, byte[] paper)
+    {
+        if (!project.LotFrame) return;
+        double w = Lots.ColumnWidth(page);
+        var units = pp.Pieces.Where(pc => pc.IsUnit).ToList();
+        foreach (var t in LotColumn.FramedTables(page))
+        {
+            if (t.Rules is null) continue;
+            int right = R(t.ColumnXs[0]), left = R(t.ColumnXs[0] - w);
+            if (right - left < 8) continue;
+            int vT = t.Rules.V, hT = t.Rules.H, hv = vT / 2, hh = hT / 2;
+            var color = t.Rules.Color.Select(b => (byte)b).ToArray();
+            // Rangée r sur la page affichée : [début, fin[ de sa bande (null si elle est partie entière).
+            (int S, int E)? Strip(int r)
+            {
+                int a = CutY(t.RowYs[r]), b = CutY(t.RowYs[r + 1]);
+                int? s = null, e = null;
+                foreach (var pc in pp.Pieces)
+                {
+                    if (!pc.IsCopy) continue;
+                    int y0 = Math.Max(a, pc.Y0), y1 = Math.Min(b, pc.Y1);
+                    if (y1 <= y0) continue;
+                    int d0 = pc.Dst + y0 - pc.Y0;
+                    if (s is null || d0 < s) s = d0;
+                    if (e is null || d0 + y1 - y0 > e) e = d0 + y1 - y0;
+                }
+                return s is null ? null : (s.Value, e!.Value);
+            }
+            var framed = LotColumn.FramedRows(t).ToHashSet();
+            var bands = new List<(int Y0, int Y1, int S, int E)>();
+            foreach (int r in framed) if (Strip(r) is { } st) bands.Add((st.S + Cut - hh, st.E + Cut - hh + hT, st.S, st.E));
+            bool Inside(int y) => bands.Any(b => y >= b.Y0 && y < b.Y1) || units.Any(u => y >= u.Dst && y < u.Dst + u.H);
+            // Haut des rangées sans cadre : le trait d'une rangée tracée qui n'est plus là est effacé (encre seulement).
+            foreach (int r in Lots.RowOrder(t))
+            {
+                if (r + 1 >= t.RowYs.Count || framed.Contains(r)) continue;
+                if (Strip(r) is not { } st) continue;
+                int? rule = LotColumn.RuleLeftOf(image, right, R(t.RowYs[r]) + hh + 1, R(t.RowYs[r + 1]) - hh);
+                int xEnd = Math.Min(right - vT, rule ?? right);
+                for (int y = st.S; y < Math.Min(Math.Min(st.E, st.S + Cut - hh + hT + 1), output.Height); y++)
+                {
+                    if (y < 0 || Inside(y)) continue;
+                    for (int x = Math.Max(0, left - hv - 1); x < xEnd; x++) if (Lum(output, x, y) < 160) Paint(output, x, y, paper);
+                }
+            }
+            // Cadre de chaque rangée tracée, à sa place d'arrivée.
+            foreach (var b in bands)
+            {
+                int top = b.S + Cut, bottom = b.E + Cut;
+                LotColumn.Fill(output, left - hv, top - hh, vT, bottom - top + hT, color);
+                LotColumn.Fill(output, left - hv, top - hh, right - (left - hv), hT, color);
+                LotColumn.Fill(output, left - hv, bottom - hh, right - (left - hv), hT, color);
+            }
+        }
     }
 
     /// <summary>Rangée refaite pour un lot 0 : filet et fond du tableau d'arrivée, contenu des cases recopié colonne par colonne.</summary>

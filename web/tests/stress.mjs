@@ -15,7 +15,7 @@ import {
   objectLines, lotsActive, setLot, resyncLots, addLot, createEmptyLots, fillLotsAutomatically, numberLots, isZeroLot,
   hasLotCell, itemTable, addLotHere, rowOrder, lotTables, setLotTables, defaultLotChoice, columnWidth, numberBox,
 } from '../core/lots.js';
-import { drawLotColumns, framedRows, frames, frameToggles } from '../core/lotcolumn.js';
+import { drawLotColumns, framedRows, frames, frameToggles, closeTables } from '../core/lotcolumn.js';
 import { setExtra, stretch, extraFor, baseHeight, tallExtra } from '../core/layout.js';
 import { addBlankPage, blankBase, canBeModel, addColumn, removeColumn, canAddColumn, canRemoveColumn, addedTable, addRows } from '../core/addpage.js';
 import { planArrangement, composePage, unitCrop, viewOf, syncEndPages } from '../core/arrange.js';
@@ -176,6 +176,7 @@ const ACTIONS = {
   shorter(t) { const { page, line } = resolve(t); line.Tall = Math.max(0, (line.Tall ?? 0) - 1); setExtra(page, line, extraOf(line)); },
   del(t) { resolve(t).line.Deleted = true; },
   addLotHere(t) { const { table, line } = resolve(t); addLotHere(project, table, line); },
+  align(t, a) { const { line } = resolve(t); if (a.v) line.LotAlign = a.v; else delete line.LotAlign; },
   frameToggle(t, a) { for (const r of a.rows) resolve(t).table.Rows[r].LotFrame = a.on; },
   restore(t) { resolve(t).line.Deleted = false; },
   lot(t, a) { setLot(project, resolve(t).line, a.v); },
@@ -289,8 +290,9 @@ function choose() {
   if (r < 0.79) { const x = pick(all.filter((y) => !hasLotCell(y.line) && itemTable(y.table) && (y.line.Kind === 'Article' || y.line.Kind === 'Titre'))); return x && ['addLotHere', x, {}]; }
   if (r < 0.83) return ['sync', all[0], { page: chance(0.5) ? all[Math.floor(random() * all.length)].p : null }];
   if (r < 0.84) {
+    if (chance(0.4)) { const x = pick(all.filter((y) => hasLotCell(y.line))); if (x) return ['align', x, { v: pick(['Middle', 'Bottom', null]) }]; }
     if (chance(0.3)) { const x = pick(all.filter((y) => !y.table.LotsOff && frameToggles(y.table).length)); if (x) { const g = pick(frameToggles(x.table)); return ['frameToggle', x, { rows: g.rows, on: !g.framed }]; } }
-    if (chance(0.7)) { const x = pick(all.filter((y) => canCopyLine(y.page, y.line))); return x && ['addRows', x, { n: pick([1, 3, 5, 10, 15]), above: chance(0.2) && x.o > 0, id: `ln${++pageN}` }]; }
+    if (chance(0.7)) { const x = pick(all.filter((y) => canCopyLine(y.page, y.line))); return x && ['addRows', x, { n: pick([1, 3, 5, 10, 15]), above: chance(0.2), id: `ln${++pageN}` }]; }
     return ['number', all[0], {}];
   }
   if (r < 0.86) { const x = pick(all.filter((y) => rowTrimOf(y.page, y.line))); return x && ['trim', x, {}]; }
@@ -399,7 +401,7 @@ function pixelCheck(step, op) {
     if (pg0.EndLots) continue;
     // Sur une copie : la mesure des traits (gardée dans le projet à la 1re mesure) ne doit pas dépendre de ce contrôle.
     const pg = structuredClone(pg0);
-    const img = drawLotColumns(stretch(imageOf(pg0), pg), pg);
+    const img = drawLotColumns(closeTables(stretch(imageOf(pg0), pg), pg), pg);
     for (const f of frames(img, pg)) {
       for (const r of f.rows) {
         const y0 = Math.floor(f.table.RowYs[r] + 0.5) + 3, y1 = Math.floor(f.table.RowYs[r + 1] + 0.5) - 3;
@@ -424,7 +426,7 @@ const PIXEL = Number(process.env.PIXEL ?? 25);
 // ---------- Rendu (pour comparer avec Windows) ----------
 
 function renderAll(plan) {
-  const imgs = pages().map((pg) => (pg.EndLots ? null : drawLotColumns(stretch(imageOf(pg), pg), pg)));
+  const imgs = pages().map((pg) => (pg.EndLots ? null : drawLotColumns(closeTables(stretch(imageOf(pg), pg), pg), pg)));
   return pages().map((pg, k) => {
     const src = imgs[plan.pages[k].template ?? k];
     if (!src) return null;

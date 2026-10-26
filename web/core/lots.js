@@ -36,10 +36,10 @@ function plainText(t) {
   return words.length >= 2 && letters > 3 * signs;
 }
 
-// ForceLot : « + » sur une ligne écrite ; LotHere : « + » sur une ligne encore vide (la case est là avant le texte) ;
-// AutoLot : ligne d'une page ajoutée, objet dès qu'on y écrit.
-const isObject = (line, pick) => !line.NoLot && !line.OutsideTable && !line.Deleted
-  && (line === pick || !!line.LotHere || ((!!line.ForceLot || !!line.AutoLot) && firstText(line).length > 0));
+// ForceLot : « + » sur une ligne écrite ; LotHere : « + » sur une ligne encore vide (la case est là avant le texte).
+// Page ajoutée (`added`) : pas de case toute seule, seulement avec « + » (on peut n'y écrire qu'un titre).
+const isObject = (line, pick, added = false) => !line.NoLot && !line.OutsideTable && !line.Deleted
+  && ((line === pick && !added) || !!line.LotHere || (!!line.ForceLot && firstText(line).length > 0));
 
 /** Objet d'une rangée : la règle, ou la 1re ligne d'une rangée ajoutée ou séparée (même vide : « Ajouter une ligne vide »). */
 const pickOf = (row) => defaultPick(row)
@@ -53,7 +53,7 @@ export function* objectLines(project) {
       for (const r of rowOrder(table)) {
         const row = table.Rows[r];
         const pick = pickOf(row);
-        for (const line of row.Lines) if (isObject(line, pick)) yield { page, table, row: r, line };
+        for (const line of row.Lines) if (isObject(line, pick, !!page.Added)) yield { page, table, row: r, line };
       }
     }
 }
@@ -261,13 +261,47 @@ export function columnWidth(page) {
   return Math.max(8, Math.min(desired, avail));
 }
 
-/** Case du numéro de lot : dans la colonne, à la hauteur de la ligne d'objet. */
+/**
+ * Ligne d'une grande case qui a sa propre case de lot (pas la 1re ligne écrite de la rangée, ajoutée avec « + » ou
+ * avec d'autres cases dans la rangée) : une petite case fermée à sa hauteur, pas toute la grande case.
+ */
+export function ownBox(row, line) {
+  if (!hasLotCell(line)) return false;
+  const first = row.Lines.find((l) => hasLotCell(l) || l.Cells.some((c) => !blank(c.Text)));
+  if (!first || first === line) return false;
+  return !!line.ForceLot || !!line.LotHere || row.Lines.filter(hasLotCell).length >= 2;
+}
+
+/** Hauteur [top, bottom] de la case de lot de `line` dans la rangée r : sa petite case, ou la rangée (jusqu'à la 1re petite case). */
+export function lotSegment(table, r, line) {
+  const row = table.Rows[r], i = row.Lines.indexOf(line);
+  const top = table.RowYs[r], bottom = table.RowYs[r + 1];
+  const yTop = (l) => lineBounds(l).Y, yBottom = (l) => Rect.bottom(lineBounds(l));
+  if (ownBox(row, line)) {
+    const prev = row.Lines[i - 1], next = row.Lines[i + 1];
+    return { top: prev ? (yBottom(prev) + yTop(line)) / 2 : top, bottom: next ? (yBottom(line) + yTop(next)) / 2 : bottom, own: true };
+  }
+  const own = row.Lines.find((l, k) => k > i && ownBox(row, l));
+  return { top, bottom: own ? lotSegment(table, r, own).top : bottom, own: false };
+}
+
+/**
+ * Case du numéro de lot : dans la colonne, à la hauteur de la ligne d'objet (en haut, réglage par défaut), ou au milieu
+ * ou en bas de sa case (clic droit : Line.LotAlign).
+ */
 export function numberBox(table, line, width) {
   const lb = lineBounds(line);
   const b = { ...lb, Height: lb.Height - (line.Extra ?? 0) }; // à la hauteur de la 1re ligne, même si la case a grandi
   const right = tableLeft(table), left = Math.max(0, right - width);
   const h = Math.max(8, b.Height);
-  return Rect.make(left + 2, Rect.cy(b) - h / 2, Math.max(4, right - left - 4), h);
+  let cy = Rect.cy(b);
+  const r = line.LotAlign === 'Middle' || line.LotAlign === 'Bottom' ? table.Rows.findIndex((x) => x.Lines.includes(line)) : -1;
+  if (r >= 0 && r + 1 < table.RowYs.length) {
+    const s = lotSegment(table, r, line);
+    cy = line.LotAlign === 'Middle' ? (s.top + s.bottom) / 2 : s.bottom - (cy - s.top);
+    if (s.bottom - s.top >= h) cy = Math.min(s.bottom - h / 2, Math.max(s.top + h / 2, cy));
+  }
+  return Rect.make(left + 2, cy - h / 2, Math.max(4, right - left - 4), h);
 }
 
 export function lotLabels(page) {

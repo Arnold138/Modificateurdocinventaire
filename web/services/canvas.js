@@ -7,7 +7,7 @@ import { strikeColor, colorRuns, hasColors, textColor } from '../core/strikes.js
 import { allLines } from '../core/model.js';
 import { baseBox, extraFor, tallExtra } from '../core/layout.js';
 import { lotLabels } from '../core/lots.js';
-import { framedTables, drawLotColumns } from '../core/lotcolumn.js';
+import { framedTables, drawLotColumns, closeTables } from '../core/lotcolumn.js';
 
 export function makeCanvas(w, h) {
   const c = document.createElement('canvas');
@@ -242,7 +242,8 @@ export function tintColors(page, img) {
 
 /** Image d'une page avant les corrections : colonne des lots tracée et écriture d'origine mise en couleur. */
 export function pageRaster(page, stretched, lotFrame = true) {
-  const img = lotFrame && framedTables(page).length > 0 ? drawLotColumns(stretched, page) : stretched;
+  const closed = closeTables(stretched, page);
+  const img = lotFrame && framedTables(page).length > 0 ? drawLotColumns(closed, page) : closed;
   return tintColors(page, img);
 }
 

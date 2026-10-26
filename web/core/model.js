@@ -67,6 +67,11 @@ export function upgradePage(page) {
   let n = 0;
   // Page ajoutée d'une version précédente : « objet quand on y écrit » s'appelle maintenant AutoLot.
   if (page.Added) for (const l of allLines(page)) if (l.ForceLot && !firstText(l)) { l.ForceLot = false; l.AutoLot = true; }
+  // Page ajoutée : une case n'y vient plus toute seule (seulement avec « + ») ; un numéro déjà tapé reste.
+  if (page.Added) for (const l of allLines(page)) {
+    if ((l.Lot ?? '').trim() && !l.ForceLot && !l.LotHere) { if (firstText(l)) l.ForceLot = true; else l.LotHere = true; }
+    l.AutoLot = true; // ligne de page ajoutée (même ajoutée avant cette version)
+  }
   for (const t of page.Tables) {
     if (t.HasGrid === false || !(t.ColumnXs?.length >= 2) || !(t.RowYs?.length >= 2)) continue;
     const sizes = t.Rows.flatMap((r) => r.Lines).map((l) => l.Cells[0]?.FontSize ?? 0).filter((v) => v > 0).sort((a, b) => a - b);

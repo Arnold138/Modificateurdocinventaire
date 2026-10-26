@@ -5,7 +5,7 @@ import { Quad } from './core/geometry.js';
 import { normalize, render, rotate90 } from './core/imaging.js';
 import { detectGrids } from './core/rules.js';
 import { prepare, mapBack, emptyFieldsWithInk, prepareCell, applyCellWords } from './core/ocrprep.js';
-import { newPage, newProject, analyze, reclassify, allFields, isModified, cycleKind, kindLabel, findLine, firstText, upgradePage, carryOver, allLines } from './core/model.js';
+import { newPage, newProject, analyze, reclassify, allFields, isModified, cycleKind, kindLabel, findLine, firstText, upgradePage, carryOver, allLines, lineBounds } from './core/model.js';
 import { buildPdf } from './core/pdf.js';
 import { buildTxt, txtBlob, composeIntoSource, outputName } from './core/exports.js';
 import { decodeText, parseDelimited, readXlsx, buildDataPage } from './core/importers.js';
@@ -16,9 +16,9 @@ import { stretch, setExtra, baseHeight, totalExtra } from './core/layout.js';
 import { toggleStrike, isStruck, setColor, RED, BLACK, TEXT_COLORS } from './core/strikes.js';
 import { planArrangement, viewOf, composePage, unitCrop, pageArranged, mapY, unmapY, syncEndPages } from './core/arrange.js';
 import { recomputeTotals, isComputedCell, computedValue } from './core/totals.js';
-import { hasLotCell } from './core/lots.js';
+import { hasLotCell, lotSegment } from './core/lots.js';
 import { frameSignature, lotFrameEnabled } from './core/lotcolumn.js';
-import { canCopyLine, canSplit, addedRowOf, copyLine, addBlankLine, locate, splitAt, splitTypedText, removeAddedRow, canSplitBelow, splitBelow, addTotalLine, lastObjectLine, rowTrimOf, trimRow, untrimRow, trimsOf } from './core/rows.js';
+import { canCopyLine, canAddRows, canAddAbove, canSplit, addedRowOf, copyLine, addBlankLine, locate, splitAt, splitTypedText, removeAddedRow, canSplitBelow, splitBelow, addTotalLine, lastObjectLine, rowTrimOf, trimRow, untrimRow, trimsOf } from './core/rows.js';
 import { decodeImage, pdfPages, isImageName, mimeOf } from './services/decode.js';
 import { recognize, warmUp } from './services/ocr.js';
 import { rasterToCanvas, canvasToBlob, renderEdits, freeCanvas, lineExtra, pageRaster } from './services/canvas.js';
@@ -487,12 +487,15 @@ function lineChoices(f) {
     items.push({ act: 'delete', icon: 'i-trash', label: 'Supprimer cette ligne', hint: 'Elle disparaît de la vente (page, .txt, totaux).', danger: true });
     return { page, line, items };
   }
-  if (canCopyLine(page, line)) {
-    items.push({ act: 'blankBelow', icon: 'i-addbelow', label: 'Ajouter une ligne vide en dessous', hint: 'Rangée complète (case de lot, désignation, prix) sous cette rangée. La suite descend.' });
-    if (locate(page, line)?.r > 0)
-      items.push({ act: 'blankAbove', icon: 'i-addabove', label: 'Ajouter une ligne vide au-dessus', hint: 'Rangée complète (case de lot, désignation, prix) au-dessus de cette rangée.' });
+  // Ajouter des lignes : sur toute ligne du tableau (même vide, un titre ou un total) ; modèle pris sur une ligne normale
+  // du tableau quand celle-ci ne peut pas servir de modèle.
+  if (canAddRows(page, line)) {
+    const copyable = canCopyLine(page, line);
+    items.push({ act: copyable ? 'blankBelow' : 'oneBelow', icon: 'i-addbelow', label: 'Ajouter une ligne vide en dessous', hint: 'Rangée complète (case de lot, désignation, prix) sous cette rangée. La suite descend.' });
+    if (canAddAbove(page, line))
+      items.push({ act: copyable ? 'blankAbove' : 'oneAbove', icon: 'i-addabove', label: 'Ajouter une ligne vide au-dessus', hint: 'Rangée complète (case de lot, désignation, prix) au-dessus de cette rangée.' });
     items.push({ act: 'rows', icon: 'i-rows', label: 'Ajouter des lignes… (1, 5, 10, 15)', hint: 'Plusieurs lignes vides d\'un coup, mêmes colonnes et même hauteur que les lignes du tableau.' });
-    items.push({ act: 'copy', icon: 'i-copy', label: 'Dupliquer la ligne', hint: 'Copie juste en dessous (texte et prix), à corriger. La suite descend.' });
+    if (copyable) items.push({ act: 'copy', icon: 'i-copy', label: 'Dupliquer la ligne', hint: 'Copie juste en dessous (texte et prix), à corriger. La suite descend.' });
   }
   if (typedRest && canCopyLine(page, line))
     items.push({ act: 'typed', from: typed, icon: 'i-split', label: 'Séparer ici', hint: `« ${short(typedRest)} » passe dans sa propre ligne, juste en dessous.` });
@@ -500,6 +503,15 @@ function lineChoices(f) {
     items.push({ act: 'split', icon: 'i-split', label: 'Couper ici (trait au-dessus de cette ligne)', hint: 'Un trait au-dessus de cette ligne : elle devient une rangée à part (sortie de la grande case), avec sa case de lot et ses prix.' });
   if (canSplitBelow(page, line))
     items.push({ act: 'splitBelow', icon: 'i-split', label: 'Séparer en dessous (tracer un trait)', hint: 'Un trait sous cette ligne : ce qui suit devient une rangée à part.' });
+  if (hasLotCell(line)) {
+    // Numéro de lot dans une grande case : en haut (par défaut), au milieu ou en bas.
+    const at = locate(page, line);
+    const seg = at ? lotSegment(at.table, at.r, line) : null;
+    if (seg && seg.bottom - seg.top > lineBounds(line).Height - (line.Extra ?? 0) + 24)
+      for (const [v, label] of [[null, 'en haut'], ['Middle', 'au milieu'], ['Bottom', 'en bas']])
+        if ((line.LotAlign ?? null) !== v) items.push({ act: 'lotAlign', value: v, icon: 'i-rows', label: `Numéro de lot ${label}`, hint: 'Place du numéro dans sa case (grande case).' });
+    items.push({ act: 'lotRemove', icon: 'i-trash', label: 'Retirer la case de lot', hint: 'Cette ligne n\'est pas un objet : sa case disparaît (les autres numéros ne bougent pas).', danger: true });
+  }
   if (hasLotCell(line) && !isZeroLot(line))
     items.push({ act: 'end', icon: 'i-addbelow', label: 'Mettre à la fin (lot 0)', hint: 'Objet absent : sa ligne part à la fin, ce qui suit remonte.' });
   const at0 = locate(page, line);
@@ -560,6 +572,15 @@ async function lineAction(item, f) {
   const name = short(firstText(line)) || 'ligne vide';
   if (item.act === 'end') return applyLot(state.view, line, '0');
   if (item.act === 'rows') return rowsDialog(page, line);
+  if (item.act === 'oneBelow' || item.act === 'oneAbove') return addRowsNow(page, line, 1, item.act === 'oneAbove');
+  if (item.act === 'lotAlign' || item.act === 'lotRemove') {
+    pushUndo();
+    if (item.act === 'lotAlign') { if (item.value) line.LotAlign = item.value; else delete line.LotAlign; } else removeLot(state.project, line);
+    replan(); recomputeAll();
+    await refreshView();
+    status(item.act === 'lotRemove' ? `Case de lot retirée : « ${name} » n'est pas un objet. ↶ pour annuler.` : 'Numéro de lot déplacé dans sa case. ↶ pour annuler.');
+    return scheduleSave();
+  }
   if (item.act === 'addLot') {
     pushUndo();
     addLotHere(state.project, locate(page, line)?.table ?? null, line);
@@ -981,7 +1002,7 @@ async function rowsDialog(page, line) {
     <div class="counts">${[1, 5, 10, 15].map((n) => `<button data-n="${n}" class="${n === 10 ? 'on' : ''}">${n}</button>`).join('')}</div>
     <p><label>Autre nombre : <input type="number" id="rowsN" min="1" max="200" value="10" inputmode="numeric"></label></p>
     <p><label><input type="checkbox" id="rowsAbove"> au-dessus de cette ligne (sinon en dessous)</label></p>
-    <p class="muted">Mêmes colonnes, même hauteur et mêmes traits que les lignes du tableau ; la case de lot apparaît quand on écrit. La page garde sa taille : si elle est pleine, la suite part sur une page blanche juste après.</p>`;
+    <p class="muted">Mêmes colonnes, même hauteur et mêmes traits que les lignes du tableau ; la case de lot apparaît quand on écrit (page ajoutée : avec le « + » à gauche). La page garde sa taille : si elle est pleine, la suite part sur une page blanche juste après.</p>`;
   const choice = await dialog('Ajouter des lignes', html, [{ label: 'Annuler', value: null }, { label: 'Ajouter', value: 'ok', className: 'accent' }], (e) => {
     const b = e.target.closest('button[data-n]');
     if (!b) return;
@@ -990,7 +1011,11 @@ async function rowsDialog(page, line) {
   });
   if (choice !== 'ok') return;
   const n = Math.max(1, Math.min(200, Math.trunc(+$('rowsN').value || 0)));
-  const above = $('rowsAbove').checked && (locate(page, line)?.r ?? 0) > 0;
+  return addRowsNow(page, line, n, $('rowsAbove').checked && canAddAbove(page, line));
+}
+
+/** Ajoute n lignes vides sous (ou au-dessus de) la rangée de la ligne ; la suite part sur une page blanche si la page est pleine. */
+async function addRowsNow(page, line, n, above) {
   const flat = page.Added ? null : state.flats.get(page) ?? (await restoreFlat(page));
   pushUndo();
   const res = addRows(state.project, page, line, n, { above, img: flat });

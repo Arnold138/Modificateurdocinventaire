@@ -703,17 +703,20 @@ public sealed partial class MainWindow : Window
         int typed = CaretLine(f);
         string rest = typed > 0 ? string.Join(" ", f.Text.Replace("\r\n", "\n").Split('\n').Skip(typed)).Trim() : "";
         bool canCopy = Rows.CanCopy(page, line);
-        if (canCopy)
+        // Ajouter des lignes : sur toute ligne du tableau (même vide, un titre ou un total) ; modèle pris sur une ligne normale
+        // du tableau quand celle-ci ne peut pas servir de modèle.
+        if (Rows.CanAddRows(page, line))
         {
             list.Add(new("Ajouter une ligne vide en dessous", "Rangée complète (case de lot, désignation, prix) sous cette rangée. La suite descend.", "\uE710",
-                () => _ = LineActionAsync("blankBelow", 0, f)));
-            if (Rows.Locate(page, line) is { R: > 0 })
+                () => _ = canCopy ? LineActionAsync("blankBelow", 0, f) : AddRowsNowGuardedAsync(page, line, 1, false)));
+            if (Rows.CanAddAbove(page, line))
                 list.Add(new("Ajouter une ligne vide au-dessus", "Rangée complète (case de lot, désignation, prix) au-dessus de cette rangée.", "\uE710",
-                    () => _ = LineActionAsync("blankAbove", 0, f)));
+                    () => _ = canCopy ? LineActionAsync("blankAbove", 0, f) : AddRowsNowGuardedAsync(page, line, 1, true)));
             list.Add(new("Ajouter des lignes… (1, 5, 10, 15)", "Plusieurs lignes vides d'un coup, mêmes colonnes et même hauteur que les lignes du tableau.", "\uE8FD",
                 () => _ = AddRowsDialogAsync(page, line)));
-            list.Add(new("Dupliquer la ligne", "Copie juste en dessous (texte et prix), à corriger. La suite descend.", "\uE8C8",
-                () => _ = LineActionAsync("copy", 0, f)));
+            if (canCopy)
+                list.Add(new("Dupliquer la ligne", "Copie juste en dessous (texte et prix), à corriger. La suite descend.", "\uE8C8",
+                    () => _ = LineActionAsync("copy", 0, f)));
         }
         if (rest.Length > 0 && canCopy)
             list.Add(new("Séparer ici", $"« {Short(rest)} » passe dans sa propre ligne, juste en dessous.", "\uE8C6",
@@ -724,6 +727,24 @@ public sealed partial class MainWindow : Window
         if (Rows.CanSplitBelow(page, line))
             list.Add(new("Séparer en dessous (tracer un trait)", "Un trait sous cette ligne : ce qui suit devient une rangée à part.", "\uE8C6",
                 () => _ = LineActionAsync("splitBelow", 0, f)));
+        if (Lots.HasCell(line))
+        {
+            // Numéro de lot dans une grande case : en haut (par défaut), au milieu ou en bas.
+            if (Rows.Locate(page, line) is { } atL)
+            {
+                var seg = Lots.LotSegment(atL.Table, atL.R, line);
+                if (seg.Bottom - seg.Top > line.Bounds.Height - line.Extra + 24)
+                    foreach (var (v, label) in new (string?, string)[] { (null, "en haut"), ("Middle", "au milieu"), ("Bottom", "en bas") })
+                        if (line.LotAlign != v)
+                        {
+                            string? value = v;
+                            list.Add(new($"Numéro de lot {label}", "Place du numéro dans sa case (grande case).", "\uE8FD",
+                                () => _ = LotAlignAsync(line, value)));
+                        }
+            }
+            list.Add(new("Retirer la case de lot", "Cette ligne n'est pas un objet : sa case disparaît (les autres numéros ne bougent pas).", "\uE74D",
+                () => _ = LineActionAsync("lotRemove", 0, f), Danger: true));
+        }
         if (Lots.HasCell(line) && !Lots.IsZero(line))
             list.Add(new("Mettre à la fin (lot 0)", "Objet absent : sa ligne part à la fin, ce qui suit remonte.", "\uE74B",
                 () => _ = LineActionAsync("end", 0, f)));
@@ -789,6 +810,17 @@ public sealed partial class MainWindow : Window
         string name = Short(line.FirstText);
         if (name.Length == 0) name = "ligne vide";
         if (act == "end") { if (_view != null) await ApplyLotAsync(_view, line, "0"); return; }
+        if (act == "lotRemove")
+        {
+            PushUndo();
+            Lots.Remove(_project, line);
+            Replan();
+            RecomputeTotals();
+            await RefreshViewAsync();
+            SetStatus($"Case de lot retirée : « {name} » n'est pas un objet. ↶ pour annuler.");
+            ScheduleAutosave();
+            return;
+        }
         if (act == "addLot")
         {
             PushUndo();
@@ -1050,7 +1082,7 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(aboveBox);
         panel.Children.Add(new TextBlock
         {
-            Text = "Mêmes colonnes, même hauteur et mêmes traits que les lignes du tableau ; la case de lot apparaît quand on écrit. La page garde sa taille : si elle est pleine, la suite part sur une page blanche juste après.",
+            Text = "Mêmes colonnes, même hauteur et mêmes traits que les lignes du tableau ; la case de lot apparaît quand on écrit (page ajoutée : avec le « + » à gauche). La page garde sa taille : si elle est pleine, la suite part sur une page blanche juste après.",
             FontSize = 13, Opacity = 0.7, TextWrapping = TextWrapping.Wrap,
         });
         var dialog = new ContentDialog
@@ -1060,7 +1092,27 @@ public sealed partial class MainWindow : Window
         };
         if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
         int n = double.IsNaN(number.Value) ? 10 : Math.Clamp((int)number.Value, 1, 200);
-        bool above = aboveBox.IsChecked == true && (Rows.Locate(page, line)?.R ?? 0) > 0;
+        await AddRowsNowAsync(page, line, n, aboveBox.IsChecked == true && Rows.CanAddAbove(page, line));
+    }
+
+    /// <summary>Numéro de lot en haut, au milieu ou en bas de sa case (clic droit).</summary>
+    private Task LotAlignAsync(PrintedLine line, string? value) => GuardAsync("Numéro de lot", async () =>
+    {
+        PushUndo();
+        line.LotAlign = value;
+        Replan();
+        RecomputeTotals();
+        await RefreshViewAsync();
+        SetStatus("Numéro de lot déplacé dans sa case. ↶ pour annuler.");
+        ScheduleAutosave();
+    });
+
+    private Task AddRowsNowGuardedAsync(ModelPage page, PrintedLine line, int n, bool above) =>
+        GuardAsync("Ajouter des lignes", () => AddRowsNowAsync(page, line, n, above));
+
+    /// <summary>Ajoute n lignes vides sous (ou au-dessus de) la rangée de la ligne ; la suite part sur une page blanche si la page est pleine.</summary>
+    private async Task AddRowsNowAsync(ModelPage page, PrintedLine line, int n, bool above)
+    {
         Raster? flat = page.Added != null ? null : _flats.TryGetValue(page, out var cached) ? cached : await RestoreFlatAsync(page);
         PushUndo();
         var res = AddedPage.AddRows(_project, page, line, n, above, flat);

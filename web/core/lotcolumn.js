@@ -2,7 +2,7 @@
 // trait vertical à gauche, filets horizontaux prolongés, chaque case au même fond que sa rangée.
 // Portage de LotColumn.cs, en entiers : résultat identique, pixel pour pixel, à la version Windows.
 import { Rect } from './geometry.js';
-import { columnWidth, numberBox, hasLotCell, rowOrder } from './lots.js';
+import { columnWidth, numberBox, hasLotCell, rowOrder, ownBox, lotSegment } from './lots.js';
 import { looksLikeTotal } from './model.js';
 import { toBase, baseToPage } from './layout.js';
 
@@ -39,7 +39,9 @@ export function framedRows(table) {
  * Rangée sans case de lot entre deux objets : colonne tracée ou non. Par défaut, pas sur une ligne de total (la colonne
  * s'arrête au total) ; au choix sinon (« + » / corbeille dans la colonne : Row.LotFrame vrai / faux).
  */
-const frameAuto = (row) => (row.LotFrame === true ? true : row.LotFrame === false ? false : !row.Lines.some(looksLikeTotal));
+// Page ajoutée (lignes AutoLot) : un titre écrit entre deux objets n'a pas la colonne (au choix avec « + »).
+const frameAuto = (row) => (row.LotFrame === true ? true : row.LotFrame === false ? false
+  : !row.Lines.some(looksLikeTotal) && !(row.Lines.length > 0 && row.Lines.every((l) => l.AutoLot)));
 
 /**
  * Rangées écrites où l'on peut tracer ou retirer la colonne (sans case de lot, sous le 1er objet) : { rows, framed }. Les rangées
@@ -83,6 +85,32 @@ export function frames(image, page) {
   return out;
 }
 
+/**
+ * Tableau ouvert en bas (il continue page suivante sur l'imprimé, ou une ligne a été ajoutée dessous) : un trait est
+ * tracé sous sa dernière rangée, comme les autres filets. Rien ne change si le trait est déjà là.
+ */
+export function closeTables(image, page) {
+  let out = null;
+  for (const t of page.Tables) {
+    if (t.HasGrid === false || !(t.ColumnXs?.length >= 2) || !(t.RowYs?.length >= 2)) continue;
+    const y = R(t.RowYs[t.RowYs.length - 1]);
+    const x0 = R(t.ColumnXs[0]), x1 = R(t.ColumnXs[t.ColumnXs.length - 1]);
+    t.Closed = false;
+    if (x1 - x0 < 40 || y < 4 || y + 4 >= image.h) continue;
+    let dark = 0, n = 0;
+    for (let x = x0 + 4; x < x1 - 4; x += 3) {
+      n++;
+      for (let yy = y - 4; yy <= y + 4; yy++) if (gray(image, x, yy) < 150) { dark++; break; }
+    }
+    if (n === 0 || dark * 2 >= n) continue;
+    const m = t.Rules ? { vThick: t.Rules.V, hThick: t.Rules.H, color: t.Rules.Color } : measureRules(image, t, page);
+    out ??= { w: image.w, h: image.h, ch: image.ch, data: new Uint8ClampedArray(image.data) };
+    fill(out, x0 - half(m.vThick), y - half(m.hThick), x1 - x0 + m.vThick, m.hThick, m.color);
+    t.Closed = true; // pour l'export : cette bande change (recopiée dans la photo d'origine)
+  }
+  return out ?? image;
+}
+
 /** Zones de la page redressée qui changent (à recopier dans la photo d'origine). */
 export function lotRegions(page, enabled) {
   const framed = enabled ? framedTables(page) : [];
@@ -93,6 +121,10 @@ export function lotRegions(page, enabled) {
     if (rows.length === 0) continue;
     const top = Math.min(...rows.map((r) => t.RowYs[r])), bottom = Math.max(...rows.map((r) => t.RowYs[r + 1]));
     boxes.push(Rect.fromEdges(t.ColumnXs[0] - w - 8, top - 8, t.ColumnXs[0] - 1, bottom + 8));
+  }
+  for (const t of page.Tables.filter((x) => x.Closed)) {
+    const y = t.RowYs[t.RowYs.length - 1];
+    boxes.push(Rect.fromEdges(t.ColumnXs[0] - 8, y - 8, t.ColumnXs[t.ColumnXs.length - 1] + 8, y + 8));
   }
   for (const t of page.Tables.filter((x) => !framed.includes(x)))
     for (const l of t.Rows.flatMap((r) => r.Lines).filter((x) => (x.Lot ?? '').length > 0)) boxes.push(numberBox(t, l, w));
@@ -118,6 +150,13 @@ export function drawLotColumns(image, page) {
       }
       fill(output, f.left - hv, y0 - hh, f.right - (f.left - hv), f.hThick, f.color);
       fill(output, f.left - hv, y1 - hh, f.right - (f.left - hv), f.hThick, f.color);
+      // Case de lot d'une seule ligne dans une grande case : fermée en haut et en bas, à sa hauteur.
+      const row = f.table.Rows[r];
+      for (const l of row?.Lines ?? []) {
+        if (!ownBox(row, l)) continue;
+        const s = lotSegment(f.table, r, l);
+        for (const y of [R(s.top), R(s.bottom)]) if (y - y0 > 3 && y1 - y > 3) fill(output, f.left - hv, y - hh, f.right - (f.left - hv), f.hThick, f.color);
+      }
     }
   }
   return output;
@@ -127,7 +166,7 @@ export function drawLotColumns(image, page) {
  * Trait gauche du tableau dans la rangée [y0, y1[ : abscisse de son premier pixel sombre près de `right` (il peut
  * être un peu décalé : page légèrement de travers), mesurée sur trois hauteurs ; null s'il n'y est pas (rangée ajoutée).
  */
-function ruleLeftOf(img, right, y0, y1) {
+export function ruleLeftOf(img, right, y0, y1) {
   let found = null;
   for (const y of [y0 + 2, (y0 + y1) >> 1, y1 - 3]) {
     if (y < y0 || y >= y1 || y < 0 || y >= img.h) continue;

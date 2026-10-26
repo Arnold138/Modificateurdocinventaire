@@ -43,6 +43,14 @@ public static class Rows
         row.Inserted is null ? null : page.Inserts.FirstOrDefault(b => b.Id == row.Inserted);
 
     /// <summary>Une ligne d'article (ou un titre) d'un tableau à filets peut être dupliquée ; pas un total ni un en-tête.</summary>
+    /// <summary>Ligne d'un tableau où l'on peut ajouter des lignes vides (toute ligne du tableau, même vide, un total ou un titre).</summary>
+    public static bool CanAddRows(Page page, PrintedLine line) =>
+        !line.OutsideTable && line.Kind != LineKind.Ignoree && !line.Deleted && Locate(page, line) != null;
+
+    /// <summary>Au-dessus : partout sauf au-dessus de l'en-tête du tableau.</summary>
+    public static bool CanAddAbove(Page page, PrintedLine line) =>
+        Locate(page, line) is { } at && (at.R > 0 || !at.Row.Lines.Any(l => l.Kind == LineKind.EnTete));
+
     public static bool CanCopy(Page page, PrintedLine line) =>
         !line.OutsideTable && (line.Kind is LineKind.Article or LineKind.Titre) && (line.FirstText.Length > 0 || page.Added != null) && Locate(page, line) != null;
 
@@ -157,7 +165,7 @@ public static class Rows
     {
         var src0 = from ?? line;
         var at = Locate(page, line);
-        if (at is null || (!force && src0 == line && !CanCopy(page, line)) || (above && at.R == 0)) return null;
+        if (at is null || (!force && src0 == line && !CanCopy(page, line)) || (above && !CanAddAbove(page, line))) return null;
         var (t, r, _, _) = at;
         // Modèle de la rangée (from, même tableau) : hauteur, filets et place des cases ; line : où la poser.
         var sat = src0 == line ? at : Locate(page, src0);
@@ -191,6 +199,7 @@ public static class Rows
         var copy = new PrintedLine
         {
             Kind = blank ? LineKind.Article : src0.Kind, KindChosenByUser = !blank && src0.KindChosenByUser, Copy = true,
+            AutoLot = page.Added != null, // ligne d'une page ajoutée : case de lot seulement avec « + »
             Cells = src.Select(c => new Field
             {
                 Id = $"{page.Id}-{band.Id}-{c.F.Column}", Column = c.F.Column,

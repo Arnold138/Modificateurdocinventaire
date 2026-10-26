@@ -54,7 +54,7 @@ public static class Stress
         var final = After(project);
         Directory.CreateDirectory(outDir);
         File.WriteAllText(Path.Combine(outDir, "export.txt"), TxtExporter.Build(project).Text);
-        var drawn = project.Pages.Select(pg => pg.EndLots ? null : LotColumn.Draw(PageLayout.Stretch(ImageOf(images, pg), pg), pg)).ToList();
+        var drawn = project.Pages.Select(pg => pg.EndLots ? null : LotColumn.Draw(LotColumn.CloseTables(PageLayout.Stretch(ImageOf(images, pg), pg), pg), pg)).ToList();
         for (int k = 0; k < project.Pages.Count; k++)
         {
             var src = drawn[final.Pages[k].Template ?? k];
@@ -186,6 +186,7 @@ public static class Stress
             case "lot": Lots.Set(project, line, a.GetProperty("v").GetString()!); break;
             case "addLot": Lots.Add(project, line); break;
             case "addLotHere": Lots.AddHere(project, table, line); break;
+            case "align": line.LotAlign = a.GetProperty("v").ValueKind == JsonValueKind.Null ? null : a.GetProperty("v").GetString(); break;
             case "frameToggle": foreach (var x in a.GetProperty("rows").EnumerateArray()) table.Rows[x.GetInt32()].LotFrame = a.GetProperty("on").GetBoolean(); break;
             case "sync":
             {

@@ -64,6 +64,13 @@ public static class PageAnalyzer
         // Page ajoutée d'une version précédente : « objet quand on y écrit » s'appelle maintenant AutoLot.
         if (page.Added != null)
             foreach (var l in page.AllLines().Where(l => l.ForceLot && l.FirstText.Length == 0)) { l.ForceLot = false; l.AutoLot = true; }
+        // Page ajoutée : une case n'y vient plus toute seule (seulement avec « + ») ; un numéro déjà tapé reste.
+        if (page.Added != null)
+            foreach (var l in page.AllLines())
+            {
+                if (l.Lot.Trim().Length > 0 && !l.ForceLot && !l.LotHere) { if (l.FirstText.Length > 0) l.ForceLot = true; else l.LotHere = true; }
+                l.AutoLot = true; // ligne de page ajoutée (même ajoutée avant cette version)
+            }
         foreach (var t in page.Tables)
         {
             if (!t.HasGrid || t.ColumnXs.Count < 2 || t.RowYs.Count < 2) continue;

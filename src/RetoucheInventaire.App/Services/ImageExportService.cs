@@ -26,7 +26,8 @@ public static class ImageExportService
     public static Raster PageRaster(ModelPage page, Raster stretched, bool lotFrame = true)
     {
         var device = CanvasDevice.GetSharedDevice();
-        var image = lotFrame && LotColumn.FramedTables(page).Count > 0 ? LotColumn.Draw(stretched, page) : stretched;
+        var closed = LotColumn.CloseTables(stretched, page);
+        var image = lotFrame && LotColumn.FramedTables(page).Count > 0 ? LotColumn.Draw(closed, page) : closed;
         var rects = new List<(int, int, int, int, string)>();
         foreach (var line in page.AllLines())
         {
