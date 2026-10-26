@@ -90,7 +90,9 @@
 
 - **Page blanche** : seulement le 1er tableau d'objets du modèle (en-tête + une ligne) ; les tableaux en dessous ne sont pas repris (en-tête de l'étude au-dessus : gardé).
 - **Ajouter des lignes** recopie la **rangée modèle** du tableau : une rangée d'une seule ligne, de hauteur médiane (pas l'en-tête, ni une rangée agrandie). La page garde sa taille en prenant le blanc du bas ; une marge de 2,5 % de la hauteur est gardée sous le dernier tableau, texte ou zone verrouillée. Quand la page est pleine, les lignes restantes partent sur une **page blanche juste après** (sur une page de l'inventaire, elles ne restent donc pas toutes à l'endroit choisi). Si la page ne peut pas servir de modèle (colonnes trop réduites), elle s'allonge.
-- Les lignes ajoutées par « Ajouter des lignes » reçoivent leur case de lot **quand on y écrit** (pas de numéro sur une ligne vide, même avec Synchroniser).
+- Les lignes ajoutées par « Ajouter des lignes » sur une page de l'inventaire reçoivent leur case de lot **quand on y écrit** (pas de numéro sur une ligne vide, même avec Synchroniser). Sur une **page ajoutée**, aucune case ne vient toute seule : seulement avec le « + » à gauche (même sur une ligne vide). Un numéro déjà tapé sur une page ajoutée d'une version précédente est gardé ; une case vide venue toute seule disparaît.
+- Sur une page ajoutée, un titre écrit entre deux objets n'a pas la colonne des lots par défaut (« + » dans la colonne pour la tracer).
+- **Ajouter une ligne** est possible sur toute ligne d'un tableau (vide, titre, total, en-tête : en dessous) ; quand la ligne ne peut pas servir de modèle (vide, total, en-tête), la ligne vide reprend la rangée modèle du tableau.
 
 - L'image de la page ajoutée est celle du modèle (même photo ou même page de PDF, même cadrage) redessinée : dans les tableaux d'objets (au moins trois colonnes dont une large), papier propre et traits **retracés** à partir de l'imprimé (épaisseur et couleur prises sur le modèle) ; ailleurs l'imprimé est gardé (en-tête de l'étude, titres). Les traits retracés sont nets et réguliers : un trait irrégulier ou pointillé de l'imprimé devient régulier.
 - Gardés tels qu'imprimés : les **rangées d'en-tête** (et les bandes tramées en haut du tableau). Si une colonne est coupée ou réunie, la case d'en-tête concernée est vidée et son texte est **retapé** (écriture de l'app).
@@ -98,6 +100,13 @@
 - Les lignes de la page ajoutée sont celles du modèle (une rangée de plusieurs lignes garde ses lignes) : on écrit dans celle qu'on veut. « Réduire la rangée » n'existe pas sur une page ajoutée (rien d'imprimé à enlever) : la hauteur se règle avec **Ligne plus haute / moins haute**.
 - **Recadrer** est désactivé sur une page ajoutée (elle n'a rien à relire). Un tableau encore vide (seulement son en-tête) n'apparaît pas dans le .txt.
 - Une colonne se coupe en deux si elle fait au moins 72 pixels de page ; il reste toujours au moins deux colonnes.
+
+## Cadres et place du numéro
+
+- **Tableau ouvert en bas** (il continue page suivante sur l'imprimé) : un trait est tracé sous sa dernière rangée s'il manque sur plus de la moitié de la largeur (épaisseur et couleur des traits du tableau). Un tableau dont la dernière rangée a été mal lue (bas trop haut) aurait son trait au mauvais endroit.
+- **Rangée déplacée, lot 0 parti** : le cadre de la colonne des lots est retracé à l'arrivée (haut, bas, gauche) et le trait laissé en haut d'une rangée sans cadre est effacé (seulement l'encre, dans la colonne).
+- **Petite case** (« Ajouter une case de lot ici » sur une ligne d'une grande case, ou plusieurs cases dans la même rangée) : fermée au milieu des interlignes au-dessus et en dessous de la ligne ; une ligne écrite sur plusieurs lignes avec Entrée reste une seule ligne (la séparer d'abord : « Séparer ici »).
+- **Place du numéro** (clic droit) : en haut (par défaut, à la hauteur de la 1re ligne), au milieu ou en bas de sa case ; proposé seulement quand la case est plus haute qu'une ligne.
 
 ## Texte sur plusieurs lignes
 
