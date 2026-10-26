@@ -16,7 +16,8 @@ import {
   hasLotCell, rowOrder, lotTables, setLotTables, defaultLotChoice, columnWidth,
 } from '../core/lots.js';
 import { drawLotColumns, framedRows, frames } from '../core/lotcolumn.js';
-import { setExtra, stretch, extraFor, baseHeight } from '../core/layout.js';
+import { setExtra, stretch, extraFor, baseHeight, tallExtra } from '../core/layout.js';
+import { addBlankPage, blankBase, canBeModel, addColumn, removeColumn, canAddColumn, canRemoveColumn, addedTable } from '../core/addpage.js';
 import { planArrangement, composePage, unitCrop, viewOf, syncEndPages } from '../core/arrange.js';
 import { recomputeTotals } from '../core/totals.js';
 import {
@@ -52,6 +53,9 @@ const project = JSON.parse(readFileSync(projectPath, 'utf8'));
 for (const p of project.Pages) upgradePage(p);
 const images = new Map(project.Pages.map((p, k) => [p.Id, readPgm(join(imagesDir, `p${k + 1}.pgm`))]));
 const baseH = new Map(project.Pages.map((p) => [p.Id, baseHeight(p)]));
+// Pages ajoutées : image de la source du modèle, redessinée vierge (comme restoreFlat dans l'application).
+const raw = new Map(images);
+const imageOf = (pg) => (pg.Added ? blankBase(raw.get(pg.Id), pg) : images.get(pg.Id));
 
 let rnd = SEED >>> 0;
 const random = () => { rnd = (rnd + 0x6d2b79f5) >>> 0; let t = rnd; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
@@ -83,7 +87,7 @@ const resolve = (t) => {
 const ref = (x) => ({ p: x.p, ti: x.ti, o: x.o, i: x.i });
 
 // Comme l'écran : après chaque action, cases de lot, mise en page (pages « lots de fin »), totaux.
-const extraOf = (line) => Math.max(0, ...line.Cells.filter((f) => f.Text.includes('\n') && !f.Locked)
+const extraOf = (line) => Math.max(0, tallExtra(line), ...line.Cells.filter((f) => f.Text.includes('\n') && !f.Locked)
   .map((f) => extraFor(line, f, f.Text.split('\n').length, f.FontSize)));
 function after() {
   resyncLots(project);
@@ -148,6 +152,19 @@ const ACTIONS = {
     return b;
   },
   removeAdded(t) { const { page, line } = resolve(t); removeAddedRow(page, line); },
+  // Page ajoutée : vierge sur le modèle de la page de la ligne, placée en `at`.
+  addPage(t, a) {
+    const model = pages()[t.p];
+    const pg = addBlankPage(project, model, a.at, raw.get(model.Id), a.id);
+    if (pg) { raw.set(pg.Id, raw.get(model.Id)); baseH.set(pg.Id, baseHeight(pg)); }
+    return pg;
+  },
+  removePage(t) { if (pages()[t.p]?.Added) pages().splice(t.p, 1); },
+  fill(t, a) { const { line } = resolve(t); line.Cells[0].Text = `1 objet ${a.w}`; line.Cells.slice(1).forEach((c, i) => { c.Text = a.v[i] ?? ''; }); },
+  addCol(t, a) { const { page, table } = resolve(t); addColumn(page, table, a.c); },
+  removeCol(t, a) { const { page, table } = resolve(t); removeColumn(page, table, a.k); },
+  taller(t) { const { page, line } = resolve(t); line.Tall = (line.Tall ?? 0) + 1; setExtra(page, line, extraOf(line)); },
+  shorter(t) { const { page, line } = resolve(t); line.Tall = Math.max(0, (line.Tall ?? 0) - 1); setExtra(page, line, extraOf(line)); },
   del(t) { resolve(t).line.Deleted = true; },
   restore(t) { resolve(t).line.Deleted = false; },
   lot(t, a) { setLot(project, resolve(t).line, a.v); },
@@ -199,7 +216,38 @@ const hasText = (x) => !x.line.Deleted && firstText(x.line).length > 0;
 const addedRow = (x) => !!addedRowOf(x.page, x.line);
 let added = 0;
 
+let pageN = 0;
+/** Pages ajoutées : ajouter, retirer, remplir, lignes, colonnes, hauteur. */
+function chooseAdded() {
+  const q = random();
+  const onAdded = targets((x) => !!x.page.Added && !x.line.Deleted);
+  if (!onAdded.length || q < 0.10) {
+    const x = pick(targets((y) => canBeModel(y.page) && y.i === 0));
+    return x && ['addPage', x, { at: Math.floor(random() * (pages().length + 1)), id: `aj${++pageN}` }];
+  }
+  if (q < 0.17) { const x = pick(onAdded); return x && ['removePage', x, {}]; }
+  if (q < 0.42) {
+    const x = pick(onAdded.filter((y) => !firstText(y.line) && addedTable(y.page, y.table)));
+    return x && ['fill', x, { w: word(), v: Array.from({ length: Math.max(0, x.line.Cells.length - 1) }, () => pick(['10', '250', '1 500', 'mémoire', ''])) }];
+  }
+  if (q < 0.57) { const x = pick(onAdded.filter((y) => canCopyLine(y.page, y.line))); return x && ['blank', x, { above: chance(0.4) && x.o > 0, text: chance(0.3) ? `ajout ${word()}` : '' }]; }
+  if (q < 0.69) {
+    const x = pick(onAdded.filter((y) => addedTable(y.page, y.table)));
+    const cs = x ? x.table.ColumnXs.map((_, c) => c).filter((c) => canAddColumn(x.page, x.table, c)) : [];
+    return cs.length && ['addCol', x, { c: pick(cs) }];
+  }
+  if (q < 0.79) {
+    const x = pick(onAdded.filter((y) => addedTable(y.page, y.table)));
+    const ks = x ? x.table.ColumnXs.map((_, k) => k).filter((k) => canRemoveColumn(x.page, x.table, k)) : [];
+    return ks.length && ['removeCol', x, { k: pick(ks) }];
+  }
+  if (q < 0.88) { const x = pick(onAdded.filter((y) => addedTable(y.page, y.table) && y.r >= y.page.Added.Tables[y.ti].Head)); return x && ['taller', x, {}]; }
+  if (q < 0.94) { const x = pick(onAdded.filter((y) => (y.line.Tall ?? 0) > 0)); return x && ['shorter', x, {}]; }
+  const x = pick(onAdded.filter(addedRow)); return x && ['removeAdded', x, {}];
+}
+
 function choose() {
+  if (!process.env.NOADDED && random() < Number(process.env.ADDED ?? 0.25)) return chooseAdded();
   const r = random();
   const all = targets(hasText);
   if (!all.length) return null;
@@ -238,6 +286,7 @@ function choose() {
 const problems = [];
 const fail = (step, what) => { if (problems.length < 200) problems.push(`#${step} ${what}`); };
 const lotsBefore = () => new Map(targets(() => true).map((x) => [x.line, x.line.Lot ?? '']));
+const allLinesOf = (p) => p.Tables.flatMap((t) => t.Rows.flatMap((r) => r.Lines));
 const allText = () => pages().flatMap((p) => p.Tables.flatMap((t) => t.Rows.flatMap((r) => r.Lines.flatMap((l) => l.Cells.map((c) => c.Text))))).join('\n');
 
 function check(step, op, beforeLots, plan) {
@@ -278,6 +327,21 @@ function check(step, op, beforeLots, plan) {
       }
     });
   }
+  // Pages ajoutées : une case par colonne sur chaque ligne, dans sa colonne ; repères cohérents.
+  for (const page of pages()) {
+    if (!page.Added) continue;
+    if ((page.Added.Tables ?? []).length !== page.Tables.length) fail(step, `${op} : page ajoutée ${page.Id} repères ${page.Added.Tables.length} ≠ ${page.Tables.length} tableaux`);
+    page.Tables.forEach((t, ti) => {
+      if (!page.Added.Tables[ti]) return;
+      const n = t.ColumnXs.length - 1;
+      for (let c = 1; c <= n; c++) if (!(t.ColumnXs[c] > t.ColumnXs[c - 1])) fail(step, `${op} : page ajoutée colonnes dans le désordre`);
+      for (const l of t.Rows.flatMap((r) => r.Lines)) {
+        const cols = l.Cells.map((f) => f.Column);
+        if (new Set(cols).size !== cols.length || cols.some((c) => c < 0 || c >= n)) fail(step, `${op} : page ajoutée cases ${cols.join(',')} pour ${n} colonnes`);
+        for (const f of l.Cells) if (f.Column >= 0 && f.Column < n && !(f.Box.X >= t.ColumnXs[f.Column] - 2 && f.Box.X + f.Box.Width <= t.ColumnXs[f.Column + 1] + 2)) fail(step, `${op} : page ajoutée case hors de sa colonne`);
+      }
+    });
+  }
   // 5. Chaque objet a sa case.
   for (const o of objectLines(project)) if (!hasLotCell(o.line)) fail(step, `${op} : objet « ${firstText(o.line).slice(0, 30)} » sans case de lot`);
   // 6. Mots tapés toujours là.
@@ -301,7 +365,7 @@ function check(step, op, beforeLots, plan) {
 // ---------- Rendu (pour comparer avec Windows) ----------
 
 function renderAll(plan) {
-  const imgs = pages().map((pg) => (pg.EndLots ? null : drawLotColumns(stretch(images.get(pg.Id), pg), pg)));
+  const imgs = pages().map((pg) => (pg.EndLots ? null : drawLotColumns(stretch(imageOf(pg), pg), pg)));
   return pages().map((pg, k) => {
     const src = imgs[plan.pages[k].template ?? k];
     if (!src) return null;
@@ -323,6 +387,8 @@ function run(op, x, args) {
   if (op === 'removeWord') live.delete(args.w);
   if (op === 'blank' && args.text) live.add(args.text.split(' ')[1]);
   if (op === 'removeAdded') for (const l of resolve(t).row.Lines) for (const w of l.Cells[0].Text.match(/mot\d+/g) ?? []) live.delete(w);
+  if (op === 'fill') live.add(args.w);
+  if (op === 'removePage') for (const l of allLinesOf(pages()[t.p])) for (const c of l.Cells) for (const w of c.Text.match(/mot\d+/g) ?? []) live.delete(w);
   try {
     const res = ACTIONS[op](t, args);
     if (op === 'blank' && !res && args.text) live.delete(args.text.split(' ')[1]); // ligne vide refusée : rien de tapé
@@ -373,7 +439,7 @@ writeFileSync(join(outDir, 'ops.json'), JSON.stringify({ seed: SEED, video, ops 
 writeFileSync(join(outDir, 'export.txt'), buildTxt(project).text);
 renderAll(plan).forEach((img, k) => img && writePgm(join(outDir, `page${k + 1}.pgm`), img));
 if (process.env.COLS) pages().forEach((pg, k) => console.log(`page ${k + 1} ${pg.EndLots ? 'FIN' : pg.Id} tableaux ${pg.Tables.map((t) => Math.round(t.ColumnXs?.[0] ?? -1)).join(',')} colonne lots ${Math.round(columnWidth(pg))} hauteurs texte ${[...new Set(pg.Tables.flatMap((t) => t.Rows.flatMap((r) => r.Lines.map((l) => Math.round(l.Cells[0]?.FontSize ?? 0)))))].sort((x, y) => x - y).slice(0, 8).join('/')}`));
-if (process.env.FRAMES) pages().forEach((pg, k) => { if (pg.EndLots) return; const img = stretch(images.get(pg.Id), pg); for (const f of frames(img, pg)) console.log(`page ${k + 1} cadre left ${f.left} right ${f.right} vThick ${f.vThick} hThick ${f.hThick} couleur ${f.color} rangées ${f.rows.length}`); });
+if (process.env.FRAMES) pages().forEach((pg, k) => { if (pg.EndLots) return; const img = stretch(imageOf(pg), pg); for (const f of frames(img, pg)) console.log(`page ${k + 1} cadre left ${f.left} right ${f.right} vThick ${f.vThick} hThick ${f.hThick} couleur ${f.color} rangées ${f.rows.length}`); });
 if (process.env.UNITS) plan.pages.forEach((pp, k) => { const us = pp.pieces.filter((x) => x.kind === 'unit'); if (us.length) console.log(`page ${k + 1} : ${us.length} lots 0 recollés : ` + us.slice(0, 6).map((x) => `[p${x.unit.p + 1} « ${firstText(x.unit.object).slice(0, 18)} » shift ${x.unit.shift.join('/')} src ${x.unit.table.ColumnXs.slice(0, 2).map(Math.round)} dst ${x.unit.dest.table.ColumnXs.slice(0, 2).map(Math.round)}]`).join(' ')); });
 if (process.env.FIRSTP) console.log(problems.slice(0, 4).join('\n'));
 const counts = ops.reduce((m, o) => ((m[o.op] = (m[o.op] ?? 0) + 1), m), {});

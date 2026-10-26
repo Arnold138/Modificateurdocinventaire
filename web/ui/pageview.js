@@ -105,6 +105,7 @@ export class PageView {
     this.refreshLots();
     this.refreshStrikes();
     this.refreshColors();
+    this.drawAddedControls();
   }
 
   refresh() {
@@ -137,6 +138,59 @@ export class PageView {
     this.updateLots();
     this.refreshStrikes();
     this.refreshColors();
+    this.drawAddedControls();
+  }
+
+  // ---------- Page ajoutée : « + » des lignes et des colonnes ----------
+
+  /**
+   * Page ajoutée (vierge, objets inventoriés à la main) : un « + » à droite de chaque rangée (menu de la ligne : ligne
+   * au-dessus, en dessous, plus haute, case de lot…), un « + » au-dessus de chaque colonne (la couper en deux) et un « − »
+   * sous chaque trait intérieur (réunir deux colonnes). Toujours visibles, à taille fixe à l'écran.
+   */
+  drawAddedControls() {
+    for (const b of this.overlay.querySelectorAll('.addctl')) b.remove();
+    const A = this.page.Added;
+    if (!A) return;
+    const mk = (cls, icon, label, cx, cy, onClick) => {
+      const b = el('button', 'addctl ' + cls, this.overlay);
+      b.innerHTML = `<svg><use href="#${icon}"/></svg>`;
+      b.title = label;
+      b.setAttribute('aria-label', label);
+      Object.assign(b.style, { left: cx - 15 + 'px', top: cy - 15 + 'px' });
+      b.addEventListener('pointerdown', (e) => e.preventDefault());
+      b.onclick = (e) => { e.stopPropagation(); onClick(b); };
+      return b;
+    };
+    const W = this.view.width;
+    this.view.tables.forEach((vt, ti) => {
+      const info = A.Tables?.[ti];
+      if (!info || !vt.strips?.length) return;
+      const t = vt.table, xs = t.ColumnXs;
+      // Colonnes : au-dessus du filet du haut (ou juste en dessous s'il n'y a pas la place).
+      const top = vt.RowYs[0];
+      const cy = top - 22 >= 8 ? top - 22 : top + 18;
+      for (let c = 0; c + 1 < xs.length; c++)
+        if (xs[c + 1] - xs[c] >= 72) mk('col', 'i-plus', 'Ajouter une colonne (couper celle-ci en deux)', (xs[c] + xs[c + 1]) / 2, cy, () => this.cb.onAddColumn?.(this, t, c));
+      // Traits intérieurs : « − » sous le filet du bas (réunir les deux colonnes).
+      const bottom = vt.RowYs[vt.RowYs.length - 1], H = this.view.height;
+      const by = bottom + 22 <= H - 8 ? bottom + 22 : bottom - 18;
+      if (xs.length > 3)
+        for (let k = 1; k + 1 < xs.length; k++) mk('rule', 'i-minus', 'Retirer ce trait (réunir les deux colonnes)', xs[k], by, () => this.cb.onRemoveColumn?.(this, t, k));
+      // Lignes : à droite du tableau, au milieu de chaque rangée (pas l'en-tête).
+      const right = xs[xs.length - 1];
+      const cx = right + 24 <= W - 4 ? right + 22 : W - 18;
+      for (const st of vt.strips) {
+        if (st.r < info.Head) continue;
+        const row = t.Rows[st.r];
+        const line = row?.Lines.find((l) => !l.Deleted && l.Cells.length);
+        if (!line) continue;
+        mk('row', 'i-plus', 'Ligne : ajouter au-dessus, en dessous, plus haute, case de lot…', cx, (st.top + st.bottom) / 2, (b) => {
+          const r = b.getBoundingClientRect();
+          this.cb.onLineMenu?.(this, line.Cells[0], { x: r.right, y: r.top });
+        });
+      }
+    });
   }
 
   setLockMode(on) { this.lockpad.classList.toggle('active', on); }

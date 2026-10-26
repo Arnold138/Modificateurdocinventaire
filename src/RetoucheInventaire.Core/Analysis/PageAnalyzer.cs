@@ -66,7 +66,7 @@ public static class PageAnalyzer
             if (!t.HasGrid || t.ColumnXs.Count < 2 || t.RowYs.Count < 2) continue;
             var sizes = t.Rows.SelectMany(r => r.Lines).Select(l => l.Cells.FirstOrDefault()?.FontSize ?? 0).Where(v => v > 0).OrderBy(v => v).ToList();
             double em = sizes.Count > 0 ? sizes[sizes.Count / 2] : 12;
-            bool header = MergeThinRowsOf(t);
+            bool header = page.Added == null && MergeThinRowsOf(t); // page ajoutée : ses repères (Added) suivent ses filets
             for (int r = 0; r < t.Rows.Count && r + 1 < t.RowYs.Count; r++)
             {
                 var row = t.Rows[r];
@@ -85,7 +85,7 @@ public static class PageAnalyzer
                 }
                 row.Lines.Add(line);
             }
-            for (int r = 1; r < t.Rows.Count; r++)
+            for (int r = 1; r < t.Rows.Count && page.Added == null; r++)
             {
                 var lines = t.Rows[r].Lines;
                 if (!LineClassifier.IsHeaderRow(lines)) continue;

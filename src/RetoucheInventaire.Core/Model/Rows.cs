@@ -44,7 +44,7 @@ public static class Rows
 
     /// <summary>Une ligne d'article (ou un titre) d'un tableau à filets peut être dupliquée ; pas un total ni un en-tête.</summary>
     public static bool CanCopy(Page page, PrintedLine line) =>
-        !line.OutsideTable && (line.Kind is LineKind.Article or LineKind.Titre) && line.FirstText.Length > 0 && Locate(page, line) != null;
+        !line.OutsideTable && (line.Kind is LineKind.Article or LineKind.Titre) && (line.FirstText.Length > 0 || page.Added != null) && Locate(page, line) != null;
 
     /// <summary>
     /// Le trait tracé au-dessus de la ligne i passe bien entre les lignes : toutes les cases d'avant au-dessus, toutes celles
@@ -369,7 +369,8 @@ public static class Rows
     /// </summary>
     public static List<(int Y0, int H)>? RowTrimOf(Page page, PrintedLine line)
     {
-        if (line.OutsideTable || Locate(page, line) is not { } at) return null;
+        // Page ajoutée : rangées vierges, rien d'imprimé à enlever (la hauteur se règle avec « Ligne plus / moins haute »).
+        if (line.OutsideTable || page.Added != null || Locate(page, line) is not { } at) return null;
         var (t, r, _, row) = at;
         if (BandOf(page, row)?.Kind == "Copy" || row.Lines.Any(l => l.Deleted || l.Extra > 0)) return null;
         // Texte tapé sur plusieurs lignes : la place lui revient, on ne réduit pas.

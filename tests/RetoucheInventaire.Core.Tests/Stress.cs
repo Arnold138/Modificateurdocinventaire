@@ -21,6 +21,8 @@ public static class Stress
         foreach (var p in project.Pages) PageAnalyzer.Upgrade(p);
         var images = project.Pages.Select((p, k) => (p.Id, Img: Pgm.Read(Path.Combine(imagesDir, $"p{k + 1}.pgm")))).ToDictionary(x => x.Id, x => x.Img);
         var baseH = project.Pages.ToDictionary(p => p.Id, PageLayout.BaseHeight);
+        _raw = new Dictionary<string, Raster>(images);
+        _baseH = baseH;
         var problems = new List<string>();
         void Fail(int step, string what) { if (problems.Count < 200) problems.Add($"#{step} {what}"); }
 
@@ -52,7 +54,7 @@ public static class Stress
         var final = After(project);
         Directory.CreateDirectory(outDir);
         File.WriteAllText(Path.Combine(outDir, "export.txt"), TxtExporter.Build(project).Text);
-        var drawn = project.Pages.Select(pg => pg.EndLots ? null : LotColumn.Draw(PageLayout.Stretch(images[pg.Id], pg), pg)).ToList();
+        var drawn = project.Pages.Select(pg => pg.EndLots ? null : LotColumn.Draw(PageLayout.Stretch(ImageOf(images, pg), pg), pg)).ToList();
         for (int k = 0; k < project.Pages.Count; k++)
         {
             var src = drawn[final.Pages[k].Template ?? k];
@@ -77,7 +79,12 @@ public static class Stress
     }
 
     private static int ExtraOf(PrintedLine line) =>
-        line.Cells.Where(f => f.Text.Contains('\n') && !f.Locked).Select(f => PageLayout.ExtraFor(line, f, f.Text.Split('\n').Length, f.FontSize)).DefaultIfEmpty(0).Max();
+        Math.Max(PageLayout.TallExtra(line), line.Cells.Where(f => f.Text.Contains('\n') && !f.Locked).Select(f => PageLayout.ExtraFor(line, f, f.Text.Split('\n').Length, f.FontSize)).DefaultIfEmpty(0).Max());
+
+    // Pages ajoutées : image de la source du modèle, redessinée vierge (comme dans l'application).
+    private static Dictionary<string, Raster> _raw = [];
+    private static Dictionary<string, int> _baseH = [];
+    private static Raster ImageOf(Dictionary<string, Raster> images, Page pg) => pg.Added != null ? AddedPage.BlankBase(_raw[pg.Id], pg) : images[pg.Id];
 
     private static void Run(InventoryProject project, string op, int p, int ti, int o, int i, JsonElement a)
     {
@@ -149,6 +156,24 @@ public static class Stress
                 break;
             }
             case "removeAdded": Rows.RemoveAdded(page, line); break;
+            case "addPage":
+            {
+                var pg = AddedPage.AddBlankPage(project, page, a.GetProperty("at").GetInt32(), _raw[page.Id], a.GetProperty("id").GetString());
+                if (pg != null) { _raw[pg.Id] = _raw[page.Id]; _baseH[pg.Id] = PageLayout.BaseHeight(pg); }
+                break;
+            }
+            case "removePage": if (page.Added != null) pages.RemoveAt(p); break;
+            case "fill":
+            {
+                line.Cells[0].Text = "1 objet " + a.GetProperty("w").GetString();
+                var v = a.GetProperty("v").EnumerateArray().Select(x => x.GetString()!).ToList();
+                for (int c = 1; c < line.Cells.Count; c++) line.Cells[c].Text = c - 1 < v.Count ? v[c - 1] : "";
+                break;
+            }
+            case "addCol": AddedPage.AddColumn(page, table, a.GetProperty("c").GetInt32()); break;
+            case "removeCol": AddedPage.RemoveColumn(page, table, a.GetProperty("k").GetInt32()); break;
+            case "taller": line.Tall++; PageLayout.SetExtra(page, line, ExtraOf(line)); break;
+            case "shorter": line.Tall = Math.Max(0, line.Tall - 1); PageLayout.SetExtra(page, line, ExtraOf(line)); break;
             case "del": line.Deleted = true; break;
             case "restore": line.Deleted = false; break;
             case "lot": Lots.Set(project, line, a.GetProperty("v").GetString()!); break;
@@ -236,6 +261,23 @@ public static class Stress
                             double cy = f.Box.Y + (f.Box.Height - l.Extra) / 2;
                             if (!(cy > t.RowYs[r] - 1 && cy < t.RowYs[r + 1] + 1)) fail(step, $"{op} : « {l.FirstText} » hors de sa rangée");
                         }
+            }
+        }
+        foreach (var page in project.Pages.Where(pg => pg.Added != null))
+        {
+            if (page.Added!.Tables.Count != page.Tables.Count) fail(step, $"{op} : page ajoutée repères {page.Added.Tables.Count} ≠ {page.Tables.Count}");
+            for (int ti = 0; ti < page.Tables.Count; ti++)
+            {
+                if (ti >= page.Added.Tables.Count || page.Added.Tables[ti] is null) continue;
+                var t = page.Tables[ti];
+                int n = t.ColumnXs.Count - 1;
+                foreach (var l in t.Rows.SelectMany(r => r.Lines))
+                {
+                    var cols = l.Cells.Select(f => f.Column).ToList();
+                    if (cols.Distinct().Count() != cols.Count || cols.Any(c => c < 0 || c >= n)) fail(step, $"{op} : page ajoutée cases {string.Join(",", cols)} pour {n} colonnes");
+                    foreach (var f in l.Cells.Where(f => f.Column >= 0 && f.Column < n))
+                        if (!(f.Box.X >= t.ColumnXs[f.Column] - 2 && f.Box.Right <= t.ColumnXs[f.Column + 1] + 2)) fail(step, $"{op} : page ajoutée case hors de sa colonne");
+                }
             }
         }
         foreach (var o in Lots.ObjectLines(project)) if (!Lots.HasCell(o.Line)) fail(step, $"{op} : objet « {o.Line.FirstText} » sans case de lot");

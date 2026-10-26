@@ -49,6 +49,9 @@ public sealed class PageView
     private readonly Canvas _strikeLayer = new() { IsHitTestVisible = false };
     private readonly Canvas _overlayLayer = new() { IsHitTestVisible = false };
     private readonly Canvas _inputLayer = new() { IsHitTestVisible = false };
+    /// <summary>Page ajoutée : « + » des lignes et des colonnes, « − » des traits.</summary>
+    private readonly Canvas _addedLayer = new();
+    private double _uiScale = 1;
     private readonly Canvas _gutter = new() { Width = GutterWidth };
     private readonly Rectangle _focusFrame = new() { Stroke = Accent, StrokeThickness = 2, Visibility = Visibility.Collapsed };
     private readonly Rectangle _rubber = new() { Stroke = LockStroke, StrokeThickness = 2, Fill = LockFill, Visibility = Visibility.Collapsed };
@@ -98,6 +101,10 @@ public sealed class PageView
     public event Action<PageView, Table, PrintedLine, int?>? LineMoved;
     /// <summary>Poignée d'un lot 0 recollé lâchée : (tableau, lot 0, rangée avant laquelle le poser ou null : à la fin du tableau).</summary>
     public event Action<PageView, Table, Arrangement.Unit, int?>? UnitMoved;
+    /// <summary>Page ajoutée : « + » au-dessus de la colonne c (la couper en deux).</summary>
+    public event Action<PageView, Table, int>? ColumnAdded;
+    /// <summary>Page ajoutée : « − » sous le trait k (réunir les colonnes k−1 et k).</summary>
+    public event Action<PageView, Table, int>? ColumnRemoved;
 
     /// <summary>Une action du menu « Ligne » (clic droit, appui long ou bouton « Ligne ») : dupliquer, séparer…</summary>
     public sealed record LineCommand(string Label, string Hint, string Glyph, Action Run, bool Danger = false);
@@ -147,6 +154,7 @@ public sealed class PageView
         Root.Children.Add(_lotLayer);
         Root.Children.Add(_strikeLayer);
         Root.Children.Add(_overlayLayer);
+        Root.Children.Add(_addedLayer);
         Root.Children.Add(_inputLayer);
 
         _textMenu.Opening += OnTextMenuOpening;
@@ -237,6 +245,7 @@ public sealed class PageView
         RefreshLots();
         RefreshStrikes();
         RefreshColors();
+        DrawAddedControls();
     }
 
     /// <summary>
@@ -269,6 +278,99 @@ public sealed class PageView
         UpdateLots();
         RefreshStrikes();
         RefreshColors();
+        DrawAddedControls();
+    }
+
+    // ---------- Page ajoutée : « + » des lignes et des colonnes ----------
+
+    /// <summary>Zoom de la page : les boutons de la page ajoutée gardent la même taille à l'écran.</summary>
+    public void SetUiScale(float zoom)
+    {
+        _uiScale = Math.Clamp(1 / Math.Max(0.15, zoom), 1, 2.5);
+        foreach (var b in _addedLayer.Children.OfType<Button>()) b.RenderTransform = new ScaleTransform { ScaleX = _uiScale, ScaleY = _uiScale };
+    }
+
+    /// <summary>
+    /// Page ajoutée (vierge, objets inventoriés à la main) : un « + » à droite de chaque rangée (menu de la ligne : ligne au-dessus,
+    /// en dessous, plus haute, case de lot…), un « + » au-dessus de chaque colonne (la couper en deux) et un « − » sous chaque
+    /// trait intérieur (réunir deux colonnes). Toujours visibles.
+    /// </summary>
+    private void DrawAddedControls()
+    {
+        _addedLayer.Children.Clear();
+        var A = _view.Page.Added;
+        if (A is null) return;
+        Button Make(string glyph, string tip, double cx, double cy, bool danger, Action<Button> click)
+        {
+            var b = new Button
+            {
+                Width = 30, Height = 30, Padding = new Thickness(0), CornerRadius = new CornerRadius(15),
+                Content = new FontIcon { Glyph = glyph, FontSize = 14 },
+                Background = new SolidColorBrush(Colors.White),
+                Foreground = danger ? TrashInk : Accent,
+                BorderBrush = danger ? TrashInk : Accent, BorderThickness = new Thickness(1.5),
+                RenderTransformOrigin = new Point(0.5, 0.5),
+                RenderTransform = new ScaleTransform { ScaleX = _uiScale, ScaleY = _uiScale },
+            };
+            ToolTipService.SetToolTip(b, tip);
+            Canvas.SetLeft(b, cx - 15);
+            Canvas.SetTop(b, cy - 15);
+            b.Click += (_, _) => click(b);
+            _addedLayer.Children.Add(b);
+            return b;
+        }
+        for (int ti = 0; ti < _view.Tables.Count; ti++)
+        {
+            var vt = _view.Tables[ti];
+            if (ti >= A.Tables.Count || A.Tables[ti] is not { } info || vt.Strips.Count == 0) continue;
+            var t = vt.Table;
+            var xs = t.ColumnXs;
+            int tableIndex = ti;
+            // Colonnes : au-dessus du filet du haut (ou juste en dessous s'il n'y a pas la place).
+            double top = vt.RowYs[0];
+            double cy = top - 22 >= 8 ? top - 22 : top + 18;
+            for (int c = 0; c + 1 < xs.Count; c++)
+            {
+                int col = c;
+                if (xs[c + 1] - xs[c] >= 2 * AddedPage.MinColumn)
+                    Make("\uE710", "Ajouter une colonne (couper celle-ci en deux)", (xs[c] + xs[c + 1]) / 2, cy, false, _ => ColumnAdded?.Invoke(this, t, col));
+            }
+            // Traits intérieurs : « − » sous le filet du bas.
+            double bottom = vt.RowYs[^1];
+            double by = bottom + 22 <= _view.Height - 8 ? bottom + 22 : bottom - 18;
+            if (xs.Count > 3)
+                for (int k = 1; k + 1 < xs.Count; k++)
+                {
+                    int rule = k;
+                    Make("\uE738", "Retirer ce trait (réunir les deux colonnes)", xs[k], by, true, _ => ColumnRemoved?.Invoke(this, t, rule));
+                }
+            // Lignes : à droite du tableau, au milieu de chaque rangée (pas l'en-tête).
+            double right = xs[^1];
+            double cx = right + 24 <= _view.Width - 4 ? right + 22 : _view.Width - 18;
+            foreach (var st in vt.Strips)
+            {
+                if (st.R < info.Head || st.R >= t.Rows.Count) continue;
+                var line = t.Rows[st.R].Lines.FirstOrDefault(l => !l.Deleted && l.Cells.Count > 0);
+                if (line is null) continue;
+                Make("\uE710", "Ligne : ajouter au-dessus, en dessous, plus haute, case de lot…", cx, (st.Top + st.Bottom) / 2, false, b => ShowLineCommands(line.Cells[0], b));
+            }
+        }
+    }
+
+    /// <summary>Menu de la ligne (mêmes actions que le clic droit) sous le bouton « + ».</summary>
+    private void ShowLineCommands(Field f, FrameworkElement anchor)
+    {
+        if (LineCommands is null) return;
+        var menu = new MenuFlyout();
+        foreach (var c in LineCommands(f))
+        {
+            var item = new MenuFlyoutItem { Text = c.Label, Icon = new FontIcon { Glyph = c.Glyph } };
+            if (c.Danger) item.Foreground = TrashInk;
+            ToolTipService.SetToolTip(item, c.Hint);
+            item.Click += (_, _) => c.Run();
+            menu.Items.Add(item);
+        }
+        if (menu.Items.Count > 0) menu.ShowAt(anchor);
     }
 
     /// <summary>Textes changés ailleurs (totaux recalculés) : les cases affichées suivent.</summary>
@@ -732,7 +834,7 @@ public sealed class PageView
             var t = TextLayout(line, f, f.Text);
             extra = Math.Max(extra, PageLayout.ExtraFor(line, f, t.Lines.Count, t.Size));
         }
-        return extra;
+        return Math.Max(extra, PageLayout.TallExtra(line)); // « Ligne plus haute » (page ajoutée)
     }
 
     private void Layout(TextBox tb, Field f)

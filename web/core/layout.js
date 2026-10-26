@@ -31,6 +31,13 @@ export function extraFor(line, f, lines, size) {
   return Math.max(0, Math.ceil(bottom - Rect.bottom(b)));
 }
 
+/** « Ligne plus haute » (Tall : lignes de texte en plus, page ajoutée) : hauteur à ajouter sous la ligne. */
+export function tallExtra(line) {
+  const n = line.Tall ?? 0, f = line.Cells[0];
+  if (n <= 0 || !f) return 0;
+  return extraFor(line, f, 1 + n, f.FontSize > 0 ? f.FontSize : 12);
+}
+
 const shiftRect = (r, at, delta) => {
   if (r.Y >= at) return { ...r, Y: r.Y + delta };
   if (r.Y + r.Height > at) return { ...r, Height: r.Height + delta };
@@ -247,7 +254,7 @@ function gray(img, x, y) {
   return img.ch === 1 ? d[o] : (d[o] * 77 + d[o + 1] * 150 + d[o + 2] * 29) >> 8;
 }
 
-function paperOf(img, y) {
+export function paperOf(img, y) {
   const w = img.w, ch = img.ch, d = img.data;
   const lum = [];
   for (let x = 0; x < w; x++) {

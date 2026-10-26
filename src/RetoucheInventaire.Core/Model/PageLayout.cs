@@ -43,6 +43,14 @@ public static class PageLayout
     /// Fixe la hauteur ajoutée sous une ligne et décale tout ce qui est en dessous.
     /// Renvoie vrai si la page a changé (il faut redessiner).
     /// </summary>
+    /// <summary>« Ligne plus haute » (Tall : lignes d'écriture en plus, page ajoutée) : hauteur à ajouter sous la ligne.</summary>
+    public static int TallExtra(PrintedLine line)
+    {
+        if (line.Tall <= 0 || line.Cells.Count == 0) return 0;
+        var f = line.Cells[0];
+        return ExtraFor(line, f, 1 + line.Tall, f.FontSize > 0 ? f.FontSize : 12);
+    }
+
     public static bool SetExtra(Page page, PrintedLine line, int extra)
     {
         extra = Math.Max(0, extra);
@@ -296,14 +304,14 @@ public static class PageLayout
         return best;
     }
 
-    private static int Gray(Raster img, int x, int y)
+    internal static int Gray(Raster img, int x, int y)
     {
         int o = (y * img.Width + x) * img.Channels;
         return img.Channels == 1 ? img.Data[o] : (img.Data[o] * 29 + img.Data[o + 1] * 150 + img.Data[o + 2] * 77) >> 8;
     }
 
     /// <summary>Couleur du papier sur une rangée de pixels : moyenne de la moitié la plus claire.</summary>
-    private static byte[] PaperOf(Raster img, int y)
+    internal static byte[] PaperOf(Raster img, int y)
     {
         int w = img.Width, ch = img.Channels;
         var lum = new List<(int L, int X)>(w);

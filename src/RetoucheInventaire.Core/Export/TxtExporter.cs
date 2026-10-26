@@ -71,6 +71,12 @@ public static partial class TxtExporter
             {
                 var table = page.Tables[ti];
                 var rows = pages[p][ti];
+                // Page ajoutée : un tableau encore vierge (seulement son en-tête) n'est pas exporté.
+                if (page.Added is { } added && ti < added.Tables.Count && added.Tables[ti] is { } info)
+                {
+                    var order = Lots.RowOrder(table);
+                    if (!rows.Where((x, j) => order[j] >= info.Head).Any(x => x.Kept.Count > 0 || pending.ContainsKey(x.K))) continue;
+                }
                 bool startsWithHeader = Lots.OrderedRows(table).SelectMany(r => r.Lines).FirstOrDefault(l => l.Kind != LineKind.Ignoree)?.Kind == LineKind.EnTete;
                 if (rows.Any(x => x.Kept.Count > 0) && startsWithHeader && output.Count > 0 && output[^1].Length > 0)
                     output.Add(""); // une ligne vide sépare deux tableaux

@@ -69,7 +69,7 @@ export function upgradePage(page) {
     if (t.HasGrid === false || !(t.ColumnXs?.length >= 2) || !(t.RowYs?.length >= 2)) continue;
     const sizes = t.Rows.flatMap((r) => r.Lines).map((l) => l.Cells[0]?.FontSize ?? 0).filter((v) => v > 0).sort((a, b) => a - b);
     const em = sizes.length > 0 ? sizes[Math.trunc(sizes.length / 2)] : 12;
-    const header = mergeThinRowsOf(t);
+    const header = page.Added ? false : mergeThinRowsOf(t); // page ajoutée : ses repères (Added) suivent ses filets
     t.Rows.forEach((row, r) => {
       if (row.Lines.length > 0 || r + 1 >= t.RowYs.length) return;
       const rowTop = t.RowYs[r], rowBottom = t.RowYs[r + 1];
@@ -82,7 +82,7 @@ export function upgradePage(page) {
       row.Lines.push(line);
     });
     t.Rows.forEach((row, r) => {
-      if (r === 0 || !isHeaderRow(row.Lines)) return;
+      if (page.Added || r === 0 || !isHeaderRow(row.Lines)) return;
       if (!row.Lines.every((l) => blank(l.Cells[0]?.Text ?? '') || isRomanHeading(l.Cells[0].Text))) return;
       for (const l of row.Lines) if (!l.KindChosenByUser && !l.OutsideTable) l.Kind = 'EnTete';
     });

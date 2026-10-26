@@ -1192,6 +1192,57 @@ public static class Tests
         Equal(n + 1, a.Tables[0].Rows.Count, "deux rangées");
     }
 
+    public static void T_Page_ajoutee()
+    {
+        var p = new InventoryProject();
+        p.Pages.Add(Fixtures.Analyze("page1"));
+        p.Pages.Add(Fixtures.Analyze("page5"));
+        var model = p.Pages[0];
+        var img = Fixtures.Load("page1").Image;
+        Check(AddedPage.CanBeModel(model), "page d'objets : modèle possible");
+        var before = TxtExporter.Build(p).Text;
+        var a = AddedPage.AddBlankPage(p, model, 2, img, "aj1")!;
+        Check(a != null && p.Pages.Count == 3 && p.Pages[2] == a, "page ajoutée à la fin");
+        Equal(PageLayout.BaseHeight(model), PageLayout.BaseHeight(a), "même hauteur que le modèle");
+        Equal(before, TxtExporter.Build(p).Text, "page vierge : rien de plus dans le .txt");
+        int ti = a.Added!.Tables.FindIndex(x => x != null);
+        var t = a.Tables[ti];
+        var info = a.Added.Tables[ti]!;
+        Check(t.Rows.Skip(info.Head).SelectMany(r => r.Lines).All(l => l.Cells.All(c => c.Text.Length == 0)), "corps du tableau vide");
+        var blank = AddedPage.BlankBase(img, a);
+        Equal(img.Width, blank.Width, "largeur"); Equal(img.Height, blank.Height, "hauteur");
+        // Corps du tableau : plus d'écriture (seulement les filets).
+        int x0 = (int)t.ColumnXs[0] + 8, x1 = (int)t.ColumnXs[1] - 8, dark = 0, all = 0;
+        for (int r = info.Head; r + 1 < t.RowYs.Count; r++)
+            for (int y = (int)t.RowYs[r] + 6; y < (int)t.RowYs[r + 1] - 6; y++)
+                for (int x = x0; x < x1; x++) { all++; if (blank.Data[y * blank.Width + x] < 150) dark++; }
+        Check(all > 0 && dark * 1000 < all, $"corps vierge ({dark} pixels sombres sur {all})");
+        // Une ligne remplie à la main part dans le .txt, comme les autres.
+        var line = t.Rows[info.Head].Lines[0];
+        line.Cells[0].Text = "1 chaise en bois";
+        if (line.Cells.Count > 1) line.Cells[1].Text = "20";
+        Check(TxtExporter.Build(p).Text.Contains("1 chaise en bois"), "ligne tapée dans le .txt");
+        // Colonnes : couper en deux puis réunir.
+        int n = t.ColumnXs.Count;
+        Check(AddedPage.AddColumn(a, t, 0), "colonne coupée");
+        Equal(n + 1, t.ColumnXs.Count, "un filet de plus");
+        Check(t.Rows.SelectMany(r => r.Lines).All(l => l.Cells.Select(c => c.Column).Distinct().Count() == l.Cells.Count), "une case par colonne");
+        Check(AddedPage.RemoveColumn(a, t, 1), "colonnes réunies");
+        Equal(n, t.ColumnXs.Count, "retour au nombre de colonnes");
+        Equal("1 chaise en bois", line.Cells[0].Text, "texte gardé");
+        Check(!AddedPage.CanRemoveColumn(a, t, 0), "le bord du tableau ne se retire pas");
+        // Ligne plus haute, ligne vide ajoutée.
+        line.Tall = 1;
+        int H = a.Height;
+        PageLayout.SetExtra(a, line, PageLayout.TallExtra(line));
+        Check(a.Height > H, "ligne plus haute : la page grandit");
+        Check(Rows.AddBlank(a, t.Rows[info.Head + 1].Lines[0]) != null, "ligne vide sous une ligne vide");
+        Check(Rows.RowTrimOf(a, line) is null, "pas de réduction automatique sur la page ajoutée");
+        // Modèle = page ajoutée : mêmes repères.
+        var b = AddedPage.AddBlankPage(p, a, 3, img, "aj2")!;
+        Check(b.Added!.Tables[ti]!.Orig.SequenceEqual(info.Orig), "copie d'une page ajoutée : mêmes repères d'origine");
+    }
+
     public static void T_Reduire_la_rangee()
     {
         var p = new InventoryProject();

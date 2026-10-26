@@ -35,7 +35,7 @@ export const bandOf = (page, row) => (row?.Inserted ? insertsOf(page).find((b) =
 
 /** Une ligne d'article (ou un titre) d'un tableau à filets peut être dupliquée ; pas un total ni un en-tête. */
 export function canCopyLine(page, line) {
-  if (!line || line.OutsideTable || (line.Kind !== 'Article' && line.Kind !== 'Titre') || firstText(line).length === 0) return false;
+  if (!line || line.OutsideTable || (line.Kind !== 'Article' && line.Kind !== 'Titre') || (firstText(line).length === 0 && !page?.Added)) return false;
   return locate(page, line) !== null;
 }
 
@@ -331,7 +331,8 @@ function contiguous(page, y0, h) {
  * (une rangée séparée, oui : seul son filet a été ajouté).
  */
 export function rowTrimOf(page, line) {
-  const at = line && !line.OutsideTable ? locate(page, line) : null;
+  // Page ajoutée : rangées vierges, rien d'imprimé à enlever (la hauteur se règle avec « Ligne plus / moins haute »).
+  const at = line && !line.OutsideTable && !page.Added ? locate(page, line) : null;
   if (!at) return null;
   const { table: t, r, row } = at;
   if (bandOf(page, row)?.Kind === 'Copy' || row.Lines.some((l) => l.Deleted || (l.Extra ?? 0) > 0)) return null;

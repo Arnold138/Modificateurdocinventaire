@@ -5,7 +5,7 @@ import { Rect } from '../core/geometry.js';
 import { editedFields, paperColor } from '../core/exports.js';
 import { strikeColor, colorRuns, hasColors, textColor } from '../core/strikes.js';
 import { allLines } from '../core/model.js';
-import { baseBox, extraFor } from '../core/layout.js';
+import { baseBox, extraFor, tallExtra } from '../core/layout.js';
 import { lotLabels } from '../core/lots.js';
 import { framedTables, drawLotColumns } from '../core/lotcolumn.js';
 
@@ -159,7 +159,7 @@ export function lineExtra(line) {
     const t = textLayout(line, f);
     extra = Math.max(extra, extraFor(line, f, t.lines.length, t.size));
   }
-  return extra;
+  return Math.max(extra, tallExtra(line));
 }
 
 /** Réduit la police jusqu'à ce que le texte tienne dans sa case. */
