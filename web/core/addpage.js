@@ -157,8 +157,8 @@ export function addBlankPage(project, model, at, img = null, id = null) {
     if (!ti_) return;
     t.Rows.forEach((row, r) => {
       if (r >= ti_.Head) row.Lines.forEach((l, i) => clearLine(l, i === 0));
-      // En-tête : texte mal lu (fond tramé) vidé ; l'imprimé reste, ce qu'on tape le recouvre.
-      else for (const l of row.Lines) if (l.Kind !== 'EnTete' && !l.KindChosenByUser) for (const f of l.Cells) { f.Text = ''; f.OriginalText = ''; }
+      // En-tête : texte mal lu (fond tramé) vidé et verrouillé (l'imprimé reste) ; les vrais en-têtes restent modifiables.
+      else for (const l of row.Lines) if (l.Kind !== 'EnTete' && !l.KindChosenByUser) for (const f of l.Cells) { f.Text = ''; f.OriginalText = ''; f.Locked = true; }
     });
   });
   info.Tables.length = page.Tables.length;

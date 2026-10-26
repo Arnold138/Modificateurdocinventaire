@@ -35,12 +35,17 @@ L'écran est le même sur la Surface, l'iPad et l'iPhone, et **tout est en haut*
    - Rien d'autre ne bouge : les autres cases, numéros de lot et la mise en page restent tels quels. Pareil sur le JPEG et dans le .txt.
 9. **Totaux** : les totaux (TOTAL STOCK…) se recalculent tout seuls quand une valeur change ou qu'un lot passe à 0 (total imprimé + écarts), ainsi que le récapitulatif (« II - STOCK ») et le TOTAL GENERAL. On peut aussi les taper à la main : ils ne bougent plus, l'écart avec le calcul s'affiche en haut, et **Recalculer** les remet en automatique. Une rangée de total que la lecture n'avait pas lue (fond gris) a quand même ses cases à toucher.
    - Bouton **Totaux** au-dessus de la page : **Recalculer les totaux de la page**, ou **Ajouter une ligne TOTAL** : une rangée du tableau (même mise en page), sous la ligne touchée ou à la fin d'un tableau, qui additionne au choix **les lignes au-dessus**, **toute la page**, **les pages cochées** ou **tout le document** ; calculée automatiquement (elle suit chaque modification) ou à taper soi-même ; **même écriture que les autres lignes**, ou **en gras** (case à cocher, aussi au clic droit). Toucher « TOTAL » pour la renommer.
-10. **Mise en page** : renommer le document, liste des pages, synchroniser les lots, retirer la page affichée ; cases à cocher **Loupe « Original »** (l'agrandissement au-dessus de la case touchée) et, sur iPad, **Zoom automatique de l'iPad** quand on touche une case. Réglages gardés sur l'appareil. Au-dessus de la page, **Retirer…** : cette page, des **pages au choix** (cases à cocher) ou **tout le dossier** ; et remettre les lignes supprimées.
-11. **Verrouiller** : tracer un rectangle au doigt sur une signature ou un tampon (le texte hors tableau est déjà verrouillé). Toucher une zone orange la retire.
-12. **Exporter** → **images JPEG** (toutes, ou seulement la page affichée) : « nom - modifié.jpg », identique à l'original sauf les cases modifiées et les numéros de lot. Une page dont des rangées ont bougé (lot 0, rangée déplacée, rangée agrandie, ligne ajoutée ou séparée) est exportée redressée. → **Document PDF** (tout le document, ou la page affichée) : une page PDF par page, telle qu'à l'écran (même rendu que le JPEG, totaux recalculés juste avant, pages « Lots de fin » comprises ; pages TXT/CSV/XLSX non comprises). → **Fichier texte (.txt)**.
-13. **↶** : annule la dernière action, jusqu'à 30 fois. Sur PC, aussi Ctrl+Z en dehors d'une case.
-14. **Orthographe** : dans la désignation, le correcteur de l'appareil souligne les fautes (sur iPhone/iPad, aussi « Outils d'écriture » en sélectionnant du texte). Rien n'est corrigé automatiquement.
-15. Tout est enregistré en continu. Sur la Surface, menu du projet (en haut à gauche) → **Enregistrer sous…** une fois pour choisir le fichier projet.
+10. **Ajouter une page** (au-dessus de la page, à côté de Totaux) : pour les objets inventoriés **à la main**. Une page **vierge** sur le modèle de la page affichée : **mêmes tableaux, mêmes rangées, mêmes traits, mêmes en-têtes** (ex. « exploitation / réalisation », « IV - MATERIEL EN LOCATION… ») ; tout le reste est vide (désignations, prix, totaux, numéro de page, ce qui est sous le dernier tableau). On choisit **où la placer** : à la fin (avant « Lots de fin »), au début, ou après n'importe quelle page. Sur la page ajoutée :
+   - toucher une case pour écrire ; une ligne écrite devient un objet (case de lot, **Synchroniser**), elle part dans le .txt et dans les totaux comme les autres ;
+   - **« + » à droite de chaque ligne** : ligne vide au-dessus / en dessous, dupliquer, case de lot, **Ligne plus haute** / **moins haute**, supprimer… (le même menu que **Ligne**) ;
+   - **« + » au-dessus d'une colonne** : la coupe en deux (une case vide de plus sur chaque ligne) ; **« − » sous un trait** : réunit les deux colonnes (textes mis ensemble). Le bord du tableau reste ;
+   - on peut prendre une page ajoutée comme modèle d'une autre ; **Retirer…** la retire ; ↶ annule.
+11. **Mise en page** : renommer le document, liste des pages, synchroniser les lots, retirer la page affichée ; cases à cocher **Loupe « Original »** (l'agrandissement au-dessus de la case touchée) et, sur iPad, **Zoom automatique de l'iPad** quand on touche une case. Réglages gardés sur l'appareil. Au-dessus de la page, **Retirer…** : cette page, des **pages au choix** (cases à cocher) ou **tout le dossier** ; et remettre les lignes supprimées.
+12. **Verrouiller** : tracer un rectangle au doigt sur une signature ou un tampon (le texte hors tableau est déjà verrouillé). Toucher une zone orange la retire.
+13. **Exporter** → **images JPEG** (toutes, ou seulement la page affichée) : « nom - modifié.jpg », identique à l'original sauf les cases modifiées et les numéros de lot. Une page dont des rangées ont bougé (lot 0, rangée déplacée, rangée agrandie, ligne ajoutée ou séparée) est exportée redressée. → **Document PDF** (tout le document, ou la page affichée) : une page PDF par page, telle qu'à l'écran (même rendu que le JPEG, totaux recalculés juste avant, pages « Lots de fin » comprises ; pages TXT/CSV/XLSX non comprises). → **Fichier texte (.txt)**.
+14. **↶** : annule la dernière action, jusqu'à 30 fois. Sur PC, aussi Ctrl+Z en dehors d'une case.
+15. **Orthographe** : dans la désignation, le correcteur de l'appareil souligne les fautes (sur iPhone/iPad, aussi « Outils d'écriture » en sélectionnant du texte). Rien n'est corrigé automatiquement.
+16. Tout est enregistré en continu. Sur la Surface, menu du projet (en haut à gauche) → **Enregistrer sous…** une fois pour choisir le fichier projet.
 
 ## Version iPad (application web, hors ligne)
 
@@ -102,7 +107,7 @@ Add-WindowsCapability -Online -Name "Language.OCR~~~fr-FR~0.0.1.0"
 dotnet run --project tests/RetoucheInventaire.Core.Tests -c Release
 ```
 
-59 tests sur tes pages (et 51 côté iPad, dont la comparaison octet pour octet et pixel pour pixel avec Windows), dont les cas demandés :
+60 tests sur tes pages (et 52 côté iPad, dont la comparaison octet pour octet et pixel pour pixel avec Windows), dont les cas demandés :
 - le .txt est en UTF-8 avec BOM, fins de ligne Windows, tabulations, sans caractère parasite, et se relit comme un tableau ;
 - modifier une ligne de titre (« SALLE LAVAGE : » → « SALLE DE BAIN : »), un chiffre (10 → 30) et un texte ne change la position ni la taille d'aucun champ ;
 - titres seuls, valeurs rattachées à l'article, une ligne par ligne imprimée, totaux, nombres sans espace, numéro de page non exporté ;

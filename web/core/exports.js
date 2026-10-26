@@ -98,10 +98,7 @@ export function buildTxt(project) {
       const rows = pages[p][ti];
       // Page ajoutée : un tableau encore vierge (seulement son en-tête) n'est pas exporté.
       const info = page.Added?.Tables?.[ti];
-      if (info) {
-        const order = rowOrder(table);
-        if (!rows.some((x, j) => order[j] >= info.Head && (x.kept.length > 0 || pending.has(x.k)))) return;
-      }
+      if (info && !rows.some((x) => x.kept.some((e) => e.line.Kind !== 'EnTete') || pending.has(x.k))) return;
       const first = orderedRows(table).flatMap((r) => r.Lines).find((l) => l.Kind !== 'Ignoree');
       if (rows.some((x) => x.kept.length > 0) && first?.Kind === 'EnTete' && output.length > 0 && output[output.length - 1].length > 0) output.push('');
       for (const row of rows) {

@@ -188,7 +188,7 @@ public static partial class AddedPage
                 if (r >= at_.Head) { for (int i = 0; i < t.Rows[r].Lines.Count; i++) ClearLine(t.Rows[r].Lines[i], i == 0); }
                 else
                     foreach (var l in t.Rows[r].Lines.Where(l => l.Kind != LineKind.EnTete && !l.KindChosenByUser))
-                        foreach (var f in l.Cells) { f.Text = ""; f.OriginalText = ""; }
+                        foreach (var f in l.Cells) { f.Text = ""; f.OriginalText = ""; f.Locked = true; }
             }
         }
         if (info.Tables.Count > page.Tables.Count) info.Tables.RemoveRange(page.Tables.Count, info.Tables.Count - page.Tables.Count);

@@ -220,7 +220,7 @@ let pageN = 0;
 /** Pages ajoutées : ajouter, retirer, remplir, lignes, colonnes, hauteur. */
 function chooseAdded() {
   const q = random();
-  const onAdded = targets((x) => !!x.page.Added && !x.line.Deleted);
+  const onAdded = targets((x) => !!x.page.Added && !x.line.Deleted && !x.line.Cells[0]?.Locked);
   if (!onAdded.length || q < 0.10) {
     const x = pick(targets((y) => canBeModel(y.page) && y.i === 0));
     return x && ['addPage', x, { at: Math.floor(random() * (pages().length + 1)), id: `aj${++pageN}` }];
