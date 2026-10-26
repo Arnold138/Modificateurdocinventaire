@@ -26,11 +26,23 @@ function blankable(t) {
   return widest * 100 >= 35 * (t.ColumnXs[t.ColumnXs.length - 1] - t.ColumnXs[0]);
 }
 
-/** Hauteur sous laquelle une rangée ne peut pas contenir une ligne de texte (bande d'un fond tramé lue comme des filets). */
-function thinOf(t) {
+/** Taille d'écriture habituelle du tableau (médiane). */
+function emOf(t) {
   const sizes = t.Rows.flatMap((r) => r.Lines).flatMap((l) => l.Cells).map((f) => f.FontSize ?? 0).filter((v) => v > 0).sort((a, b) => a - b);
-  const em = sizes.length ? sizes[Math.trunc(sizes.length / 2)] : 12;
-  return Math.max(10, em * 1.1);
+  return sizes.length ? sizes[Math.trunc(sizes.length / 2)] : 12;
+}
+/** Hauteur sous laquelle une rangée ne peut pas contenir une ligne de texte (bande d'un fond tramé lue comme des filets). */
+const thinOf = (t) => Math.max(10, emOf(t) * 1.1);
+
+/** Ligne vierge qui occupe toute la rangée r (une case par colonne), comme une rangée sans texte lu. */
+function freshLine(t, r, em) {
+  const top = t.RowYs[r], bottom = t.RowYs[r + 1], cells = [];
+  for (let c = 0; c + 1 < t.ColumnXs.length; c++) {
+    const box = Rect.fromEdges(t.ColumnXs[c] + 4, top + 4, t.ColumnXs[c + 1] - 4, Math.max(top + 5, bottom - 4));
+    cells.push({ Id: '', Column: c, OriginalText: '', Text: '', Ink: Rect.empty(), Box: box, Align: c === 0 ? 'Left' : 'Right', Indent: 4,
+      FontSize: Math.min(em, Math.max(6, box.Height / 1.05)), Locked: false, Strikes: [], Colors: [], Manual: false });
+  }
+  return { Kind: 'Article', KindChosenByUser: false, OutsideTable: false, Cells: cells, Lot: '', LotManual: false, LotSlot: false, NoLot: false, ForceLot: false, Extra: 0, ExtraAt: 0, Copy: false, Deleted: false, TotalScope: null, EndAt: null, Tall: 0 };
 }
 const rowHeight = (t, r) => t.RowYs[r + 1] - t.RowYs[r];
 /** Numéro de page imprimé hors tableau (« 3 », « Page 3 », « 3/9 », « - 3 - ») : effacé sur la page ajoutée. */
@@ -66,15 +78,26 @@ function dropRule(t, k) {
   t.RowYs.splice(k, 1);
 }
 
-/** Corps du tableau : les bandes fines (total sur fond tramé lu comme plusieurs filets) sont réunies en une rangée. */
+/**
+ * Corps du tableau : les bandes fines (total sur fond tramé lu comme plusieurs filets) sont réunies en une rangée ; une rangée
+ * réunie, ou dont les lignes sont des lectures parasites (plus petites qu'une demi-écriture), reçoit une ligne vierge qui l'occupe.
+ */
 function mergeThinBody(t, head) {
-  const thin = thinOf(t);
+  const thin = thinOf(t), em = emOf(t);
   for (let guard = 0; guard < 500; guard++) {
     let r = head;
     while (r < t.Rows.length && !(rowHeight(t, r) < thin)) r++;
-    if (r >= t.Rows.length || t.Rows.length - head <= 1) return;
-    if (r + 1 < t.Rows.length) dropRule(t, r + 1); else dropRule(t, r);
+    if (r >= t.Rows.length || t.Rows.length - head <= 1) break;
+    const keep = r + 1 < t.Rows.length ? r : r - 1;
+    dropRule(t, keep + 1);
+    t.Rows[keep].merged = true;
   }
+  t.Rows.forEach((row, r) => {
+    if (r < head) return;
+    const real = row.Lines.filter((l) => l.Cells.length > 0 && l.Cells[0].Box.Height >= em * 0.5);
+    row.Lines = row.merged || real.length === 0 ? [freshLine(t, r, em)] : real;
+    delete row.merged;
+  });
 }
 
 /** Filet vertical (abscisse x) bien présent sur l'image entre y0 et y1 (au moins la moitié de la hauteur) ; faux pour une colonne lue en trop. */
@@ -174,7 +197,15 @@ export function addBlankPage(project, model, at, img = null, id = null) {
   }
   const erase = (l) => {
     const ink = l.Cells.reduce((u, c) => Rect.union(u, c.Ink), Rect.empty());
-    if (!Rect.isEmpty(ink)) info.Erase.push(Rect.inflate(ink, 3, 3));
+    let z = Rect.isEmpty(ink) ? Rect.empty() : Rect.inflate(ink, 3, 3);
+    // Jamais sur un tableau : la zone s'arrête au-dessus de son trait du haut (et d'un double trait).
+    for (const t of page.Tables) {
+      if (!gridTable(t) || Rect.isEmpty(z)) continue;
+      const l0 = t.ColumnXs[0], r0 = t.ColumnXs[t.ColumnXs.length - 1], y0 = t.RowYs[0], y1 = t.RowYs[t.RowYs.length - 1];
+      if (z.X >= r0 || z.X + z.Width <= l0 || z.Y >= y1 || z.Y + z.Height <= y0 - 12) continue;
+      z = Rect.fromEdges(z.X, z.Y, z.X + z.Width, Math.min(z.Y + z.Height, y0 - 12));
+    }
+    if (!Rect.isEmpty(z)) info.Erase.push(z);
     for (const f of l.Cells) clearField(f);
   };
   for (const l of page.LooseLines) if (isPageNumber(l)) erase(l);
@@ -340,8 +371,10 @@ export function blankBase(img, page) {
     };
     const vp = cols.map(vOf);
     const left = Math.min(cols[0], orig[0]) - 4, right = Math.max(cols[cols.length - 1], orig[orig.length - 1]) + 5;
-    // 1. Corps du tableau : papier propre.
-    if (head < n) fill(left, top - 3, right, bottom + 4, paper);
+    // 1. Corps du tableau : papier propre (sous un en-tête, son trait du bas est gardé tel qu'imprimé).
+    if (head < n) fill(left, head > 0 ? top + 4 : top - 3, right, bottom + 4, paper);
+    // Trait retiré : son bout sous l'en-tête aussi.
+    if (head > 0 && head < n) for (const x of orig) if (cols.indexOf(x) < 0) fill(x - 3, top + maxD(hp[head]) + 1, x + 4, top + 4, paper);
     // 2. En-tête : les cases dont la colonne a changé sont vidées (leur texte est tapé par-dessus).
     for (let c = 0; c + 1 < cols.length && head > 0; c++) {
       const i = orig.indexOf(cols[c]);
@@ -357,7 +390,7 @@ export function blankBase(img, page) {
     }
     // 3. Filets horizontaux du corps, d'un bord à l'autre du tableau.
     const xa = cols[0] + minD(vp[0].p), xb = cols[cols.length - 1] + maxD(vp[cols.length - 1].p);
-    for (let r = head; r <= n && head < n; r++)
+    for (let r = head > 0 ? head + 1 : head; r <= n && head < n; r++)
       for (let x = xa; x <= xb; x++) for (const [d, v] of hp[r]) set(x, ys[r] + d, v);
     // 4. Filets verticaux : dans le corps, et dans l'en-tête pour une colonne ajoutée.
     cols.forEach((x, c) => {

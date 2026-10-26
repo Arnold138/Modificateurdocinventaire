@@ -33,11 +33,29 @@ public static partial class AddedPage
     }
 
     /// <summary>Hauteur sous laquelle une rangée ne peut pas contenir une ligne de texte (bande d'un fond tramé).</summary>
-    private static double ThinOf(Table t)
+    private static double EmOf(Table t)
     {
         var sizes = t.Rows.SelectMany(r => r.Lines).SelectMany(l => l.Cells).Select(f => f.FontSize).Where(v => v > 0).OrderBy(v => v).ToList();
-        double em = sizes.Count > 0 ? sizes[sizes.Count / 2] : 12;
-        return Math.Max(10, em * 1.1);
+        return sizes.Count > 0 ? sizes[sizes.Count / 2] : 12;
+    }
+
+    private static double ThinOf(Table t) => Math.Max(10, EmOf(t) * 1.1);
+
+    /// <summary>Ligne vierge qui occupe toute la rangée r (une case par colonne), comme une rangée sans texte lu.</summary>
+    private static PrintedLine FreshLine(Table t, int r, double em)
+    {
+        double top = t.RowYs[r], bottom = t.RowYs[r + 1];
+        var line = new PrintedLine { Kind = LineKind.Article };
+        for (int c = 0; c + 1 < t.ColumnXs.Count; c++)
+        {
+            var box = RectD.FromEdges(t.ColumnXs[c] + 4, top + 4, t.ColumnXs[c + 1] - 4, Math.Max(top + 5, bottom - 4));
+            line.Cells.Add(new Field
+            {
+                Column = c, Box = box, Align = c == 0 ? TextAlign.Left : TextAlign.Right, Indent = 4,
+                FontSize = Math.Min(em, Math.Max(6, box.Height / 1.05)),
+            });
+        }
+        return line;
     }
 
     private static double RowHeight(Table t, int r) => t.RowYs[r + 1] - t.RowYs[r];
@@ -80,13 +98,22 @@ public static partial class AddedPage
     /// <summary>Corps du tableau : les bandes fines (total sur fond tramé lu comme plusieurs filets) sont réunies en une rangée.</summary>
     private static void MergeThinBody(Table t, int head)
     {
-        double thin = ThinOf(t);
+        double thin = ThinOf(t), em = EmOf(t);
+        var merged = new HashSet<Row>();
         for (int guard = 0; guard < 500; guard++)
         {
             int r = head;
             while (r < t.Rows.Count && !(RowHeight(t, r) < thin)) r++;
-            if (r >= t.Rows.Count || t.Rows.Count - head <= 1) return;
-            if (r + 1 < t.Rows.Count) DropRule(t, r + 1); else DropRule(t, r);
+            if (r >= t.Rows.Count || t.Rows.Count - head <= 1) break;
+            int keep = r + 1 < t.Rows.Count ? r : r - 1;
+            DropRule(t, keep + 1);
+            merged.Add(t.Rows[keep]);
+        }
+        for (int r = head; r < t.Rows.Count; r++)
+        {
+            var row = t.Rows[r];
+            var real = row.Lines.Where(l => l.Cells.Count > 0 && l.Cells[0].Box.Height >= em * 0.5).ToList();
+            row.Lines = merged.Contains(row) || real.Count == 0 ? [FreshLine(t, r, em)] : real;
         }
     }
 
@@ -213,7 +240,16 @@ public static partial class AddedPage
         void Erase(PrintedLine l)
         {
             var ink = l.Cells.Aggregate(RectD.Empty, (u, c) => u.Union(c.Ink));
-            if (!ink.IsEmpty) info.Erase.Add(ink.Inflate(3, 3));
+            var z = ink.IsEmpty ? RectD.Empty : ink.Inflate(3, 3);
+            // Jamais sur un tableau : la zone s'arrête au-dessus de son trait du haut (et d'un double trait).
+            foreach (var t in page.Tables)
+            {
+                if (!GridTable(t) || z.IsEmpty) continue;
+                double l0 = t.ColumnXs[0], r0 = t.ColumnXs[^1], y0 = t.RowYs[0], y1 = t.RowYs[^1];
+                if (z.X >= r0 || z.X + z.Width <= l0 || z.Y >= y1 || z.Y + z.Height <= y0 - 12) continue;
+                z = RectD.FromEdges(z.X, z.Y, z.X + z.Width, Math.Min(z.Y + z.Height, y0 - 12));
+            }
+            if (!z.IsEmpty) info.Erase.Add(z);
             foreach (var f in l.Cells) ClearField(f);
         }
         foreach (var l in page.LooseLines.Where(IsPageNumber)) Erase(l);
@@ -408,8 +444,10 @@ public static partial class AddedPage
             }
             var vp = cols.Select(VOf).ToList();
             int left = Math.Min(cols[0], orig[0]) - 4, right = Math.Max(cols[^1], orig[^1]) + 5;
-            // 1. Corps du tableau : papier propre.
-            if (head < n) Fill(left, top - 3, right, bottom + 4, paper);
+            // 1. Corps du tableau : papier propre (sous un en-tête, son trait du bas est gardé tel qu'imprimé).
+            if (head < n) Fill(left, head > 0 ? top + 4 : top - 3, right, bottom + 4, paper);
+            // Trait retiré : son bout sous l'en-tête aussi.
+            if (head > 0 && head < n) foreach (var x in orig) if (cols.IndexOf(x) < 0) Fill(x - 3, top + MaxD(hp[head]) + 1, x + 4, top + 4, paper);
             // 2. En-tête : les cases dont la colonne a changé sont vidées.
             for (int c = 0; c + 1 < cols.Count && head > 0; c++)
             {
@@ -427,7 +465,7 @@ public static partial class AddedPage
             }
             // 3. Filets horizontaux du corps, d'un bord à l'autre du tableau.
             int xa = cols[0] + MinD(vp[0]), xb = cols[^1] + MaxD(vp[^1]);
-            for (int r = head; r <= n && head < n; r++)
+            for (int r = head > 0 ? head + 1 : head; r <= n && head < n; r++)
                 for (int x = xa; x <= xb; x++) foreach (var (d, v) in hp[r]) Set(x, ys[r] + d, v);
             // 4. Filets verticaux : dans le corps, et dans l'en-tête pour une colonne ajoutée.
             for (int c = 0; c < cols.Count; c++)
