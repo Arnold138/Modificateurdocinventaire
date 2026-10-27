@@ -13,12 +13,12 @@ import { upgradePage, firstText, isModified } from '../core/model.js';
 import { buildTxt } from '../core/exports.js';
 import {
   objectLines, lotsActive, setLot, resyncLots, addLot, createEmptyLots, fillLotsAutomatically, numberLots, isZeroLot,
-  hasLotCell, itemTable, addLotHere, rowOrder, lotTables, setLotTables, defaultLotChoice, columnWidth, numberBox,
+  hasLotCell, itemTable, addLotHere, rowOrder, moveToRow, lotTables, setLotTables, defaultLotChoice, columnWidth, numberBox,
 } from '../core/lots.js';
 import { drawLotColumns, framedRows, frames, frameToggles, closeTables } from '../core/lotcolumn.js';
 import { setExtra, stretch, extraFor, baseHeight, tallExtra } from '../core/layout.js';
 import { addBlankPage, blankBase, canBeModel, addColumn, removeColumn, canAddColumn, canRemoveColumn, addedTable, addRows } from '../core/addpage.js';
-import { planArrangement, composePage, unitCrop, viewOf, syncEndPages } from '../core/arrange.js';
+import { planArrangement, composePage, unitCrop, viewOf, syncEndPages, lotKey, compareKeys } from '../core/arrange.js';
 import { recomputeTotals } from '../core/totals.js';
 import {
   copyLine, addBlankLine, splitAt, splitBelow, splitTypedText, removeAddedRow, canCopyLine, canSplit, canSplitBelow,
@@ -185,6 +185,25 @@ const ACTIONS = {
   lot(t, a) { setLot(project, resolve(t).line, a.v); },
   addLot(t) { addLot(project, resolve(t).line); },
   sync(t, a) { fillLotsAutomatically(project, a.page === null ? null : [pages()[a.page]]); },
+  // Comme le bouton « Synchroniser » de l'application : remplit puis range les lignes par numéro (et le garde).
+  syncApp(t, a) { fillLotsAutomatically(project, a.page === null ? null : [pages()[a.page]]); project.SortLots = true; },
+  // Comme la poignée ⋮⋮ d'une rangée à l'écran (Modifier) : lignes triées → posée à la main, sinon ordre des rangées.
+  dragRow(t, a) {
+    const { page, table } = resolve(t);
+    const from = rowOrder(table)[t.o];
+    const numbered = table.Rows[from].Lines.filter((l) => hasLotCell(l) && (l.Lot ?? '').trim() && !isZeroLot(l));
+    if (project.SortLots && numbered.length) return moveToRow(page, table, numbered, a.before, from);
+    const order = rowOrder(table).filter((r) => r !== from);
+    order.splice(a.before === null ? order.length : order.indexOf(a.before), 0, from);
+    table.RowOrder = order;
+  },
+  // Comme la poignée ⋮⋮ d'une ligne rangée ou déplacée : posée dans le tableau où elle s'affiche, avant la rangée choisie.
+  dragUnit(t, a) {
+    const line = resolve(t).line;
+    const u = planArrangement(project).moving.find((x) => (x.kind === 'sort' || x.kind === 'move') && x.lines.includes(line));
+    if (!u) return;
+    moveToRow(u.dest.page, u.dest.table, u.lines.filter((l) => hasLotCell(l) && !isZeroLot(l)), a.before);
+  },
   number() { numberLots(project, 1); },
   trim(t) { const { page, line } = resolve(t); trimRow(page, line); },
   untrim(t) { const { page, line } = resolve(t); untrimRow(page, line); },
@@ -266,7 +285,38 @@ function chooseAdded() {
   const x = pick(onAdded.filter(addedRow)); return x && ['removeAdded', x, {}];
 }
 
+// Manipulations de l'application (APP=1) : Synchroniser, numéros tapés, poignées ⋮⋮, Déplacer ce lot.
+let lastPlan = null;
+function chooseApp() {
+  const all = targets(hasText);
+  const objs = targets((x) => hasText(x) && hasLotCell(x.line) && !x.table.LotsOff);
+  const q = random();
+  if (q < 0.12) return ['syncApp', all[0], { page: chance(0.3) ? pick(all).p : null }];
+  if (q < 0.45) { const x = pick(objs); return x && ['lot', x, { v: chance(0.05) ? '0' : chance(0.1) ? pick(['VGG', '?']) : chance(0.5) ? pick(['1', '2', '2', '3', '5']) : String(1 + Math.floor(random() * 150)) }]; }
+  if (q < 0.65) {
+    const x = pick(all); if (!x) return null;
+    const order = rowOrder(x.table), before = chance(0.15) ? null : order[Math.floor(random() * order.length)];
+    // Comme l'écran : lâchée sur elle-même ou juste sous elle, la rangée ne bouge pas (rien n'est envoyé).
+    if (before === order[x.o] || before === (order[x.o + 1] ?? null)) return null;
+    return ['dragRow', x, { before }];
+  }
+  if (q < 0.85) {
+    const us = (lastPlan?.moving ?? []).filter((u) => u.kind === 'sort' || u.kind === 'move');
+    const u = pick(us); if (!u) return null;
+    const x = targets((y) => y.line === u.object)[0]; if (!x) return null;
+    const order = rowOrder(u.dest.table);
+    return ['dragUnit', x, { before: chance(0.15) ? null : order[Math.floor(random() * order.length)] }];
+  }
+  if (q < 0.95) {
+    const x = pick(objs.filter((y) => !isZeroLot(y.line)));
+    const dest = pick(pages().filter((pg) => !pg.EndLots && pg.Tables.some((t) => t.Rows.some((rw) => rw.Lines.some(hasLotCell)))));
+    return x && dest && ['moveLot', x, { page: pages().indexOf(dest), where: 'order', anchor: null }];
+  }
+  const x = pick(all.filter((y) => y.line.MoveTo)); return x && ['unmoveLot', x, {}];
+}
+
 function choose() {
+  if (process.env.APP && chance(0.4)) return chooseApp();
   if (!process.env.NOADDED && random() < Number(process.env.ADDED ?? 0.25)) return chooseAdded();
   const r = random();
   const all = targets(hasText);
@@ -395,11 +445,26 @@ function check(step, op, beforeLots, plan) {
   const text = allText();
   for (const w of live) if (!text.includes(w)) fail(step, `${op} : mot tapé « ${w} » perdu`);
   // 7. Numéros : ne changent que là où l'action le veut.
-  if (!['lot', 'sync', 'number', 'addLot', 'removeAdded'].includes(op))
+  if (!['lot', 'sync', 'syncApp', 'number', 'addLot', 'removeAdded'].includes(op))
     for (const [l, v] of beforeLots) if ((l.Lot ?? '') !== v && hasLotCell(l) && v !== '') fail(step, `${op} : numéro de « ${firstText(l).slice(0, 30)} » changé ${v} → ${l.Lot}`);
   // Synchroniser : les numéros déjà là ne font que monter (décalés par les cases remplies avant eux), jamais à l'envers.
-  if (op === 'sync')
+  if (op === 'sync' || op === 'syncApp')
     for (const [l, v] of beforeLots) if (v !== '' && (l.Lot ?? '') !== v && !(/^\d+$/.test(v) && /^\d+$/.test(l.Lot) && +l.Lot > +v)) fail(step, `sync : numéro ${v} → ${l.Lot}`);
+  // 9. Lignes rangées par numéro : à l'écran, de page en page, les numéros ne redescendent jamais
+  //    (sauf les lignes posées à la main, les lots 0, les cases vides et les lignes encore vides, qui restent où on les a mis).
+  if (project.SortLots) {
+    const objSet = new Set([...objectLines(project)].map((o) => o.line));
+    let prev = null;
+    pages().forEach((page, k) => {
+      const v = viewOf(project, plan, k);
+      const seq = v.lines.filter((e) => e.lotBox && objSet.has(e.line) && !e.line.MoveTo && !e.line.Deleted && (e.line.Lot ?? '').trim() && !isZeroLot(e.line) && e.line.Cells.some((c) => c.Text.trim()))
+        .sort((a, b) => a.lotBox.Y - b.lotBox.Y);
+      for (const e of seq) {
+        if (prev && compareKeys(lotKey(prev.line.Lot), lotKey(e.line.Lot)) > 0) fail(step, `${op} : tri cassé, « ${prev.line.Lot} » (${firstText(prev.line).slice(0, 20)}) avant « ${e.line.Lot} » (${firstText(e.line).slice(0, 20)}) page ${k + 1}`);
+        prev = e;
+      }
+    });
+  }
   // 8. Écran : chaque page s'affiche ; chaque objet visible a sa case de lot à l'écran.
   pages().forEach((page, k) => {
     const v = viewOf(project, plan, k);
@@ -474,7 +539,7 @@ function run(op, x, args) {
   } catch (e) { fail(ops.length, `${op} : ERREUR ${e.message}\n${e.stack?.split('\n').slice(1, 4).join('\n')}`); }
   ops.push({ op, t, a: args });
   let plan;
-  try { plan = after(); check(ops.length, op, beforeLots, plan); if (PIXEL > 0 && ops.length % PIXEL === 0) pixelCheck(ops.length, op); } catch (e) { fail(ops.length, `${op} (après) : ERREUR ${e.message}\n${e.stack?.split('\n').slice(1, 4).join('\n')}`); }
+  try { plan = lastPlan = after(); check(ops.length, op, beforeLots, plan); if (PIXEL > 0 && ops.length % PIXEL === 0) pixelCheck(ops.length, op); } catch (e) { fail(ops.length, `${op} (après) : ERREUR ${e.message}\n${e.stack?.split('\n').slice(1, 4).join('\n')}`); }
   return plan;
 }
 
@@ -482,7 +547,7 @@ function run(op, x, args) {
 setLotTables(project, new Set(pages().flatMap((p) => lotTables(p).filter((x) => defaultLotChoice(project, x.table)).map((x) => x.table))));
 createEmptyLots(project);
 fillLotsAutomatically(project);
-after();
+lastPlan = after();
 // Comme à l'écran : la page s'affiche (colonne des lots tracée) avant toute manipulation.
 for (const pg of pages()) if (!pg.EndLots) frames(stretch(images.get(pg.Id), pg), pg);
 
@@ -512,6 +577,7 @@ while (ops.length - video < COUNT && guard++ < COUNT * 20) {
   if (['copy', 'blank', 'typed', 'total'].includes(op)) added++;
   if (op === 'split' || op === 'splitBelow' || op === 'moveLine') added += 0; // rangées en plus, pas de ligne en plus
   run(op, x, args);
+  if (process.env.STOPAT && ops.length === Number(process.env.STOPAT)) { mkdirSync(outDir, { recursive: true }); writeFileSync(join(outDir, 'project.json'), JSON.stringify(project)); console.log('arrêt au pas', ops.length); process.exit(0); }
 }
 
 const plan = after();

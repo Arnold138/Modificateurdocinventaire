@@ -169,6 +169,16 @@ public static class Arrangement
         }
         var stay = new HashSet<int>();
         for (int i = tails.Count > 0 ? tails[^1] : -1; i >= 0; i = prev[i]) stay.Add(i);
+        // Une rangée avec deux numéros différents (« EN COURS… » lot 129 et « valorisé… » lot 130) : on ne peut poser une ligne
+        // qu'avant ou après la rangée entière, donc seul le 1er numéro y reste ; les plus grands repartent juste après elle.
+        var rowKey = new Dictionary<(int, int, int), (int, int, string)>();
+        for (int i = 0; i < units.Count; i++)
+        {
+            if (!stay.Contains(i)) continue;
+            var id = (units[i].P, units[i].Ti, units[i].R);
+            if (!rowKey.TryGetValue(id, out var k0)) rowKey[id] = keys[i];
+            else if (CompareKeys(k0, keys[i]) != 0) stay.Remove(i);
+        }
         int RowIndex(Unit u) => rows.FindIndex(x => x.P == u.P && x.Ti == u.Ti && x.R == u.R);
         // Avant le 1er objet resté en place : la rangée qui le précède ; s'il n'y en a pas (1re rangée du document), il bouge aussi.
         int first = -1;
@@ -194,6 +204,8 @@ public static class Arrangement
         }
         return output;
     }
+
+    private static bool SameMove(LotMove? a, LotMove? b) => a != null && b != null && a.Page == b.Page && a.Where == b.Where && a.Anchor == b.Anchor;
 
     public static (int, int, string) LotKey(string? lot)
     {
@@ -253,7 +265,11 @@ public static class Arrangement
                     }
                     if (found.Count == 0) continue;
                     var covered = found.SelectMany(u => u.Lines).ToHashSet();
-                    bool whole = lines.All(covered.Contains) && found.All(u => u.Title is null) && found.All(u => u.Kind == found[0].Kind);
+                    // Rangée entière : seulement si tous ses objets vont au même endroit (deux numéros différents dans une
+                    // rangée, ou deux destinations différentes : chacun part de son côté).
+                    bool SameWay((string Kind, PrintedLine Object, List<PrintedLine> Lines, PrintedLine? Title) u) => u.Kind == "sort" ? CompareKeys(LotKey(u.Object.Lot), LotKey(found[0].Object.Lot)) == 0
+                        : u.Kind == "move" ? SameMove(u.Object.MoveTo, found[0].Object.MoveTo) : true;
+                    bool whole = lines.All(covered.Contains) && found.All(u => u.Title is null) && found.All(u => u.Kind == found[0].Kind && SameWay(u));
                     if (whole)
                     {
                         int top = CutY(table.RowYs[r]);

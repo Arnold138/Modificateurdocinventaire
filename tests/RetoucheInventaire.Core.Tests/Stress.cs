@@ -209,6 +209,33 @@ public static class Stress
                 Lots.FillAutomatically(project, pg.ValueKind == JsonValueKind.Null ? null : new List<Page> { pages[pg.GetInt32()] });
                 break;
             }
+            case "syncApp":
+            {
+                // Bouton « Synchroniser » de l'application : remplit, puis range les lignes par numéro (et le garde).
+                var pg = a.GetProperty("page");
+                Lots.FillAutomatically(project, pg.ValueKind == JsonValueKind.Null ? null : new List<Page> { pages[pg.GetInt32()] });
+                project.SortLots = true;
+                break;
+            }
+            case "dragRow":
+            {
+                // Poignée ⋮⋮ d'une rangée (MainWindow.RowMoved) : lignes triées → posée à la main, sinon ordre des rangées.
+                int? before = a.GetProperty("before").ValueKind == JsonValueKind.Null ? null : a.GetProperty("before").GetInt32();
+                var numbered = row.Lines.Where(l => Lots.HasCell(l) && l.Lot.Trim().Length > 0 && !Lots.IsZero(l)).ToList();
+                if (project.SortLots && numbered.Count > 0) { Lots.MoveToRow(page, table, numbered, before, r); break; }
+                var order = Lots.RowOrder(table).Where(x => x != r).ToList();
+                order.Insert(before is int b ? order.IndexOf(b) : order.Count, r);
+                table.RowOrder = order;
+                break;
+            }
+            case "dragUnit":
+            {
+                // Poignée ⋮⋮ d'une ligne rangée ou déplacée (MainWindow.UnitMoved) : posée dans le tableau où elle s'affiche.
+                int? before = a.GetProperty("before").ValueKind == JsonValueKind.Null ? null : a.GetProperty("before").GetInt32();
+                var u = Arrangement.Build(project).Moving.FirstOrDefault(x => (x.Kind == "sort" || x.Kind == "move") && x.Lines.Contains(line));
+                if (u != null) Lots.MoveToRow(u.Dest.Page, u.Dest.Table, u.Lines.Where(l => Lots.HasCell(l) && !Lots.IsZero(l)).ToList(), before);
+                break;
+            }
             case "number": Lots.Number(project, 1); break;
             case "trim": Rows.TrimRow(page, line); break;
             case "untrim": Rows.UntrimRow(page, line); break;
@@ -306,6 +333,22 @@ public static class Stress
             }
         }
         foreach (var o in Lots.ObjectLines(project)) if (!Lots.HasCell(o.Line)) fail(step, $"{op} : objet « {o.Line.FirstText} » sans case de lot");
+        // Lignes rangées par numéro : à l'écran, de page en page, les numéros ne redescendent jamais
+        // (sauf les lignes posées à la main, les lots 0, les cases vides et les lignes encore vides).
+        if (project.SortLots)
+        {
+            var objSet = Lots.ObjectLines(project).Select(x => x.Line).ToHashSet();
+            PrintedLine? prev = null;
+            for (int k = 0; k < project.Pages.Count; k++)
+                foreach (var e in Arrangement.ViewOf(project, plan, k).Lines
+                    .Where(e => e.LotBox != null && objSet.Contains(e.Line) && e.Line.MoveTo == null && !e.Line.Deleted && e.Line.Lot.Trim().Length > 0 && !Lots.IsZero(e.Line) && e.Line.Cells.Any(c => c.Text.Trim().Length > 0))
+                    .OrderBy(e => e.LotBox!.Value.Y))
+                {
+                    if (prev != null && Arrangement.CompareKeys(Arrangement.LotKey(prev.Lot), Arrangement.LotKey(e.Line.Lot)) > 0)
+                        fail(step, $"{op} : tri cassé, « {prev.Lot} » avant « {e.Line.Lot} » page {k + 1}");
+                    prev = e.Line;
+                }
+        }
         for (int k = 0; k < project.Pages.Count; k++)
         {
             var v = Arrangement.ViewOf(project, plan, k);

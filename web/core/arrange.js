@@ -54,6 +54,7 @@ const ITEM_START = /^\s*(\+\/-\s*)?\d{1,3}\s+\p{L}/u;
  *  - kind 'zero' : objet au lot 0 (avec ses lignes de suite) — recollé après le dernier lot ou sur la page « lots de fin » ;
  *  - kind 'deleted' : ligne supprimée (« Supprimer cette ligne », avec ses lignes de suite) — retirée, la suite remonte.
  */
+const sameMove = (a, b) => a.Page === b.Page && a.Where === b.Where && (a.Anchor ?? '') === (b.Anchor ?? '');
 function movedUnits(project) {
   const units = [];
   const lots = lotsActive(project);
@@ -85,7 +86,11 @@ function movedUnits(project) {
       });
       if (found.length === 0) continue;
       const covered = new Set(found.flatMap((u) => u.lines));
-      const whole = lines.every((l) => covered.has(l)) && found.every((u) => !u.title) && found.every((u) => u.kind === found[0].kind);
+      // Rangée entière : seulement si tous ses objets vont au même endroit (deux numéros différents dans une rangée,
+      // ou deux destinations différentes : chacun part de son côté).
+      const sameWay = (u) => u.kind === 'sort' ? compareKeys(lotKey(u.object.Lot), lotKey(found[0].object.Lot)) === 0
+        : u.kind === 'move' ? sameMove(u.object.MoveTo, found[0].object.MoveTo) : true;
+      const whole = lines.every((l) => covered.has(l)) && found.every((u) => !u.title) && found.every((u) => u.kind === found[0].kind && sameWay(u));
       const base = { p, page, ti, table, r };
       if (whole) {
         const top = cutY(table.RowYs[r]);
@@ -156,6 +161,15 @@ function sortPlaces(units, rows) {
   }
   const stay = new Set();
   for (let i = tails.length ? tails[tails.length - 1] : -1; i >= 0; i = prev[i]) stay.add(i);
+  // Une rangée avec deux numéros différents (« EN COURS… » lot 129 et « valorisé… » lot 130) : on ne peut poser une ligne
+  // qu'avant ou après la rangée entière, donc seul le 1er numéro y reste ; les plus grands repartent juste après elle.
+  const rowKey = new Map();
+  for (let i = 0; i < units.length; i++) {
+    if (!stay.has(i)) continue;
+    const id = `${units[i].p}/${units[i].ti}/${units[i].r}`;
+    if (!rowKey.has(id)) rowKey.set(id, keys[i]);
+    else if (compareKeys(rowKey.get(id), keys[i]) !== 0) stay.delete(i);
+  }
   const rowIndex = (u) => rows.findIndex((x) => x.p === u.p && x.ti === u.ti && x.r === u.r);
   // Avant le 1er objet resté en place : la rangée qui le précède ; s'il n'y en a pas (1re rangée du document), il bouge aussi.
   let first = -1;
