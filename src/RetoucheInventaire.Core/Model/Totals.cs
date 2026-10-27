@@ -86,7 +86,7 @@ public static partial class Totals
         var removed = new HashSet<Field>();
         foreach (var u in plan?.Units ?? [])
         {
-            if (u.Kind == "sort") continue; // trié par numéro : déplacé, toujours dans la vente
+            if (u.Kind is "sort" or "move") continue; // trié par numéro : déplacé, toujours dans la vente
             foreach (var c in u.Lines.SelectMany(l => l.Cells)) removed.Add(c);
             if (u.Title != null) foreach (var c in u.Title.Cells.Where(c => c.Column > 0)) removed.Add(c);
         }

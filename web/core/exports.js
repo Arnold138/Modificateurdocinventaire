@@ -83,7 +83,7 @@ export function buildTxt(project) {
   for (const u of plan?.moving ?? []) for (const l of u.lines) unitOf.set(l, u);
   // Tri par numéro de lot : les objets déplacés s'écrivent à leur nouvelle place, dans l'ordre des numéros.
   const sortOf = new Map();
-  for (const u of full?.moving ?? []) if (u.kind === 'sort') for (const l of u.lines) sortOf.set(l, u);
+  for (const u of full?.moving ?? []) if (u.kind === 'sort' || u.kind === 'move') for (const l of u.lines) sortOf.set(l, u);
   const sortText = new Map();
   const key = (p, ti, r) => `${p},${ti},${r}`;
   const pending = new Map();
@@ -101,8 +101,8 @@ export function buildTxt(project) {
   })));
   const sortPending = new Map();
   for (const u of full?.moving ?? []) {
-    if (u.kind !== 'sort') continue;
-    const k = key(u.dest.p, u.dest.ti, u.dest.r);
+    if (u.kind !== 'sort' && u.kind !== 'move') continue;
+    const k = (u.dest.before ? 'b:' : '') + key(u.dest.p, u.dest.ti, u.dest.r);
     if (!sortPending.has(k)) sortPending.set(k, []);
     for (const l of u.lines) { const x = sortText.get(l); if (x) sortPending.get(k).push(x); }
   }
@@ -112,10 +112,11 @@ export function buildTxt(project) {
       const rows = pages[p][ti];
       // Page ajoutée : un tableau encore vierge (seulement son en-tête) n'est pas exporté.
       const info = page.Added?.Tables?.[ti];
-      if (info && !rows.some((x) => x.kept.some((e) => e.line.Kind !== 'EnTete') || pending.has(x.k) || sortPending.has(x.k))) return;
+      if (info && !rows.some((x) => x.kept.some((e) => e.line.Kind !== 'EnTete') || pending.has(x.k) || sortPending.has(x.k) || sortPending.has('b:' + x.k))) return;
       const first = orderedRows(table).flatMap((r) => r.Lines).find((l) => l.Kind !== 'Ignoree');
       if (rows.some((x) => x.kept.length > 0) && first?.Kind === 'EnTete' && output.length > 0 && output[output.length - 1].length > 0) output.push('');
       for (const row of rows) {
+        for (const x of sortPending.get('b:' + row.k) ?? []) { output.push(x.text); if (x.obj) after = output.length; }
         for (const x of row.kept) { output.push(x.text); if (x.obj) after = output.length; }
         for (const x of sortPending.get(row.k) ?? []) { output.push(x.text); if (x.obj) after = output.length; }
         for (const t of pending.get(row.k) ?? []) output.push(t);

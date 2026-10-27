@@ -514,6 +514,10 @@ function lineChoices(f) {
         if ((line.LotAlign ?? null) !== v) items.push({ act: 'lotAlign', value: v, icon: 'i-rows', label: `Numéro de lot ${label}`, hint: 'Place du numéro dans sa case (grande case).' });
     items.push({ act: 'lotRemove', icon: 'i-trash', label: 'Retirer la case de lot', hint: 'Cette ligne n\'est pas un objet : sa case disparaît (les autres numéros ne bougent pas).', danger: true });
   }
+  if (hasLotCell(line) && !isZeroLot(line)) {
+    items.push({ act: 'moveLot', icon: 'i-rows', label: 'Déplacer ce lot vers une autre page…', hint: 'Choisir la page et l\'endroit (début, fin, après un lot).' });
+    if (line.MoveTo) items.push({ act: 'unmoveLot', icon: 'i-merge', label: 'Remettre ce lot à sa place', hint: 'Il revient là où il était imprimé.' });
+  }
   if (hasLotCell(line) && !isZeroLot(line))
     items.push({ act: 'end', icon: 'i-addbelow', label: 'Mettre à la fin (lot 0)', hint: 'Objet absent : sa ligne part à la fin, ce qui suit remonte.' });
   const at0 = locate(page, line);
@@ -579,6 +583,15 @@ async function lineAction(item, f) {
   const name = short(firstText(line)) || 'ligne vide';
   if (item.act === 'end') return applyLot(state.view, line, '0');
   if (item.act === 'rows') return rowsDialog(page, line);
+  if (item.act === 'moveLot') return moveLotsDialog(line);
+  if (item.act === 'unmoveLot') {
+    pushUndo();
+    delete line.MoveTo;
+    replan(); recomputeAll();
+    await refreshView();
+    status(`« ${name} » remis à sa place. ↶ pour annuler.`);
+    return scheduleSave();
+  }
   if (item.act === 'frame') {
     pushUndo();
     const t = locate(page, line)?.table;
@@ -966,6 +979,72 @@ async function readPrintedLots(only = null) {
     }
   }
   return n;
+}
+
+// ---------- Déplacer des lots d'une page à l'autre ----------
+
+/** Lots du document (numérotés ou non, pas les lots 0) : { line, page, k (n° de page), lot, name }. */
+function lotEntries() {
+  return [...objectLines(state.project)].filter((o) => !isZeroLot(o.line) && hasLotCell(o.line))
+    .map((o) => ({ line: o.line, page: o.page, k: pages().indexOf(o.page), lot: o.line.Lot || '', name: short(firstText(o.line)) }));
+}
+
+/**
+ * « Déplacer des lots… » : on coche un ou plusieurs lots (recherche par numéro ou par texte), on choisit la page et
+ * l'endroit (début, fin, après un lot) ; ils s'y affichent, rien d'autre ne bouge. « Remettre à leur place » annule.
+ */
+async function moveLotsDialog(preselect = null) {
+  const all = lotEntries();
+  if (!all.length) return status('Aucun lot à déplacer : créez d\'abord les cases (Lots).');
+  const targetPages = pages().map((p, k) => ({ p, k })).filter((x) => !x.p.EndLots && all.some((e) => e.page === x.p));
+  const cur = currentPage();
+  const defPage = targetPages.find((x) => x.p === cur) ?? targetPages[0];
+  const where = (e) => (e.line.MoveTo ? ` <small>→ page ${pages().findIndex((p) => p.Id === e.line.MoveTo.Page) + 1}</small>` : '');
+  const html = `<p>Cochez les lots à déplacer, puis choisissez où ils vont. Les autres lignes ne bougent pas.</p>
+    <input id="mvSearch" type="search" placeholder="Chercher un numéro ou un mot…" style="width:100%">
+    <ul class="list lotpages" id="mvList" style="max-height:38vh;overflow:auto">${all.map((e, i) => `<li data-i="${i}"><label><input type="checkbox" data-i="${i}" ${e.line === preselect ? 'checked' : ''}> <b>${escapeHtml(e.lot || '(vide)')}</b> ${escapeHtml(e.name)} <small>page ${e.k + 1}</small>${where(e)}</label></li>`).join('')}</ul>
+    <p><label>Vers la page <select id="mvPage">${targetPages.map((x) => `<option value="${x.k}" ${x === defPage ? 'selected' : ''}>Page ${x.k + 1}</option>`).join('')}</select></label></p>
+    <label class="choice"><input type="radio" name="mvWhere" value="start" checked> <span><b>Au début de la page</b></span></label>
+    <label class="choice"><input type="radio" name="mvWhere" value="end"> <span><b>À la fin de la page</b></span></label>
+    <label class="choice"><input type="radio" name="mvWhere" value="after"> <span><b>Juste après le lot</b> <select id="mvAnchor"></select></span></label>`;
+  const shown = dialog('Déplacer des lots', html, [
+    { label: 'Annuler', value: null },
+    { label: 'Remettre à leur place', value: 'back' },
+    { label: 'Déplacer', value: 'move', className: 'accent' },
+  ]);
+  const fillAnchors = () => {
+    const k = +$('mvPage').value;
+    $('mvAnchor').innerHTML = all.filter((e) => e.k === k).map((e) => `<option value="${all.indexOf(e)}">${escapeHtml(e.lot || '(vide)')} ${escapeHtml(e.name)}</option>`).join('');
+  };
+  fillAnchors();
+  $('mvPage').onchange = fillAnchors;
+  $('mvAnchor').onchange = () => { document.querySelector('input[name=mvWhere][value=after]').checked = true; };
+  $('mvSearch').oninput = () => {
+    const q = $('mvSearch').value.trim().toLowerCase();
+    for (const li of $('mvList').children) { const e = all[+li.dataset.i]; li.hidden = !!q && !(`${e.lot} ${e.name}`.toLowerCase().includes(q)); }
+  };
+  const chosen = () => [...$('mvList').querySelectorAll('input[type=checkbox]:checked')].map((c) => all[+c.dataset.i]);
+  let picked = [], target = null, mode = 'start', anchor = null;
+  // Lu avant la fermeture (le contenu du dialogue est remplacé ensuite).
+  const read = () => { picked = chosen(); target = pages()[+$('mvPage').value]; mode = document.querySelector('input[name=mvWhere]:checked')?.value ?? 'start'; anchor = all[+$('mvAnchor').value] ?? null; };
+  for (const b of $('dialogButtons').querySelectorAll('button')) b.addEventListener('pointerdown', read, true);
+  const choice = await shown;
+  if (!choice) return;
+  if (!picked.length) return status('Aucun lot coché : rien n\'a bougé.');
+  pushUndo();
+  if (choice === 'back') {
+    for (const e of picked) delete e.line.MoveTo;
+    replan(); recomputeAll();
+    await refreshView();
+    status(`${picked.length} lot(s) remis à leur place.`);
+    return scheduleSave();
+  }
+  for (const e of picked) e.line.MoveTo = { Page: target.Id, Where: mode, Anchor: mode === 'after' && anchor && !picked.includes(anchor) ? anchor.line.Cells[0]?.Id ?? '' : '' };
+  replan(); recomputeAll();
+  const k = pages().indexOf(target);
+  if (k !== state.index) await showPage(k, { fit: false }); else await refreshView();
+  status(`${picked.length} lot(s) (${picked.map((e) => e.lot || e.name).slice(0, 6).join(', ')}${picked.length > 6 ? '…' : ''}) déplacé(s) page ${k + 1}, ${mode === 'start' ? 'au début' : mode === 'end' ? 'à la fin' : `après le lot ${anchor?.lot || anchor?.name}`}. ↶ pour annuler ; Lots › Déplacer des lots › Remettre à leur place pour revenir.`);
+  scheduleSave();
 }
 
 /** « Synchroniser » sans colonne des lots : on choisit les pages, les cases sont créées (numéros imprimés gardés), puis remplies. */
@@ -1602,6 +1681,7 @@ async function lotsDialog() {
     <label>Renuméroter à partir de <input id="lotStart" type="number" inputmode="numeric" min="0" value="${/^\d+$/.test(first) ? first : 1}"></label>`;
   const shown = dialog('Numéros de lot', html, [
     { label: 'Synchroniser…', value: 'sync', className: 'accent' },
+    { label: 'Déplacer des lots…', value: 'move' },
     { label: state.project.SortLots ? 'Remettre dans l\'ordre du document' : 'Trier par numéro de lot', value: 'sort' },
     { label: 'Pages et tableaux…', value: 'pages' },
     { label: 'Lots de fin (lot 0)…', value: 'end' },
@@ -1620,6 +1700,7 @@ async function lotsDialog() {
   };
   const choice = await shown;
   if (choice === 'help') return lotsHelp();
+  if (choice === 'move') return moveLotsDialog();
   if (choice === 'sort') {
     pushUndo();
     state.project.SortLots = !state.project.SortLots;

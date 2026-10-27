@@ -90,6 +90,9 @@ public sealed class PrintedLine
     /// <summary>Numéro de lot dans sa case : null = en haut (à la hauteur de la ligne), « Middle » ou « Bottom » (clic droit).</summary>
     public string? LotAlign { get; set; }
 
+    /// <summary>Lot déplacé à la main (Lots › Déplacer des lots) : page et endroit où il s'affiche ; null = à sa place.</summary>
+    public LotMove? MoveTo { get; set; }
+
     /// <summary>
     /// Hauteur ajoutée sous cette ligne (texte saisi sur plusieurs lignes) : tout ce qui est en dessous descend d'autant.
     /// Les positions de la page en tiennent déjà compte ; voir <see cref="PageLayout"/>.
@@ -291,4 +294,12 @@ public sealed class InventoryProject
     public EndLotsChoice? EndLots { get; set; }
 
     public IEnumerable<Field> AllFields() => Pages.SelectMany(p => p.AllFields());
+}
+
+/// <summary>Endroit choisi pour un lot déplacé : page (Id) et « start » (début), « end » (fin) ou « after » (après la ligne Anchor).</summary>
+public sealed class LotMove
+{
+    public string Page { get; set; } = "";
+    public string Where { get; set; } = "end";
+    public string Anchor { get; set; } = "";
 }

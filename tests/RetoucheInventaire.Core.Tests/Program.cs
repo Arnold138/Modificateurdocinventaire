@@ -122,6 +122,13 @@ if (args.Length > 0 && args[0] == "stress-fixtures")
     for (int k = 0; k < project.Pages.Count; k++) Pgm.Write(Path.Combine(args[1], $"p{k + 1}.pgm"), Fixtures.Load(project.Pages[k].Id).Image);
     return 0;
 }
+if (args.Length > 0 && args[0] == "plan-dump")
+{
+    var pj = System.Text.Json.JsonSerializer.Deserialize<RetoucheInventaire.Core.Model.InventoryProject>(File.ReadAllText(args[1]), RetoucheInventaire.Core.Storage.ProjectStore.Json)!;
+    var pl = RetoucheInventaire.Core.Export.Arrangement.Build(pj);
+    foreach (var u in pl.Moving) Console.WriteLine($"{u.Kind} p{u.P} r{u.R} « {u.Object.FirstText} » -> p{u.Dest.P} t{u.Dest.Ti} r{u.Dest.R}{(u.Dest.Before ? " avant" : "")}");
+    return 0;
+}
 if (args.Length > 0 && args[0] == "lotword") { foreach (var w in args.Skip(1)) Console.WriteLine(w + " -> " + (RetoucheInventaire.Core.Model.Lots.LotWord(w) ?? "null")); return 0; }
 if (args.Length > 0 && args[0] == "stress-replay") return Stress.Replay(args[1], args[2], args[3], args[4]);
 if (args.Length > 0 && args[0] == "replay")

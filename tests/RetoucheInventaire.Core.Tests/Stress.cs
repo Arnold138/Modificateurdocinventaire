@@ -53,6 +53,7 @@ public static class Stress
 
         var final = After(project);
         Directory.CreateDirectory(outDir);
+        if (Environment.GetEnvironmentVariable("SAVE") != null) File.WriteAllText(Path.Combine(outDir, "project.json"), JsonSerializer.Serialize(project, ProjectStore.Json));
         File.WriteAllText(Path.Combine(outDir, "export.txt"), TxtExporter.Build(project).Text);
         var drawn = project.Pages.Select(pg => pg.EndLots ? null : LotColumn.Draw(LotColumn.CloseTables(PageLayout.Stretch(ImageOf(images, pg), pg), pg), pg)).ToList();
         for (int k = 0; k < project.Pages.Count; k++)
@@ -186,6 +187,19 @@ public static class Stress
             case "lot": Lots.Set(project, line, a.GetProperty("v").GetString()!); break;
             case "addLot": Lots.Add(project, line); break;
             case "addLotHere": Lots.AddHere(project, table, line); break;
+            case "moveLot":
+            {
+                string anchor = "";
+                if (a.GetProperty("anchor") is { ValueKind: JsonValueKind.Object } an)
+                {
+                    var at = pages[an.GetProperty("p").GetInt32()].Tables[an.GetProperty("ti").GetInt32()];
+                    var al = at.Rows[Lots.RowOrder(at)[an.GetProperty("o").GetInt32()]].Lines[an.GetProperty("i").GetInt32()];
+                    anchor = al.Cells.Count > 0 ? al.Cells[0].Id : "";
+                }
+                line.MoveTo = new LotMove { Page = pages[a.GetProperty("page").GetInt32()].Id, Where = a.GetProperty("where").GetString()!, Anchor = anchor };
+                break;
+            }
+            case "unmoveLot": line.MoveTo = null; break;
             case "sortLots": project.SortLots = a.GetProperty("on").GetBoolean(); break;
             case "align": line.LotAlign = a.GetProperty("v").ValueKind == JsonValueKind.Null ? null : a.GetProperty("v").GetString(); break;
             case "frameToggle": foreach (var x in a.GetProperty("rows").EnumerateArray()) table.Rows[x.GetInt32()].LotFrame = a.GetProperty("on").GetBoolean(); break;

@@ -61,7 +61,7 @@ function documentLines(project) {
 function removedCells(project, lines, plan) {
   const removed = new Set();
   for (const u of plan?.units ?? []) {
-    if (u.kind === 'sort') continue; // trié par numéro : déplacé, toujours dans la vente
+    if (u.kind === 'sort' || u.kind === 'move') continue; // trié par numéro : déplacé, toujours dans la vente
     for (const l of u.lines) for (const c of l.Cells) removed.add(c);
     if (u.title) for (const c of u.title.Cells) if (c.Column > 0) removed.add(c);
   }

@@ -177,6 +177,8 @@ const ACTIONS = {
   del(t) { resolve(t).line.Deleted = true; },
   addLotHere(t) { const { table, line } = resolve(t); addLotHere(project, table, line); },
   sortLots(t, a) { project.SortLots = a.on; },
+  moveLot(t, a) { resolve(t).line.MoveTo = { Page: pages()[a.page].Id, Where: a.where, Anchor: a.anchor ? resolve(a.anchor).line.Cells[0].Id : '' }; },
+  unmoveLot(t) { delete resolve(t).line.MoveTo; },
   align(t, a) { const { line } = resolve(t); if (a.v) line.LotAlign = a.v; else delete line.LotAlign; },
   frameToggle(t, a) { for (const r of a.rows) resolve(t).table.Rows[r].LotFrame = a.on; },
   restore(t) { resolve(t).line.Deleted = false; },
@@ -288,6 +290,17 @@ function choose() {
   if (r < 0.71) { const x = pick(targets((y) => y.line.Deleted)); return x && ['restore', x, {}]; }
   if (r < 0.77) { const x = pick(objs); return x && ['lot', x, { v: chance(0.2) ? '0' : chance(0.15) ? '' : chance(0.15) ? pick(['VGG', '?', 'VGG', '12bis']) : chance(0.3) ? pick(['1', '1', '2', '3']) : String(1 + Math.floor(random() * 300)) }]; }
   if (r < 0.775) return ['sortLots', all[0], { on: !project.SortLots }];
+  if ((r < 0.80 && chance(MOVE)) || (r >= 0.80 && process.env.MOVE && chance(0.25))) {
+    if (chance(0.25)) { const x = pick(all.filter((y) => y.line.MoveTo)); if (x) return ['unmoveLot', x, {}]; }
+    const x = pick(objs.filter((y) => !isZeroLot(y.line)));
+    const dest = pick(pages().filter((pg) => !pg.EndLots && pg.Tables.some((t) => t.Rows.some((rw) => rw.Lines.some(hasLotCell)))));
+    if (x && dest) {
+      const where = pick(['start', 'end', 'after']);
+      const anchors = all.filter((y) => y.page === dest && hasLotCell(y.line) && y.line !== x.line && y.line.Cells[0]?.Id);
+      const an = where === 'after' && anchors.length ? pick(anchors) : null;
+      return ['moveLot', x, { page: pages().indexOf(dest), where, anchor: an ? ref(an) : null }];
+    }
+  }
   if (r < 0.78) { const x = pick(all.filter((y) => !hasLotCell(y.line) && !y.table.LotsOff && y.line.Kind === 'Article')); return x && ['addLot', x, {}]; }
   if (r < 0.79) { const x = pick(all.filter((y) => !hasLotCell(y.line) && itemTable(y.table) && (y.line.Kind === 'Article' || y.line.Kind === 'Titre'))); return x && ['addLotHere', x, {}]; }
   if (r < 0.83) return ['sync', all[0], { page: chance(0.5) ? all[Math.floor(random() * all.length)].p : null }];
@@ -441,6 +454,8 @@ function renderAll(plan) {
 
 // ---------- Déroulé ----------
 
+// Part des pas « déplacer un lot » (MOVE=1 : beaucoup plus souvent, pour éprouver les déplacements d'une page à l'autre).
+const MOVE = process.env.MOVE ? 1 : 0.15;
 const ops = [];
 function run(op, x, args) {
   const beforeLots = lotsBefore();

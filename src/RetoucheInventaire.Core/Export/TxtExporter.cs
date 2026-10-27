@@ -47,7 +47,7 @@ public static partial class TxtExporter
         foreach (var u in plan?.Moving ?? []) foreach (var l in u.Lines) unitOf[l] = u;
         // Tri par numéro de lot : les objets déplacés s'écrivent à leur nouvelle place, dans l'ordre des numéros.
         var sortOf = new Dictionary<PrintedLine, Arrangement.Unit>();
-        foreach (var u in full?.Moving ?? []) if (u.Kind == "sort") foreach (var l in u.Lines) sortOf[l] = u;
+        foreach (var u in full?.Moving ?? []) if (u.Kind is "sort" or "move") foreach (var l in u.Lines) sortOf[l] = u;
         var sortText = new Dictionary<PrintedLine, (string Text, bool Zero, bool Object, PrintedLine Line)>();
         static string Key(int p, int ti, int r) => $"{p},{ti},{r}";
         var pending = new Dictionary<string, List<string>>();
@@ -73,8 +73,8 @@ public static partial class TxtExporter
         var sortPending = new Dictionary<string, List<(string Text, bool Zero, bool Object, PrintedLine Line)>>();
         foreach (var u in full?.Moving ?? [])
         {
-            if (u.Kind != "sort") continue;
-            var k = Key(u.Dest.P, u.Dest.Ti, u.Dest.R);
+            if (u.Kind is not ("sort" or "move")) continue;
+            var k = (u.Dest.Before ? "b:" : "") + Key(u.Dest.P, u.Dest.Ti, u.Dest.R);
             if (!sortPending.TryGetValue(k, out var list)) sortPending[k] = list = [];
             foreach (var l in u.Lines) if (sortText.TryGetValue(l, out var x)) list.Add(x);
         }
@@ -89,13 +89,14 @@ public static partial class TxtExporter
                 // Page ajoutée : un tableau encore vierge (seulement son en-tête) n'est pas exporté.
                 if (page.Added is { } added && ti < added.Tables.Count && added.Tables[ti] != null)
                 {
-                    if (!rows.Any(x => x.Kept.Any(e => e.Line.Kind != LineKind.EnTete) || pending.ContainsKey(x.K) || sortPending.ContainsKey(x.K))) continue;
+                    if (!rows.Any(x => x.Kept.Any(e => e.Line.Kind != LineKind.EnTete) || pending.ContainsKey(x.K) || sortPending.ContainsKey(x.K) || sortPending.ContainsKey("b:" + x.K))) continue;
                 }
                 bool startsWithHeader = Lots.OrderedRows(table).SelectMany(r => r.Lines).FirstOrDefault(l => l.Kind != LineKind.Ignoree)?.Kind == LineKind.EnTete;
                 if (rows.Any(x => x.Kept.Count > 0) && startsWithHeader && output.Count > 0 && output[^1].Length > 0)
                     output.Add(""); // une ligne vide sépare deux tableaux
                 foreach (var row in rows)
                 {
+                    if (sortPending.TryGetValue("b:" + row.K, out var sortedBefore)) foreach (var x in sortedBefore) { output.Add(x.Text); if (x.Object) after = output.Count; }
                     foreach (var x in row.Kept) { output.Add(x.Text); if (x.Object) after = output.Count; }
                     if (sortPending.TryGetValue(row.K, out var sortedHere)) foreach (var x in sortedHere) { output.Add(x.Text); if (x.Object) after = output.Count; }
                     if (pending.TryGetValue(row.K, out var zeros)) output.AddRange(zeros);

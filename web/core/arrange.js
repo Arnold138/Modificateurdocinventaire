@@ -70,8 +70,9 @@ function movedUnits(project) {
       lines.forEach((l, i) => {
         const deleted = !!l.Deleted;
         const zero = lots && hasLotCell(l) && isZeroLot(l);
-        const sort = !deleted && !zero && sorting && objects.has(l);
-        if (!deleted && !zero && !sort) return;
+        const move = !deleted && !zero && lots && hasLotCell(l) && !!l.MoveTo;
+        const sort = !deleted && !zero && !move && sorting && objects.has(l);
+        if (!deleted && !zero && !move && !sort) return;
         if (found.some((u) => u.lines.includes(l))) return;
         const own = [l];
         for (let j = i + 1; j < lines.length && lines[j].Kind !== 'Titre' && !hasLotCell(lines[j]) && !lines[j].Deleted; j++) {
@@ -79,7 +80,7 @@ function movedUnits(project) {
           if (deleted && (hasValues(lines[j]) || ITEM_START.test(lines[j].Cells[0]?.Text ?? ''))) break;
           own.push(lines[j]);
         }
-        found.push({ kind: deleted ? 'deleted' : zero ? 'zero' : 'sort', object: l, lines: own, title: hasValues(l) ? null : carriedTitle(lines, l) });
+        found.push({ kind: deleted ? 'deleted' : zero ? 'zero' : move ? 'move' : 'sort', object: l, lines: own, title: hasValues(l) ? null : carriedTitle(lines, l) });
       });
       if (found.length === 0) continue;
       const covered = new Set(found.flatMap((u) => u.lines));
@@ -109,6 +110,27 @@ export const deletedLines = (project) => new Set(movedUnits(project).filter((u) 
  * Clé de tri d'un numéro de lot : les nombres du plus petit au plus grand (les « 1 » ensemble, puis les « 2 »…), puis
  * les codes en lettres groupés (« ? », « VGG »…), puis les cases vides.
  */
+/**
+ * Où va un lot déplacé à la main (Line.MoveTo = { Page, Where: 'start' | 'end' | 'after', Anchor }) : au début de la page
+ * (avant sa 1re rangée d'objet), à la fin (après sa dernière rangée d'objet) ou juste après la rangée d'un lot choisi.
+ * null si l'endroit n'existe plus (la ligne reste alors à sa place).
+ */
+function moveDest(project, u, rows) {
+  const m = u.object.MoveTo;
+  const pt = project.Pages.findIndex((pg) => pg.Id === m.Page);
+  if (pt < 0) return null;
+  const here = rows.filter((x) => x.p === pt);
+  if (here.length === 0) return null;
+  const objRows = here.filter((x) => x.table.Rows[x.r].Lines.some((l) => hasLotCell(l) && !l.Deleted));
+  const at = (x, before = false) => ({ p: x.p, ti: x.ti, r: x.r, table: x.table, page: x.page, before });
+  if (m.Where === 'after') {
+    const x = here.find((y) => y.table.Rows[y.r].Lines.some((l) => l.Cells[0]?.Id === m.Anchor));
+    if (x) return at(x);
+  }
+  if (m.Where === 'start') return objRows.length ? at(objRows[0], true) : at(here[0], true);
+  return objRows.length ? at(objRows[objRows.length - 1]) : at(here[here.length - 1]);
+}
+
 /**
  * Tri par numéro de lot, en bougeant le moins de lignes possible : la plus longue suite déjà dans l'ordre reste en
  * place ; chaque autre objet est recollé juste après la rangée du dernier objet resté en place qui a un numéro plus petit
@@ -284,8 +306,12 @@ export function planArrangement(project) {
     }
   }
   const sortMoves = [];
-  for (const { u, d } of sortPlaces(slots, rowsInOrder(project))) { prepare(u, d); sortMoves.push(u); }
-  moving = [...sortMoves, ...moving];
+  const ordered = rowsInOrder(project);
+  for (const { u, d } of sortPlaces(slots, ordered)) { prepare(u, d); sortMoves.push(u); }
+  // Lots déplacés à la main (Lots › Déplacer des lots) : vers la page et l'endroit choisis.
+  const handMoves = [];
+  for (const u of all.filter((x) => x.kind === 'move')) { const d = moveDest(project, u, ordered); if (d) { prepare(u, d); handMoves.push(u); } }
+  moving = [...sortMoves, ...handMoves, ...moving];
   const cutting = [...moving, ...deleted];
   const pages = project.Pages.map((page, p) => {
     const pieces = [];
@@ -322,11 +348,13 @@ export function planArrangement(project) {
         if (r >= n) continue;
         const s0 = Math.max(A, cutY(t.RowYs[r])), s1 = Math.min(B, cutY(t.RowYs[r + 1]));
         const cuts = cutting.filter((u) => u.p === p && u.ti === ti && u.r === r).sort((a, b) => a.top - b.top);
+        if (!template)
+          for (const u of moving) if (u.dest.p === p && u.dest.ti === ti && u.dest.r === r && u.dest.before) { pieces.push({ kind: 'unit', unit: u, dst, h: u.height }); dst += u.height; }
         let y = s0;
         for (const u of cuts) { copy(y, Math.max(y, u.top)); y = Math.max(y, u.bottom); }
         copy(y, s1);
         if (!template)
-          for (const u of moving) if (u.dest.p === p && u.dest.ti === ti && u.dest.r === r) { pieces.push({ kind: 'unit', unit: u, dst, h: u.height }); dst += u.height; }
+          for (const u of moving) if (u.dest.p === p && u.dest.ti === ti && u.dest.r === r && !u.dest.before) { pieces.push({ kind: 'unit', unit: u, dst, h: u.height }); dst += u.height; }
       }
       cursor = B;
     }

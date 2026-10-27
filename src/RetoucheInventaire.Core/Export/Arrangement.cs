@@ -24,7 +24,7 @@ public static class Arrangement
     public const int Margin = 3;
 
     /// <summary>Rangée de la destination : là où les lots 0 sont recollés.</summary>
-    public sealed record Destination(int P, int Ti, int R, Table Table, Page Page);
+    public sealed record Destination(int P, int Ti, int R, Table Table, Page Page, bool Before = false);
 
     /// <summary>Un objet au lot 0 et le morceau de page qu'il emporte.</summary>
     public sealed class Unit
@@ -123,6 +123,28 @@ public static class Arrangement
     /// place ; chaque autre objet est recollé juste après la rangée du dernier objet resté en place qui a un numéro plus petit
     /// ou égal (avant le 1er : après la rangée qui précède). Renvoie les objets à déplacer, dans l'ordre des numéros.
     /// </summary>
+    /// <summary>
+    /// Où va un lot déplacé à la main (PrintedLine.MoveTo) : au début de la page (avant sa 1re rangée d'objet), à la fin
+    /// (après sa dernière rangée d'objet) ou juste après la rangée d'un lot choisi. null si l'endroit n'existe plus.
+    /// </summary>
+    private static Destination? MoveDest(InventoryProject project, Unit u, List<OrderedRow> rows)
+    {
+        var m = u.Object.MoveTo!;
+        int pt = project.Pages.FindIndex(pg => pg.Id == m.Page);
+        if (pt < 0) return null;
+        var here = rows.Where(x => x.P == pt).ToList();
+        if (here.Count == 0) return null;
+        var objRows = here.Where(x => x.Table.Rows[x.R].Lines.Any(l => Lots.HasCell(l) && !l.Deleted)).ToList();
+        Destination At(OrderedRow x, bool before = false) => new(x.P, x.Ti, x.R, x.Table, x.Page, before);
+        if (m.Where == "after")
+        {
+            var x = here.FirstOrDefault(y => y.Table.Rows[y.R].Lines.Any(l => l.Cells.Count > 0 && l.Cells[0].Id == m.Anchor));
+            if (x != null) return At(x);
+        }
+        if (m.Where == "start") return objRows.Count > 0 ? At(objRows[0], true) : At(here[0], true);
+        return objRows.Count > 0 ? At(objRows[^1]) : At(here[^1]);
+    }
+
     private static List<(Unit U, Destination D)> SortPlaces(List<Unit> units, List<OrderedRow> rows)
     {
         var keys = units.Select(u => LotKey(u.Object.Lot)).ToList();
@@ -205,8 +227,9 @@ public static class Arrangement
                         var l = lines[i];
                         bool deleted = l.Deleted;
                         bool zero = lotsOn && Lots.HasCell(l) && Lots.IsZero(l);
-                        bool sort = !deleted && !zero && sorting && objects!.Contains(l);
-                        if (!deleted && !zero && !sort) continue;
+                        bool move = !deleted && !zero && lotsOn && Lots.HasCell(l) && l.MoveTo != null;
+                        bool sort = !deleted && !zero && !move && sorting && objects!.Contains(l);
+                        if (!deleted && !zero && !move && !sort) continue;
                         if (found.Any(u => u.Lines.Contains(l))) continue;
                         var own = new List<PrintedLine> { l };
                         for (int j = i + 1; j < lines.Count && lines[j].Kind != LineKind.Titre && !Lots.HasCell(lines[j]) && !lines[j].Deleted; j++)
@@ -215,7 +238,7 @@ public static class Arrangement
                             if (deleted && (HasValues(lines[j]) || Analysis.LineClassifier.LooksLikeItem(lines[j].Cells.Count > 0 ? lines[j].Cells[0].Text : ""))) break;
                             own.Add(lines[j]);
                         }
-                        found.Add((deleted ? "deleted" : zero ? "zero" : "sort", l, own, HasValues(l) ? null : CarriedTitle(lines, l)));
+                        found.Add((deleted ? "deleted" : zero ? "zero" : move ? "move" : "sort", l, own, HasValues(l) ? null : CarriedTitle(lines, l)));
                     }
                     if (found.Count == 0) continue;
                     var covered = found.SelectMany(u => u.Lines).ToHashSet();
@@ -440,9 +463,13 @@ public static class Arrangement
             }
         }
         var sortMoves = new List<Unit>();
+        var ordered = RowsInOrder(project);
         if (slots.Count > 0)
-            foreach (var (u, d) in SortPlaces(slots, RowsInOrder(project))) { Prepare(u, d); sortMoves.Add(u); }
-        moving = sortMoves.Concat(moving).ToList();
+            foreach (var (u, d) in SortPlaces(slots, ordered)) { Prepare(u, d); sortMoves.Add(u); }
+        // Lots déplacés à la main (Lots › Déplacer des lots) : vers la page et l'endroit choisis.
+        var handMoves = new List<Unit>();
+        foreach (var u in all.Where(x => x.Kind == "move")) if (MoveDest(project, u, ordered) is { } md) { Prepare(u, md); handMoves.Add(u); }
+        moving = sortMoves.Concat(handMoves).Concat(moving).ToList();
         var cutting = moving.Concat(deleted).ToList();
 
         var pages = new List<PagePlan>();
@@ -487,11 +514,13 @@ public static class Arrangement
                     if (r >= n) continue;
                     int s0 = Math.Max(A, CutY(t.RowYs[r])), s1 = Math.Min(B, CutY(t.RowYs[r + 1]));
                     var cuts = cutting.Where(u => u.P == p && u.Ti == ti && u.R == r).OrderBy(u => u.Top).ToList();
+                    if (template is null)
+                        foreach (var u in moving.Where(u => u.Dest.P == p && u.Dest.Ti == ti && u.Dest.R == r && u.Dest.Before)) { pieces.Add(new Piece { Unit = u, Dst = dst, H = u.Height }); dst += u.Height; }
                     int y = s0;
                     foreach (var u in cuts) { Copy(y, Math.Max(y, u.Top)); y = Math.Max(y, u.Bottom); }
                     Copy(y, s1);
                     if (template is null)
-                        foreach (var u in moving.Where(u => u.Dest.P == p && u.Dest.Ti == ti && u.Dest.R == r)) { pieces.Add(new Piece { Unit = u, Dst = dst, H = u.Height }); dst += u.Height; }
+                        foreach (var u in moving.Where(u => u.Dest.P == p && u.Dest.Ti == ti && u.Dest.R == r && !u.Dest.Before)) { pieces.Add(new Piece { Unit = u, Dst = dst, H = u.Height }); dst += u.Height; }
                 }
                 cursor = B;
             }

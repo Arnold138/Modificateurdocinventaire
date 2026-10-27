@@ -814,6 +814,23 @@ public sealed partial class MainWindow : Window
                 () => _ = LineActionAsync("lotRemove", 0, f), Danger: true));
         }
         if (Lots.HasCell(line) && !Lots.IsZero(line))
+        {
+            var lotLine = line;
+            list.Add(new("Déplacer ce lot vers une autre page…", "Choisir la page et l'endroit (début, fin, après un lot).", "\uE8DE",
+                () => _ = MoveLotsDialogAsync(lotLine)));
+            if (line.MoveTo != null)
+                list.Add(new("Remettre ce lot à sa place", "Il revient là où il était imprimé.", "\uE7A7", () => _ = GuardAsync("Remettre à sa place", async () =>
+                {
+                    PushUndo();
+                    lotLine.MoveTo = null;
+                    Replan();
+                    RecomputeTotals();
+                    await RefreshViewAsync();
+                    SetStatus($"« {Short(lotLine.FirstText)} » remis à sa place. ↶ pour annuler.");
+                    ScheduleAutosave();
+                })));
+        }
+        if (Lots.HasCell(line) && !Lots.IsZero(line))
             list.Add(new("Mettre à la fin (lot 0)", "Objet absent : sa ligne part à la fin, ce qui suit remonte.", "\uE74B",
                 () => _ = LineActionAsync("end", 0, f)));
         // Colonne des lots sur une rangée sans case (total, titre…) : la tracer ou non.
@@ -1183,6 +1200,111 @@ public sealed partial class MainWindow : Window
         SetStatus(on ? "Colonne des lots tracée sur cette rangée. ↶ pour annuler." : "Colonne des lots arrêtée sur cette rangée. ↶ pour annuler.");
         ScheduleAutosave();
     });
+
+    // ---------- Déplacer des lots d'une page à l'autre ----------
+
+    private sealed record LotEntry(PrintedLine Line, ModelPage Page, int K, string Lot, string Name)
+    {
+        public override string ToString() => $"{(Lot.Length > 0 ? Lot : "(vide)")}  {Name}";
+    }
+
+    private List<LotEntry> LotEntries() =>
+        Lots.ObjectLines(_project).Where(o => !Lots.IsZero(o.Line) && Lots.HasCell(o.Line))
+            .Select(o => new LotEntry(o.Line, o.Page, _project.Pages.IndexOf(o.Page), o.Line.Lot, Short(o.Line.FirstText))).ToList();
+
+    private Task MoveLotsDialogAsync(PrintedLine? preselect = null) => GuardAsync("Déplacer des lots", () => MoveLotsDialogCoreAsync(preselect));
+
+    /// <summary>
+    /// « Déplacer des lots… » : on coche un ou plusieurs lots (recherche par numéro ou par texte), on choisit la page et
+    /// l'endroit (début, fin, après un lot) ; ils s'y affichent, rien d'autre ne bouge. « Remettre à leur place » annule.
+    /// </summary>
+    private async Task MoveLotsDialogCoreAsync(PrintedLine? preselect)
+    {
+        if (_busy) return;
+        var all = LotEntries();
+        if (all.Count == 0) { SetStatus("Aucun lot à déplacer : créez d'abord les cases (Lots)."); return; }
+        var pagesWithLots = all.Select(e => e.K).Distinct().OrderBy(k => k).Where(k => !_project.Pages[k].EndLots).ToList();
+        var panel = new StackPanel { Spacing = 10, MinWidth = 460, MaxWidth = 560 };
+        panel.Children.Add(new TextBlock { Text = "Cochez les lots à déplacer, puis choisissez où ils vont. Les autres lignes ne bougent pas.", TextWrapping = TextWrapping.Wrap });
+        var search = new TextBox { PlaceholderText = "Chercher un numéro ou un mot…" };
+        panel.Children.Add(search);
+        var list = new StackPanel { Spacing = 2 };
+        var boxes = new List<(CheckBox Box, LotEntry E)>();
+        foreach (var e in all)
+        {
+            string moved = e.Line.MoveTo is { } mt ? $"  → page {_project.Pages.FindIndex(p => p.Id == mt.Page) + 1}" : "";
+            var cb = new CheckBox { Content = $"{e}   (page {e.K + 1}){moved}", IsChecked = e.Line == preselect, MinHeight = 32 };
+            boxes.Add((cb, e));
+            list.Children.Add(cb);
+        }
+        panel.Children.Add(new ScrollViewer { Content = list, MaxHeight = 300 });
+        search.TextChanged += (_, _) =>
+        {
+            string q = search.Text.Trim().ToLowerInvariant();
+            foreach (var (cb, e) in boxes) cb.Visibility = q.Length == 0 || $"{e.Lot} {e.Name}".ToLowerInvariant().Contains(q) ? Visibility.Visible : Visibility.Collapsed;
+        };
+        var pageBox = new ComboBox { Header = "Vers la page", MinWidth = 160 };
+        foreach (int k in pagesWithLots) pageBox.Items.Add($"Page {k + 1}");
+        int def = pagesWithLots.IndexOf(_index);
+        pageBox.SelectedIndex = def >= 0 ? def : 0;
+        panel.Children.Add(pageBox);
+        var start = new RadioButton { Content = "Au début de la page", GroupName = "mv", IsChecked = true };
+        var end = new RadioButton { Content = "À la fin de la page", GroupName = "mv" };
+        var after = new RadioButton { Content = "Juste après le lot :", GroupName = "mv" };
+        var anchorBox = new ComboBox { MinWidth = 300 };
+        void FillAnchors()
+        {
+            anchorBox.Items.Clear();
+            if (pageBox.SelectedIndex < 0) return;
+            int k = pagesWithLots[pageBox.SelectedIndex];
+            foreach (var e in all.Where(e => e.K == k)) anchorBox.Items.Add(e);
+            if (anchorBox.Items.Count > 0) anchorBox.SelectedIndex = 0;
+        }
+        FillAnchors();
+        pageBox.SelectionChanged += (_, _) => FillAnchors();
+        anchorBox.SelectionChanged += (_, _) => { if (anchorBox.SelectedItem != null && anchorBox.IsDropDownOpen) after.IsChecked = true; };
+        panel.Children.Add(start);
+        panel.Children.Add(end);
+        var afterRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        afterRow.Children.Add(after);
+        afterRow.Children.Add(anchorBox);
+        panel.Children.Add(afterRow);
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot, Title = "Déplacer des lots", Content = new ScrollViewer { Content = panel },
+            PrimaryButtonText = "Déplacer", SecondaryButtonText = "Remettre à leur place", CloseButtonText = "Annuler", DefaultButton = ContentDialogButton.Primary,
+        };
+        var result = await dialog.ShowAsync();
+        if (result == ContentDialogResult.None) return;
+        var picked = boxes.Where(b => b.Box.IsChecked == true).Select(b => b.E).ToList();
+        if (picked.Count == 0) { SetStatus("Aucun lot coché : rien n'a bougé."); return; }
+        PushUndo();
+        if (result == ContentDialogResult.Secondary)
+        {
+            foreach (var e in picked) e.Line.MoveTo = null;
+            Replan();
+            RecomputeTotals();
+            await RefreshViewAsync();
+            SetStatus($"{picked.Count} lot(s) remis à leur place.");
+            ScheduleAutosave();
+            return;
+        }
+        int target = pagesWithLots[Math.Max(0, pageBox.SelectedIndex)];
+        string mode = after.IsChecked == true ? "after" : end.IsChecked == true ? "end" : "start";
+        var anchor = anchorBox.SelectedItem as LotEntry;
+        foreach (var e in picked)
+            e.Line.MoveTo = new LotMove
+            {
+                Page = _project.Pages[target].Id, Where = mode,
+                Anchor = mode == "after" && anchor != null && !picked.Contains(anchor) && anchor.Line.Cells.Count > 0 ? anchor.Line.Cells[0].Id : "",
+            };
+        Replan();
+        RecomputeTotals();
+        if (target != _index) await ShowPageAsync(target, fit: false); else await RefreshViewAsync();
+        string where = mode == "start" ? "au début" : mode == "end" ? "à la fin" : $"après le lot {(anchor?.Lot.Length > 0 ? anchor.Lot : anchor?.Name)}";
+        SetStatus($"{picked.Count} lot(s) ({string.Join(", ", picked.Take(6).Select(e => e.Lot.Length > 0 ? e.Lot : e.Name))}{(picked.Count > 6 ? "…" : "")}) déplacé(s) page {target + 1}, {where}. ↶ pour annuler ; Lots › Déplacer des lots › Remettre à leur place pour revenir.");
+        ScheduleAutosave();
+    }
 
     /// <summary>Numéro de lot en haut, au milieu ou en bas de sa case (clic droit).</summary>
     private Task LotAlignAsync(PrintedLine line, string? value) => GuardAsync("Numéro de lot", async () =>
@@ -1907,7 +2029,12 @@ public sealed partial class MainWindow : Window
         helpButton.Click += (_, _) => { choice = "help"; dialog?.Hide(); };
         var sortButton = new Button { Content = _project.SortLots ? "Remettre dans l'ordre du document" : "Trier par numéro de lot", MinHeight = 44 };
         sortButton.Click += (_, _) => { choice = "sort"; dialog?.Hide(); };
-        panel.Children.Add(sortButton);
+        var moveButton = new Button { Content = "Déplacer des lots…", MinHeight = 44 };
+        moveButton.Click += (_, _) => { choice = "move"; dialog?.Hide(); };
+        var sortRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        sortRow.Children.Add(sortButton);
+        sortRow.Children.Add(moveButton);
+        panel.Children.Add(sortRow);
         var extra2 = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         extra2.Children.Add(endButton);
         extra2.Children.Add(helpButton);
@@ -1933,6 +2060,9 @@ public sealed partial class MainWindow : Window
         {
             case "sync":
                 await SyncDialogAsync();
+                return;
+            case "move":
+                await MoveLotsDialogAsync();
                 return;
             case "sort":
                 PushUndo();
