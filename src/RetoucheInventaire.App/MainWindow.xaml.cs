@@ -489,6 +489,7 @@ public sealed partial class MainWindow : Window
         view.LotPosChanged += async (v, line, table, cy) => await GuardAsync("Numéro de lot", async () =>
         {
             // Numéro glissé dans sa case : il reste à cette hauteur (clic droit › en haut / au milieu / en bas pour revenir).
+            Views.PageView.Trace($"fenêtre : numéro à {cy:0} → {Lots.LotPosAt(table, line, cy)}");
             if (Lots.LotPosAt(table, line, cy) is not int pos) { v.UpdateLots(); return; }
             PushUndo();
             line.LotPos = pos;
@@ -501,6 +502,7 @@ public sealed partial class MainWindow : Window
         view.GapChanged += async (v, pg, line, key, want) => await GuardAsync("Espace vide", async () =>
         {
             // Poignée ↕ (Modifier) : espace vide réduit ou agrandi.
+            Views.PageView.Trace($"fenêtre : espace {key} → {want}");
             PushUndo();
             if (!Rows.SetGap(pg, line, key, want)) { DropUndo(); SetStatus("Cet espace ne peut pas être réduit davantage."); return; }
             Replan();

@@ -57,6 +57,10 @@ public sealed class PageView
     /// <summary>Mode Modifier : poignées ↕ des espaces vides (au-dessus de tout le reste).</summary>
     private readonly Canvas _gapLayer = new();
     private double _uiScale = 1;
+
+    /// <summary>Essai automatique (variable RI_TRACE = fichier) : ce que reçoit la page pendant un glisser.</summary>
+    private static readonly string? TraceFile = Environment.GetEnvironmentVariable("RI_TRACE");
+    internal static void Trace(string what) { if (TraceFile != null) try { File.AppendAllText(TraceFile, $"{DateTime.Now:HH:mm:ss.fff} {what}\n"); } catch { /* sans importance */ } }
     private readonly Canvas _gutter = new() { Width = GutterWidth };
     private readonly Rectangle _focusFrame = new() { Stroke = Accent, StrokeThickness = 2, Visibility = Visibility.Collapsed, IsHitTestVisible = false };
     private readonly Rectangle _rubber = new() { Stroke = LockStroke, StrokeThickness = 2, Fill = LockFill, Visibility = Visibility.Collapsed };
@@ -304,7 +308,9 @@ public sealed class PageView
     /// <summary>Zoom de la page : les boutons de la page ajoutée gardent la même taille à l'écran.</summary>
     public void SetUiScale(float zoom)
     {
+        double was = _uiScale;
         _uiScale = Math.Clamp(1 / Math.Max(0.15, zoom), 1, 2.5);
+        if (MoveMode && Math.Abs(was - _uiScale) > 0.05) DrawGapHandles();
         foreach (var b in _addedLayer.Children.OfType<Button>()) b.RenderTransform = new ScaleTransform { ScaleX = _uiScale, ScaleY = _uiScale };
     }
 
@@ -565,9 +571,12 @@ public sealed class PageView
             area.PointerEntered += (_, _) => { area.Background = new SolidColorBrush(ColorHelper.FromArgb(16, 0, 103, 192)); area.BorderThickness = new Thickness(1); };
             area.PointerExited += (_, _) => { area.Background = new SolidColorBrush(Colors.Transparent); area.BorderThickness = new Thickness(0); };
             area.RightTapped += (_, e) => { e.Handled = true; if (line.Cells.Count > 0) ShowLineCommands(line.Cells[0], area, e.GetPosition(area)); };
+            // Au-dessus du numéro (une case de texte garde la souris pour sélectionner) : un clic met le curseur dans le numéro,
+            // un glisser le déplace.
+            _lotLayer.Children.Add(tb);
             _lotLayer.Children.Add(area);
             LotDrag(area, tb, entry, zone, true);
-            LotDrag(tb, tb, entry, zone, false);
+            return;
         }
         _lotLayer.Children.Add(tb);
     }
@@ -583,6 +592,7 @@ public sealed class PageView
             var pt = e.GetCurrentPoint(Root);
             if (!pt.Properties.IsLeftButtonPressed) return;
             pressed = true; dragging = false;
+            Trace($"numéro appui {entry.Line.Lot}");
             y0 = pt.Position.Y;
             top0 = Canvas.GetTop(tb);
             if (isZone) { target.CapturePointer(e.Pointer); e.Handled = true; }
@@ -610,10 +620,11 @@ public sealed class PageView
             {
                 dragging = false;
                 tb.BorderThickness = new Thickness(0);
+                Trace($"numéro lâché ok={ok} haut={Canvas.GetTop(tb):0}");
                 if (ok) LotPosChanged?.Invoke(this, entry.Line, entry.Table, Canvas.GetTop(tb) + h / 2 - entry.Dy);
                 else Canvas.SetTop(tb, top0);
             }
-            else if (ok && isZone) tb.Focus(FocusState.Pointer);
+            else if (ok && isZone) { tb.Focus(FocusState.Pointer); tb.SelectionStart = tb.Text.Length; }
         }
         target.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler((_, e) => { bool was = pressed; End(true); if (was) target.ReleasePointerCapture(e.Pointer); }), true);
         target.PointerCanceled += (_, _) => End(false);
@@ -776,12 +787,13 @@ public sealed class PageView
                 // Seulement les vrais espaces vides (ou ceux déjà réglés) : pas une poignée sur chaque interligne normal.
                 if (g.H <= g.Normal + 8 && !entry.Page.Inserts.Any(b => b.Gap == g.Key)) continue;
                 double top = g.Y0 + entry.Dy;
-                double hh = Math.Min(22, Math.Max(14, g.H - 2));
+                // Même taille à l'écran quel que soit le zoom (comme les boutons de la page ajoutée).
+                double hh = 22 * _uiScale, hw = 30 * _uiScale;
                 var handle = new Border
                 {
-                    Width = 28, Height = hh, CornerRadius = new CornerRadius(6), Background = GripFill,
+                    Width = hw, Height = hh, CornerRadius = new CornerRadius(6 * _uiScale), Background = GripFill,
                     BorderBrush = GripBorder, BorderThickness = new Thickness(1),
-                    Child = new TextBlock { Text = "↕", FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = GripInk, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center },
+                    Child = new TextBlock { Text = "↕", FontSize = 14 * _uiScale, FontWeight = FontWeights.SemiBold, Foreground = GripInk, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center },
                 };
                 AutomationProperties.SetName(handle, "Espace vide");
                 ToolTipService.SetToolTip(handle, $"Espace vide ({g.H} px) : tirer vers le haut pour le réduire, vers le bas pour l'agrandir");
@@ -797,7 +809,7 @@ public sealed class PageView
                 int want = g.H;
                 var gap = g;
                 var page = entry.Page;
-                handle.PointerPressed += (_, e) => { down = true; y0 = e.GetCurrentPoint(Root).Position.Y; want = gap.H; handle.CapturePointer(e.Pointer); ghost.Height = gap.H; ghost.Visibility = Visibility.Visible; e.Handled = true; };
+                handle.PointerPressed += (_, e) => { Trace($"espace ↕ appui {gap.Key} h={gap.H}"); down = true; y0 = e.GetCurrentPoint(Root).Position.Y; want = gap.H; handle.CapturePointer(e.Pointer); ghost.Height = gap.H; ghost.Visibility = Visibility.Visible; e.Handled = true; };
                 handle.PointerMoved += (_, e) =>
                 {
                     if (!down) return;
@@ -810,6 +822,7 @@ public sealed class PageView
                     if (!down) return;
                     down = false;
                     ghost.Visibility = Visibility.Collapsed;
+                    Trace($"espace ↕ fin ok={ok} voulu={want} (était {gap.H})");
                     if (ok && want != gap.H) GapChanged?.Invoke(this, page, gap.Line, gap.Key, want);
                 }
                 handle.PointerReleased += (_, e) => { End(true); handle.ReleasePointerCapture(e.Pointer); e.Handled = true; };
@@ -869,6 +882,7 @@ public sealed class PageView
             Child = new FontIcon { Glyph = "", FontSize = line is null ? 20 : 17, Foreground = GripInk },
         };
         ToolTipService.SetToolTip(grip, tip);
+        AutomationProperties.SetName(grip, unit != null ? "Déplacer la ligne rangée" : line != null ? "Déplacer la ligne" : "Déplacer la rangée");
         if (unit != null) { grip.Background = UnitGripFill; ((FontIcon)grip.Child).Foreground = UnitGripInk; }
         Canvas.SetLeft(grip, GutterWidth - 6 - (line is null ? 72 : 56));
         Canvas.SetTop(grip, centerY - h / 2);
