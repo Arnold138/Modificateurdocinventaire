@@ -1,6 +1,7 @@
 // Préparation des images envoyées à la reconnaissance du texte. Portage de OcrPreparation.cs.
 import { Rect, pt, roundHalfEven } from './geometry.js';
 import { toGray, otsu, resize, raster, white } from './imaging.js';
+import { fixOcrText } from './model.js';
 
 export const TARGET_WIDTH = 2200;
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -121,7 +122,7 @@ export function applyCellWords(field, words, scale, origin) {
   const ws = words.map((w) => ({ ...w, Text: trimBars(w.Text) })).filter((w) => w.Text.length > 0);
   ws.sort((a, b) => a.Box.X - b.Box.X);
   if (ws.length === 0) return;
-  field.OriginalText = field.Text = ws.map((w) => w.Text).join(' ');
+  field.OriginalText = field.Text = fixOcrText(ws.map((w) => w.Text).join(' '));
   field.Ink = ws
     .map((w) => Rect.make(origin.X + w.Box.X / scale, origin.Y + w.Box.Y / scale, w.Box.Width / scale, w.Box.Height / scale))
     .reduce((a, b) => Rect.union(a, b), Rect.empty());

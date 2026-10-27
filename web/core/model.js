@@ -52,9 +52,32 @@ export function analyze(page, image, rawWords, grids = null) {
     for (const row of buildGridlessTable(rest, page.Width).Rows)
       for (const line of row.Lines) { line.OutsideTable = true; line.Kind = 'Ignoree'; page.LooseLines.push(line); }
   }
+  cleanReading(page, false);
   for (const t of page.Tables) classify(t);
+  cleanReading(page);
   assignIds(page);
   applyLocks(page);
+}
+
+/** Lecture corrigée : « I trémie » → « 1 trémie », « +1- 20 » → « +/- 20 » (le 1 et la barre / mal lus). */
+export function fixOcrText(t) {
+  return t
+    .replace(/(^|[\s(+,])[Il|!](?=\s+[a-zà-ÿ0-9])/g, (_, a) => a + '1')
+    .replace(/(^|\s)\+[1lI|]-(?=\s|\d)/g, (_, a) => a + '+/-');
+}
+
+/**
+ * Cases encore telles que lues : lecture corrigée (1 lu comme I ou l…). Désignation d'un article : écrite à gauche
+ * (un texte retapé ne se décale plus au milieu de la case).
+ */
+export function cleanReading(page, align = true) {
+  for (const t of page.Tables)
+    for (const r of t.Rows)
+      for (const l of r.Lines)
+        for (const f of l.Cells) {
+          if (f.Text === f.OriginalText) { const x = fixOcrText(f.Text); if (x !== f.Text) f.Text = f.OriginalText = x; }
+          if (align && f.Column === 0 && l.Kind === 'Article' && f.Align !== 'Left') f.Align = 'Left';
+        }
 }
 
 export function reclassify(page) { for (const t of page.Tables) classify(t); }
@@ -65,6 +88,7 @@ export function reclassify(page) { for (const t of page.Tables) classify(t); }
  */
 export function upgradePage(page) {
   let n = 0;
+  cleanReading(page);
   // Page ajoutée d'une version précédente : « objet quand on y écrit » s'appelle maintenant AutoLot.
   if (page.Added) for (const l of allLines(page)) if (l.ForceLot && !firstText(l)) { l.ForceLot = false; l.AutoLot = true; }
   // Page ajoutée : une case n'y vient plus toute seule (seulement avec « + ») ; un numéro déjà tapé reste.

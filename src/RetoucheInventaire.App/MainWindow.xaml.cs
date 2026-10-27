@@ -759,7 +759,7 @@ public sealed partial class MainWindow : Window
         var list = new List<PageView.LineCommand>();
         if (_busy || PageEdits.FindLine(_project, f) is not { } hit) return list;
         var (page, line) = hit;
-        if (_plan.Moving.Any(u => u.Lines.Contains(line)))
+        if (_plan.Moving.Any(u => u.Kind == "zero" && u.Lines.Contains(line)))
         {
             // Ligne au lot 0, affichée à la fin : la remettre, ou la supprimer.
             list.Add(new("Remettre à sa place", "La ligne retourne où elle était (case de lot vide : tapez son numéro).", "\uE7A7",
@@ -1048,7 +1048,7 @@ public sealed partial class MainWindow : Window
     /// <summary>Où est maintenant la ligne : « page 9 « Lots de fin », 3e ligne » ou « page 7, après le dernier lot (« … ») ».</summary>
     private (int K, string Text)? PlaceOf(PrintedLine line)
     {
-        var u = _plan.Moving.FirstOrDefault(x => x.Lines.Contains(line));
+        var u = _plan.Moving.FirstOrDefault(x => x.Kind == "zero" && x.Lines.Contains(line));
         if (u is null) return null;
         int k = u.EndPage >= 0 ? u.EndPage : u.Dest.P;
         int rank = _plan.Pages[k].Pieces.Where(pc => pc.IsUnit).ToList().FindIndex(pc => pc.Unit == u) + 1;
@@ -1905,6 +1905,9 @@ public sealed partial class MainWindow : Window
         endButton.Click += (_, _) => { choice = "end"; dialog?.Hide(); };
         var helpButton = new Button { Content = "Comment ça marche ?", MinHeight = 44 };
         helpButton.Click += (_, _) => { choice = "help"; dialog?.Hide(); };
+        var sortButton = new Button { Content = _project.SortLots ? "Remettre dans l'ordre du document" : "Trier par numéro de lot", MinHeight = 44 };
+        sortButton.Click += (_, _) => { choice = "sort"; dialog?.Hide(); };
+        panel.Children.Add(sortButton);
         var extra2 = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         extra2.Children.Add(endButton);
         extra2.Children.Add(helpButton);
@@ -1930,6 +1933,18 @@ public sealed partial class MainWindow : Window
         {
             case "sync":
                 await SyncDialogAsync();
+                return;
+            case "sort":
+                PushUndo();
+                _project.SortLots = !_project.SortLots;
+                Replan();
+                RecomputeTotals();
+                await RefreshViewAsync();
+                int movedCount = _plan.Moving.Count(u => u.Kind == "sort");
+                SetStatus(_project.SortLots
+                    ? $"Lignes triées par numéro de lot (du plus petit au plus grand, les mêmes numéros ensemble, les codes en lettres comme VGG à la fin) : {movedCount} ligne(s) déplacée(s). Lots › Remettre dans l'ordre du document pour revenir."
+                    : "Lignes remises dans l'ordre du document.");
+                ScheduleAutosave();
                 return;
             case "help":
                 await LotsHelpAsync();
@@ -2228,8 +2243,8 @@ public sealed partial class MainWindow : Window
                           ? $"PDF exporté : « {pdfFile!.Name} », {done} page(s), chacune telle qu'à l'écran (totaux recalculés)."
                             + (skipped > 0 ? $" {skipped} page(s) TXT/CSV/XLSX non comprise(s) (elles s'exportent en .txt)." : "")
                           : $"{done} image(s) JPEG exportée(s) dans « {folder!.Name} » (nom d'origine + « - modifié »).")
-                      + (plan.Moving.Count > 0 && plan.Dest != null
-                          ? $" {plan.Moving.Count} lot(s) 0 placé(s) {(_project.Pages[plan.Dest.P].EndLots ? "sur la page « Lots de fin »" : "après le dernier lot")} (page {plan.Dest.P + 1})." : ""));
+                      + (plan.Moving.Any(u => u.Kind == "zero") && plan.Dest != null
+                          ? $" {plan.Moving.Count(u => u.Kind == "zero")} lot(s) 0 placé(s) {(_project.Pages[plan.Dest.P].EndLots ? "sur la page « Lots de fin »" : "après le dernier lot")} (page {plan.Dest.P + 1})." : ""));
         });
     }
 

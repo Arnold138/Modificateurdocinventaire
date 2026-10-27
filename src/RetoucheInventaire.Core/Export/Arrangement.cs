@@ -114,10 +114,79 @@ public static class Arrangement
     /// Lignes qui quittent leur place, dans l'ordre du document : « zero » (objet au lot 0 et sa suite, recollé après le dernier lot
     /// ou sur une page « lots de fin ») ; « deleted » (ligne supprimée et sa suite : retirée, la suite remonte).
     /// </summary>
+    /// <summary>
+    /// Clé de tri d'un numéro de lot : les nombres du plus petit au plus grand (les « 1 » ensemble, puis les « 2 »…), puis
+    /// les codes en lettres groupés (« ? », « VGG »…), puis les cases vides.
+    /// </summary>
+    /// <summary>
+    /// Tri par numéro de lot, en bougeant le moins de lignes possible : la plus longue suite déjà dans l'ordre reste en
+    /// place ; chaque autre objet est recollé juste après la rangée du dernier objet resté en place qui a un numéro plus petit
+    /// ou égal (avant le 1er : après la rangée qui précède). Renvoie les objets à déplacer, dans l'ordre des numéros.
+    /// </summary>
+    private static List<(Unit U, Destination D)> SortPlaces(List<Unit> units, List<OrderedRow> rows)
+    {
+        var keys = units.Select(u => LotKey(u.Object.Lot)).ToList();
+        var tails = new List<int>();
+        var prev = Enumerable.Repeat(-1, units.Count).ToArray();
+        for (int i = 0; i < units.Count; i++)
+        {
+            int lo = 0, hi = tails.Count;
+            while (lo < hi) { int mid = (lo + hi) >> 1; if (CompareKeys(keys[tails[mid]], keys[i]) <= 0) lo = mid + 1; else hi = mid; }
+            prev[i] = lo > 0 ? tails[lo - 1] : -1;
+            if (lo == tails.Count) tails.Add(i); else tails[lo] = i;
+        }
+        var stay = new HashSet<int>();
+        for (int i = tails.Count > 0 ? tails[^1] : -1; i >= 0; i = prev[i]) stay.Add(i);
+        int RowIndex(Unit u) => rows.FindIndex(x => x.P == u.P && x.Ti == u.Ti && x.R == u.R);
+        // Avant le 1er objet resté en place : la rangée qui le précède ; s'il n'y en a pas (1re rangée du document), il bouge aussi.
+        int first = -1;
+        for (int i = 0; i < units.Count; i++)
+        {
+            if (!stay.Contains(i)) continue;
+            if (RowIndex(units[i]) > 0) { first = i; break; }
+            stay.Remove(i);
+        }
+        var order = Enumerable.Range(0, units.Count).ToList();
+        order.Sort((a, b) => { int c = CompareKeys(keys[a], keys[b]); return c != 0 ? c : a.CompareTo(b); });
+        var output = new List<(Unit, Destination)>();
+        foreach (int i in order)
+        {
+            if (stay.Contains(i)) continue;
+            int anchor = -1;
+            foreach (int j in stay) if (CompareKeys(keys[j], keys[i]) <= 0 && j > anchor) anchor = j;
+            Destination d;
+            if (anchor >= 0) { var a = units[anchor]; d = new Destination(a.P, a.Ti, a.R, a.Table, a.Page); }
+            else if (first >= 0) { var x = rows[RowIndex(units[first]) - 1]; d = new Destination(x.P, x.Ti, x.R, x.Table, x.Page); }
+            else continue; // aucun repère : la ligne reste où elle est
+            output.Add((units[i], d));
+        }
+        return output;
+    }
+
+    public static (int, int, string) LotKey(string? lot)
+    {
+        string t = (lot ?? "").Trim();
+        if (t.Length == 0) return (2, 0, "");
+        var m = System.Text.RegularExpressions.Regex.Match(t, @"^(\d+)");
+        if (m.Success && int.TryParse(m.Groups[1].Value, out int n)) return (0, n, t[m.Groups[1].Value.Length..].ToUpperInvariant());
+        return (1, 0, t.ToUpperInvariant());
+    }
+
+    public static int CompareKeys((int, int, string) a, (int, int, string) b)
+    {
+        int c = a.Item1.CompareTo(b.Item1);
+        if (c != 0) return c;
+        c = a.Item2.CompareTo(b.Item2);
+        return c != 0 ? c : string.CompareOrdinal(a.Item3, b.Item3);
+    }
+
     private static List<Unit> MovedUnits(InventoryProject project)
     {
         var units = new List<Unit>();
         bool lotsOn = Lots.IsActive(project);
+        // Tri par numéro de lot (Lots › Trier) : chaque objet numéroté peut partir à la place de son numéro.
+        bool sorting = lotsOn && project.SortLots;
+        var objects = sorting ? Lots.ObjectLines(project).Select(o => o.Line).ToHashSet() : null;
         for (int p = 0; p < project.Pages.Count; p++)
         {
             var page = project.Pages[p];
@@ -135,7 +204,9 @@ public static class Arrangement
                     {
                         var l = lines[i];
                         bool deleted = l.Deleted;
-                        if (!deleted && !(lotsOn && Lots.HasCell(l) && Lots.IsZero(l))) continue;
+                        bool zero = lotsOn && Lots.HasCell(l) && Lots.IsZero(l);
+                        bool sort = !deleted && !zero && sorting && objects!.Contains(l);
+                        if (!deleted && !zero && !sort) continue;
                         if (found.Any(u => u.Lines.Contains(l))) continue;
                         var own = new List<PrintedLine> { l };
                         for (int j = i + 1; j < lines.Count && lines[j].Kind != LineKind.Titre && !Lots.HasCell(lines[j]) && !lines[j].Deleted; j++)
@@ -144,7 +215,7 @@ public static class Arrangement
                             if (deleted && (HasValues(lines[j]) || Analysis.LineClassifier.LooksLikeItem(lines[j].Cells.Count > 0 ? lines[j].Cells[0].Text : ""))) break;
                             own.Add(lines[j]);
                         }
-                        found.Add((deleted ? "deleted" : "zero", l, own, HasValues(l) ? null : CarriedTitle(lines, l)));
+                        found.Add((deleted ? "deleted" : zero ? "zero" : "sort", l, own, HasValues(l) ? null : CarriedTitle(lines, l)));
                     }
                     if (found.Count == 0) continue;
                     var covered = found.SelectMany(u => u.Lines).ToHashSet();
@@ -318,6 +389,7 @@ public static class Arrangement
         var all = MovedUnits(project);
         var zeros = all.Where(u => u.Kind == "zero").ToList();
         var deleted = all.Where(u => u.Kind == "deleted").ToList();
+        var slots = all.Where(u => u.Kind == "sort").ToList();
         bool endMode = project.EndLots?.Mode == "page";
         var template = endMode && zeros.Count > 0 ? EndTemplate(project) : null;
         var endIdx = project.Pages.Select((pg, k) => pg.EndLots ? k : -1).Where(k => k >= 0).ToList();
@@ -367,6 +439,10 @@ public static class Arrangement
                 dest = moving[0].Dest;
             }
         }
+        var sortMoves = new List<Unit>();
+        if (slots.Count > 0)
+            foreach (var (u, d) in SortPlaces(slots, RowsInOrder(project))) { Prepare(u, d); sortMoves.Add(u); }
+        moving = sortMoves.Concat(moving).ToList();
         var cutting = moving.Concat(deleted).ToList();
 
         var pages = new List<PagePlan>();
@@ -597,7 +673,7 @@ public static class Arrangement
             if (end != null) ys.Add(end.Value);
             ys.Sort();
             // Lots 0 recollés dans ce tableau : déplaçables avec une poignée (mode Modifier).
-            tables.Add(new ViewTable(t, t.ColumnXs, ys, strips, units.Select(pc => new UnitStrip(pc.Unit!, pc.Dst + Cut, pc.Dst + pc.H)).ToList()));
+            tables.Add(new ViewTable(t, t.ColumnXs, ys, strips, units.Where(pc => pc.Unit!.Kind == "zero").Select(pc => new UnitStrip(pc.Unit!, pc.Dst + Cut, pc.Dst + pc.H)).ToList()));
         }
         return new ViewPage(page, page.Width, pp.Height, lines, tables);
     }

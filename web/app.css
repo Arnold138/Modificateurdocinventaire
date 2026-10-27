@@ -111,7 +111,7 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 .badge { position: absolute; width: 24px; height: 24px; border-radius: 12px; color: #fff; font: bold 14px/24px system-ui, sans-serif; text-align: center; }
 .lockzone { position: absolute; background: rgba(255,140,0,.18); border: 2px dashed var(--warn); font-size: 16px; padding: 2px 4px; }
 .lockzone.rubber { border-style: solid; }
-.loupe { position: absolute; display: none; background: #fff; border: 2px solid var(--accent); border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,.22); z-index: 3; padding: 0 0 2px; overflow: hidden; }
+.loupe { position: absolute; display: none; background: #fff; border: 2px solid var(--accent); border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,.22); z-index: 3; pointer-events: none; padding: 0 0 2px; overflow: hidden; }
 .loupe canvas { display: block; }
 .loupe-label { font: 600 11px system-ui, sans-serif; color: var(--accent); padding: 2px 6px; background: var(--accent-soft); }
 

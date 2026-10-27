@@ -124,7 +124,7 @@ public static class OcrPreparation
         var text = string.Join(" ", words.Select(w => w.Text));
         var ink = words.Select(w => new RectD(origin.X + w.Box.X / scale, origin.Y + w.Box.Y / scale, w.Box.Width / scale, w.Box.Height / scale))
                        .Aggregate(RectD.Empty, (a, b) => a.Union(b));
-        field.OriginalText = field.Text = text;
+        field.OriginalText = field.Text = PageAnalyzer.FixOcrText(text);
         field.Ink = ink;
     }
 

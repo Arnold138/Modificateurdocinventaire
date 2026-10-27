@@ -57,6 +57,9 @@ const ITEM_START = /^\s*(\+\/-\s*)?\d{1,3}\s+\p{L}/u;
 function movedUnits(project) {
   const units = [];
   const lots = lotsActive(project);
+  // Tri par numéro de lot (Lots › Trier) : chaque objet numéroté peut partir à la place de son numéro.
+  const sorting = lots && !!project.SortLots;
+  const objects = sorting ? new Set([...objectLines(project)].map((o) => o.line)) : null;
   project.Pages.forEach((page, p) => page.Tables.forEach((table, ti) => {
     if (!gridTable(table)) return;
     for (const r of rowOrder(table)) {
@@ -66,7 +69,9 @@ function movedUnits(project) {
       const found = [];
       lines.forEach((l, i) => {
         const deleted = !!l.Deleted;
-        if (!deleted && !(lots && hasLotCell(l) && isZeroLot(l))) return;
+        const zero = lots && hasLotCell(l) && isZeroLot(l);
+        const sort = !deleted && !zero && sorting && objects.has(l);
+        if (!deleted && !zero && !sort) return;
         if (found.some((u) => u.lines.includes(l))) return;
         const own = [l];
         for (let j = i + 1; j < lines.length && lines[j].Kind !== 'Titre' && !hasLotCell(lines[j]) && !lines[j].Deleted; j++) {
@@ -74,7 +79,7 @@ function movedUnits(project) {
           if (deleted && (hasValues(lines[j]) || ITEM_START.test(lines[j].Cells[0]?.Text ?? ''))) break;
           own.push(lines[j]);
         }
-        found.push({ kind: deleted ? 'deleted' : 'zero', object: l, lines: own, title: hasValues(l) ? null : carriedTitle(lines, l) });
+        found.push({ kind: deleted ? 'deleted' : zero ? 'zero' : 'sort', object: l, lines: own, title: hasValues(l) ? null : carriedTitle(lines, l) });
       });
       if (found.length === 0) continue;
       const covered = new Set(found.flatMap((u) => u.lines));
@@ -99,6 +104,60 @@ function movedUnits(project) {
 
 /** Lignes supprimées (et leur suite) : hors du .txt, des totaux et des lots. */
 export const deletedLines = (project) => new Set(movedUnits(project).filter((u) => u.kind === 'deleted').flatMap((u) => u.lines));
+
+/**
+ * Clé de tri d'un numéro de lot : les nombres du plus petit au plus grand (les « 1 » ensemble, puis les « 2 »…), puis
+ * les codes en lettres groupés (« ? », « VGG »…), puis les cases vides.
+ */
+/**
+ * Tri par numéro de lot, en bougeant le moins de lignes possible : la plus longue suite déjà dans l'ordre reste en
+ * place ; chaque autre objet est recollé juste après la rangée du dernier objet resté en place qui a un numéro plus petit
+ * ou égal (avant le 1er : après la rangée qui précède). Renvoie [{ u, d }] dans l'ordre des numéros.
+ */
+function sortPlaces(units, rows) {
+  const keys = units.map((u) => lotKey(u.object.Lot));
+  const tails = [], prev = new Array(units.length).fill(-1);
+  for (let i = 0; i < units.length; i++) {
+    let lo = 0, hi = tails.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (compareKeys(keys[tails[mid]], keys[i]) <= 0) lo = mid + 1; else hi = mid; }
+    prev[i] = lo > 0 ? tails[lo - 1] : -1;
+    tails[lo] = i;
+  }
+  const stay = new Set();
+  for (let i = tails.length ? tails[tails.length - 1] : -1; i >= 0; i = prev[i]) stay.add(i);
+  const rowIndex = (u) => rows.findIndex((x) => x.p === u.p && x.ti === u.ti && x.r === u.r);
+  // Avant le 1er objet resté en place : la rangée qui le précède ; s'il n'y en a pas (1re rangée du document), il bouge aussi.
+  let first = -1;
+  for (let i = 0; i < units.length; i++) {
+    if (!stay.has(i)) continue;
+    if (rowIndex(units[i]) > 0) { first = i; break; }
+    stay.delete(i);
+  }
+  const order = units.map((u, i) => i).sort((a, b) => compareKeys(keys[a], keys[b]) || a - b);
+  const out = [];
+  for (const i of order) {
+    if (stay.has(i)) continue;
+    let anchor = -1;
+    for (const j of stay) if (compareKeys(keys[j], keys[i]) <= 0 && j > anchor) anchor = j;
+    let x;
+    if (anchor >= 0) x = units[anchor];
+    else if (first >= 0) { const row = rows[rowIndex(units[first]) - 1]; x = row; }
+    else continue; // aucun repère : la ligne reste où elle est
+    out.push({ u: units[i], d: { p: x.p, ti: x.ti, r: x.r, table: x.table, page: x.page } });
+  }
+  return out;
+}
+
+export function lotKey(lot) {
+  const t = (lot ?? '').trim();
+  if (t.length === 0) return [2, 0, ''];
+  const m = /^(\d+)/.exec(t);
+  if (m) return [0, parseInt(m[1], 10), t.slice(m[1].length).toUpperCase()];
+  return [1, 0, t.toUpperCase()];
+}
+export function compareKeys(a, b) {
+  return a[0] - b[0] || a[1] - b[1] || (a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0);
+}
 
 /** Page qui sert de modèle aux pages « lots de fin » : la dernière page à lots avant elles (sinon celle du dernier lot). */
 function endTemplate(project) {
@@ -179,6 +238,7 @@ function columnShift(src, dst, c, align) {
 export function planArrangement(project) {
   const all = movedUnits(project);
   const zeros = all.filter((u) => u.kind === 'zero'), deleted = all.filter((u) => u.kind === 'deleted');
+  const slots = all.filter((u) => u.kind === 'sort');
   const endMode = project.EndLots?.Mode === 'page';
   const template = endMode && zeros.length ? endTemplate(project) : null;
   const endIdx = project.Pages.map((pg, k) => (pg.EndLots ? k : -1)).filter((k) => k >= 0);
@@ -223,6 +283,9 @@ export function planArrangement(project) {
       dest = moving[0].dest;
     }
   }
+  const sortMoves = [];
+  for (const { u, d } of sortPlaces(slots, rowsInOrder(project))) { prepare(u, d); sortMoves.push(u); }
+  moving = [...sortMoves, ...moving];
   const cutting = [...moving, ...deleted];
   const pages = project.Pages.map((page, p) => {
     const pieces = [];
@@ -373,7 +436,7 @@ export function viewOf(project, plan, k) {
     if (end !== null) ys.push(end);
     ys.sort((a, b) => a - b);
     // Lots 0 recollés dans ce tableau : déplaçables avec une poignée (mode Modifier).
-    out.tables.push({ table: t, ColumnXs: t.ColumnXs, RowYs: ys, strips, units: units.map((pc) => ({ unit: pc.unit, top: pc.dst + CUT, bottom: pc.dst + pc.h })) });
+    out.tables.push({ table: t, ColumnXs: t.ColumnXs, RowYs: ys, strips, units: units.filter((pc) => pc.unit.kind === 'zero').map((pc) => ({ unit: pc.unit, top: pc.dst + CUT, bottom: pc.dst + pc.h })) });
   });
   return out;
 }

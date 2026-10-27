@@ -77,13 +77,20 @@ export function buildTxt(project) {
   let endAt = -1;       // page « lots de fin » (mode page dédiée) : les lots 0 y sont
   const gone = deletedLines(project);
   // Lots 0 recollés comme à l'écran : juste après la rangée où ils arrivent (fin de leur partie, ou endroit choisi).
-  const plan = lots && project.EndLots?.Mode !== 'page' ? planArrangement(project) : null;
+  const full = lots ? planArrangement(project) : null;
+  const plan = lots && project.EndLots?.Mode !== 'page' ? full : null;
   const unitOf = new Map();
   for (const u of plan?.moving ?? []) for (const l of u.lines) unitOf.set(l, u);
+  // Tri par numéro de lot : les objets déplacés s'écrivent à leur nouvelle place, dans l'ordre des numéros.
+  const sortOf = new Map();
+  for (const u of full?.moving ?? []) if (u.kind === 'sort') for (const l of u.lines) sortOf.set(l, u);
+  const sortText = new Map();
   const key = (p, ti, r) => `${p},${ti},${r}`;
   const pending = new Map();
   const pages = project.Pages.map((page, p) => page.Tables.map((table, ti) => rowOrder(table).map((r) => {
-    const entries = exportRow(table.Rows[r], lots, gone);
+    const all = exportRow(table.Rows[r], lots, gone);
+    for (const x of all) if (sortOf.has(x.line)) sortText.set(x.line, x);
+    const entries = all.filter((x) => !sortOf.has(x.line));
     let dest = null;
     for (const x of entries.filter((e) => e.zero)) {
       dest = unitOf.get(x.line)?.dest ?? dest;
@@ -92,17 +99,25 @@ export function buildTxt(project) {
     }
     return { k: key(p, ti, r), kept: entries.filter((e) => !e.zero) };
   })));
+  const sortPending = new Map();
+  for (const u of full?.moving ?? []) {
+    if (u.kind !== 'sort') continue;
+    const k = key(u.dest.p, u.dest.ti, u.dest.r);
+    if (!sortPending.has(k)) sortPending.set(k, []);
+    for (const l of u.lines) { const x = sortText.get(l); if (x) sortPending.get(k).push(x); }
+  }
   project.Pages.forEach((page, p) => {
     if (page.EndLots && project.EndLots?.Mode === 'page' && endAt < 0) endAt = output.length;
     page.Tables.forEach((table, ti) => {
       const rows = pages[p][ti];
       // Page ajoutée : un tableau encore vierge (seulement son en-tête) n'est pas exporté.
       const info = page.Added?.Tables?.[ti];
-      if (info && !rows.some((x) => x.kept.some((e) => e.line.Kind !== 'EnTete') || pending.has(x.k))) return;
+      if (info && !rows.some((x) => x.kept.some((e) => e.line.Kind !== 'EnTete') || pending.has(x.k) || sortPending.has(x.k))) return;
       const first = orderedRows(table).flatMap((r) => r.Lines).find((l) => l.Kind !== 'Ignoree');
       if (rows.some((x) => x.kept.length > 0) && first?.Kind === 'EnTete' && output.length > 0 && output[output.length - 1].length > 0) output.push('');
       for (const row of rows) {
         for (const x of row.kept) { output.push(x.text); if (x.obj) after = output.length; }
+        for (const x of sortPending.get(row.k) ?? []) { output.push(x.text); if (x.obj) after = output.length; }
         for (const t of pending.get(row.k) ?? []) output.push(t);
       }
     });

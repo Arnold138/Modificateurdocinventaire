@@ -42,9 +42,34 @@ public static class PageAnalyzer
             }
         }
 
+        CleanReading(page, align: false);
         foreach (var t in page.Tables) LineClassifier.Classify(t);
+        CleanReading(page);
         AssignIds(page);
         PageEdits.ApplyLocks(page);
+    }
+
+    /// <summary>Lecture corrigée : « I trémie » → « 1 trémie », « +1- 20 » → « +/- 20 » (le 1 et la barre / mal lus).</summary>
+    public static string FixOcrText(string t)
+    {
+        t = System.Text.RegularExpressions.Regex.Replace(t, @"(^|[\s(+,])[Il|!](?=\s+[a-zà-ÿ0-9])", m => m.Groups[1].Value + "1");
+        return System.Text.RegularExpressions.Regex.Replace(t, @"(^|\s)\+[1lI|]-(?=\s|\d)", m => m.Groups[1].Value + "+/-");
+    }
+
+    /// <summary>
+    /// Cases encore telles que lues : lecture corrigée (1 lu comme I ou l…). Désignation d'un article : écrite à gauche
+    /// (un texte retapé ne se décale plus au milieu de la case).
+    /// </summary>
+    public static void CleanReading(Page page, bool align = true)
+    {
+        foreach (var t in page.Tables)
+            foreach (var r in t.Rows)
+                foreach (var l in r.Lines)
+                    foreach (var f in l.Cells)
+                    {
+                        if (f.Text == f.OriginalText) { var x = FixOcrText(f.Text); if (x != f.Text) f.Text = f.OriginalText = x; }
+                        if (align && f.Column == 0 && l.Kind == LineKind.Article && f.Align != TextAlign.Left) f.Align = TextAlign.Left;
+                    }
     }
 
     /// <summary>Recalcule les types de ligne (après une seconde lecture), sans toucher aux choix de l'utilisateur.</summary>
@@ -61,6 +86,7 @@ public static class PageAnalyzer
     public static void Upgrade(Page page)
     {
         int n = 0;
+        CleanReading(page);
         // Page ajoutée d'une version précédente : « objet quand on y écrit » s'appelle maintenant AutoLot.
         if (page.Added != null)
             foreach (var l in page.AllLines().Where(l => l.ForceLot && l.FirstText.Length == 0)) { l.ForceLot = false; l.AutoLot = true; }

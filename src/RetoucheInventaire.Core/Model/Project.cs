@@ -281,6 +281,9 @@ public sealed class InventoryProject
     public string Name { get; set; } = "Inventaire";
     /// <summary>Numéros de lot dans une colonne tracée comme le tableau (traits prolongés), sinon numéros seuls.</summary>
     public bool LotFrame { get; set; } = true;
+
+    /// <summary>Lots › Trier par numéro : les lignes s'affichent du plus petit numéro au plus grand (codes en lettres ensemble à la fin).</summary>
+    public bool SortLots { get; set; }
     /// <summary>Lots remplis à la main : rien ne se remplit tout seul (sauf « Synchroniser automatiquement »).</summary>
     public bool LotsByHand { get; set; }
     public List<Page> Pages { get; set; } = [];

@@ -176,6 +176,7 @@ const ACTIONS = {
   shorter(t) { const { page, line } = resolve(t); line.Tall = Math.max(0, (line.Tall ?? 0) - 1); setExtra(page, line, extraOf(line)); },
   del(t) { resolve(t).line.Deleted = true; },
   addLotHere(t) { const { table, line } = resolve(t); addLotHere(project, table, line); },
+  sortLots(t, a) { project.SortLots = a.on; },
   align(t, a) { const { line } = resolve(t); if (a.v) line.LotAlign = a.v; else delete line.LotAlign; },
   frameToggle(t, a) { for (const r of a.rows) resolve(t).table.Rows[r].LotFrame = a.on; },
   restore(t) { resolve(t).line.Deleted = false; },
@@ -285,7 +286,8 @@ function choose() {
   if (r < 0.66) { const x = pick(all.filter(addedRow)); return x && ['removeAdded', x, {}]; }
   if (r < 0.69) { const x = pick(objs); return x && ['del', x, {}]; }
   if (r < 0.71) { const x = pick(targets((y) => y.line.Deleted)); return x && ['restore', x, {}]; }
-  if (r < 0.77) { const x = pick(objs); return x && ['lot', x, { v: chance(0.25) ? '0' : chance(0.2) ? '' : String(1 + Math.floor(random() * 300)) }]; }
+  if (r < 0.77) { const x = pick(objs); return x && ['lot', x, { v: chance(0.2) ? '0' : chance(0.15) ? '' : chance(0.15) ? pick(['VGG', '?', 'VGG', '12bis']) : chance(0.3) ? pick(['1', '1', '2', '3']) : String(1 + Math.floor(random() * 300)) }]; }
+  if (r < 0.775) return ['sortLots', all[0], { on: !project.SortLots }];
   if (r < 0.78) { const x = pick(all.filter((y) => !hasLotCell(y.line) && !y.table.LotsOff && y.line.Kind === 'Article')); return x && ['addLot', x, {}]; }
   if (r < 0.79) { const x = pick(all.filter((y) => !hasLotCell(y.line) && itemTable(y.table) && (y.line.Kind === 'Article' || y.line.Kind === 'Titre'))); return x && ['addLotHere', x, {}]; }
   if (r < 0.83) return ['sync', all[0], { page: chance(0.5) ? all[Math.floor(random() * all.length)].p : null }];
@@ -468,6 +470,8 @@ after();
 // Comme à l'écran : la page s'affiche (colonne des lots tracée) avant toute manipulation.
 for (const pg of pages()) if (!pg.EndLots) frames(stretch(images.get(pg.Id), pg), pg);
 
+// Tri par numéro de lot dès le départ (SORT=1) : toutes les manipulations se font sur les lignes triées.
+if (process.env.SORT) run('sortLots', targets(() => true)[0], { on: true });
 // 1) La manipulation de la vidéo (page 7, RICE COOKER) si elle est dans le document.
 const rice = process.env.NOVIDEO ? null : targets((x) => /^1 RICE COOKER/.test(firstText(x.line)))[0];
 if (rice) {

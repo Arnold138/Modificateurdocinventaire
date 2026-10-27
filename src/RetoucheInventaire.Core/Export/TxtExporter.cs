@@ -41,14 +41,21 @@ public static partial class TxtExporter
         int endAt = -1; // page « lots de fin » (mode page dédiée) : les lots 0 y sont
         var gone = Arrangement.DeletedLines(project);
         // Lots 0 recollés comme à l'écran : juste après la rangée où ils arrivent (fin de leur partie, ou endroit choisi).
-        var plan = lots && project.EndLots?.Mode != "page" ? Arrangement.Build(project) : null;
+        var full = lots ? Arrangement.Build(project) : null;
+        var plan = lots && project.EndLots?.Mode != "page" ? full : null;
         var unitOf = new Dictionary<PrintedLine, Arrangement.Unit>();
         foreach (var u in plan?.Moving ?? []) foreach (var l in u.Lines) unitOf[l] = u;
+        // Tri par numéro de lot : les objets déplacés s'écrivent à leur nouvelle place, dans l'ordre des numéros.
+        var sortOf = new Dictionary<PrintedLine, Arrangement.Unit>();
+        foreach (var u in full?.Moving ?? []) if (u.Kind == "sort") foreach (var l in u.Lines) sortOf[l] = u;
+        var sortText = new Dictionary<PrintedLine, (string Text, bool Zero, bool Object, PrintedLine Line)>();
         static string Key(int p, int ti, int r) => $"{p},{ti},{r}";
         var pending = new Dictionary<string, List<string>>();
         var pages = project.Pages.Select((page, p) => page.Tables.Select((table, ti) => Lots.RowOrder(table).Select(r =>
         {
-            var entries = ExportRow(table.Rows[r], lots, gone).ToList();
+            var all = ExportRow(table.Rows[r], lots, gone).ToList();
+            foreach (var x in all) if (sortOf.ContainsKey(x.Line)) sortText[x.Line] = x;
+            var entries = all.Where(x => !sortOf.ContainsKey(x.Line)).ToList();
             Arrangement.Destination? dest = null;
             foreach (var x in entries.Where(e => e.Zero))
             {
@@ -63,6 +70,14 @@ public static partial class TxtExporter
             }
             return (K: Key(p, ti, r), Kept: entries.Where(e => !e.Zero).ToList());
         }).ToList()).ToList()).ToList();
+        var sortPending = new Dictionary<string, List<(string Text, bool Zero, bool Object, PrintedLine Line)>>();
+        foreach (var u in full?.Moving ?? [])
+        {
+            if (u.Kind != "sort") continue;
+            var k = Key(u.Dest.P, u.Dest.Ti, u.Dest.R);
+            if (!sortPending.TryGetValue(k, out var list)) sortPending[k] = list = [];
+            foreach (var l in u.Lines) if (sortText.TryGetValue(l, out var x)) list.Add(x);
+        }
         for (int p = 0; p < project.Pages.Count; p++)
         {
             var page = project.Pages[p];
@@ -74,7 +89,7 @@ public static partial class TxtExporter
                 // Page ajoutée : un tableau encore vierge (seulement son en-tête) n'est pas exporté.
                 if (page.Added is { } added && ti < added.Tables.Count && added.Tables[ti] != null)
                 {
-                    if (!rows.Any(x => x.Kept.Any(e => e.Line.Kind != LineKind.EnTete) || pending.ContainsKey(x.K))) continue;
+                    if (!rows.Any(x => x.Kept.Any(e => e.Line.Kind != LineKind.EnTete) || pending.ContainsKey(x.K) || sortPending.ContainsKey(x.K))) continue;
                 }
                 bool startsWithHeader = Lots.OrderedRows(table).SelectMany(r => r.Lines).FirstOrDefault(l => l.Kind != LineKind.Ignoree)?.Kind == LineKind.EnTete;
                 if (rows.Any(x => x.Kept.Count > 0) && startsWithHeader && output.Count > 0 && output[^1].Length > 0)
@@ -82,6 +97,7 @@ public static partial class TxtExporter
                 foreach (var row in rows)
                 {
                     foreach (var x in row.Kept) { output.Add(x.Text); if (x.Object) after = output.Count; }
+                    if (sortPending.TryGetValue(row.K, out var sortedHere)) foreach (var x in sortedHere) { output.Add(x.Text); if (x.Object) after = output.Count; }
                     if (pending.TryGetValue(row.K, out var zeros)) output.AddRange(zeros);
                 }
             }

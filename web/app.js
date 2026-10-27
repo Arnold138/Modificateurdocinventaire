@@ -482,7 +482,7 @@ function lineChoices(f) {
   const items = [];
   const typed = caretLine(state.view, f);
   const typedRest = typed > 0 ? f.Text.replace(/\r\n?/g, '\n').split('\n').slice(typed).join(' ').trim() : '';
-  const moved = state.plan?.moving.some((u) => u.lines.includes(line));
+  const moved = state.plan?.moving.some((u) => u.kind === 'zero' && u.lines.includes(line));
   if (moved) {
     // Ligne au lot 0, affichée à la fin : la remettre, ou la supprimer.
     items.push({ act: 'back', icon: 'i-merge', label: 'Remettre à sa place', hint: 'La ligne retourne où elle était (case de lot vide : tapez son numéro).' });
@@ -709,7 +709,7 @@ async function lineAction(item, f) {
 
 /** Où est maintenant la ligne : « page 9 « Lots de fin », 3e ligne » ou « page 7, après « 1 gazelle… » ». */
 function placeOf(line) {
-  const u = state.plan.moving.find((x) => x.lines.includes(line));
+  const u = state.plan.moving.find((x) => x.kind === 'zero' && x.lines.includes(line));
   if (!u) return null;
   const k = u.endPage ?? u.dest.p;
   const onPage = state.plan.pages[k].pieces.filter((pc) => pc.kind === 'unit');
@@ -1474,7 +1474,7 @@ async function renderPages(only = null) {
 }
 
 /** Phrase sur les lots 0 recollés (pour les messages d'export). */
-const zeroNote = (plan) => (plan.moving.length > 0 ? ` ${plan.moving.length} lot(s) 0 placé(s) à la fin (page ${(plan.moving[0].endPage ?? plan.dest.p) + 1}).` : '');
+const zeroNote = (plan) => { const z = plan.moving.filter((u) => u.kind === 'zero'); return z.length > 0 ? ` ${z.length} lot(s) 0 placé(s) à la fin (page ${(z[0].endPage ?? plan.dest.p) + 1}).` : ''; };
 
 /** Export PDF : tout le document (ou la page affichée) en un fichier, une page PDF par page. */
 async function exportPdf(only = null) {
@@ -1602,6 +1602,7 @@ async function lotsDialog() {
     <label>Renuméroter à partir de <input id="lotStart" type="number" inputmode="numeric" min="0" value="${/^\d+$/.test(first) ? first : 1}"></label>`;
   const shown = dialog('Numéros de lot', html, [
     { label: 'Synchroniser…', value: 'sync', className: 'accent' },
+    { label: state.project.SortLots ? 'Remettre dans l\'ordre du document' : 'Trier par numéro de lot', value: 'sort' },
     { label: 'Pages et tableaux…', value: 'pages' },
     { label: 'Lots de fin (lot 0)…', value: 'end' },
     { label: 'Comment ça marche ?', value: 'help' },
@@ -1619,6 +1620,17 @@ async function lotsDialog() {
   };
   const choice = await shown;
   if (choice === 'help') return lotsHelp();
+  if (choice === 'sort') {
+    pushUndo();
+    state.project.SortLots = !state.project.SortLots;
+    replan(); recomputeAll();
+    await refreshView();
+    const moved = state.plan.moving.filter((u) => u.kind === 'sort').length;
+    status(state.project.SortLots
+      ? `Lignes triées par numéro de lot (du plus petit au plus grand, les mêmes numéros ensemble, les codes en lettres comme VGG à la fin) : ${moved} ligne(s) déplacée(s). Lots › Remettre dans l'ordre du document pour revenir.`
+      : 'Lignes remises dans l\'ordre du document.');
+    return scheduleSave();
+  }
   if (choice === 'end') {
     const end = await chooseEndPlace(null, true);
     if (!end) return frameChanged && refreshView();

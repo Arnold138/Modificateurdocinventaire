@@ -55,11 +55,11 @@ public sealed class PageView
     private readonly Canvas _zoneLayer = new();
     private double _uiScale = 1;
     private readonly Canvas _gutter = new() { Width = GutterWidth };
-    private readonly Rectangle _focusFrame = new() { Stroke = Accent, StrokeThickness = 2, Visibility = Visibility.Collapsed };
+    private readonly Rectangle _focusFrame = new() { Stroke = Accent, StrokeThickness = 2, Visibility = Visibility.Collapsed, IsHitTestVisible = false };
     private readonly Rectangle _rubber = new() { Stroke = LockStroke, StrokeThickness = 2, Fill = LockFill, Visibility = Visibility.Collapsed };
     private readonly Rectangle _dropLine = new() { Height = 4, Fill = Accent, RadiusX = 2, RadiusY = 2, Visibility = Visibility.Collapsed };
     private readonly Rectangle _ghost = new() { Stroke = Accent, StrokeThickness = 2, Fill = new SolidColorBrush(ColorHelper.FromArgb(26, 10, 102, 194)), Visibility = Visibility.Collapsed };
-    private readonly Border _loupe = new() { BorderBrush = Accent, BorderThickness = new Thickness(2), Background = Paper, Visibility = Visibility.Collapsed };
+    private readonly Border _loupe = new() { BorderBrush = Accent, BorderThickness = new Thickness(2), Background = Paper, Visibility = Visibility.Collapsed, IsHitTestVisible = false }; // la loupe ne bloque jamais le clic sur la ligne en dessous
     private readonly Dictionary<Field, TextBox> _boxes = [];
     private readonly Dictionary<Field, TextBlock> _colorTexts = [];
     private readonly Dictionary<Field, Brush> _paper = [];
