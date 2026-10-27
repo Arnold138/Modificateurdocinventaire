@@ -617,6 +617,8 @@ public static class Arrangement
         public List<ViewCell> Cells { get; init; } = [];
         public int Dy { get; init; }
         public bool Moved { get; init; }
+        /// <summary>Ligne déplacée : son morceau de page (null pour une ligne restée à sa place).</summary>
+        public Unit? Unit { get; init; }
         public bool CarriedOnly { get; init; }
         public RectD? LotBox { get; init; }
     }
@@ -691,7 +693,7 @@ public static class Arrangement
                 }
                 lines.Add(new ViewLine
                 {
-                    Line = line, Page = u.Page, Table = u.Table, Dy = dy, Moved = true, LotBox = lotBox,
+                    Line = line, Page = u.Page, Table = u.Table, Dy = dy, Moved = true, Unit = u, LotBox = lotBox,
                     Cells = line.Cells.Select(f => Place(f, ShiftOf(f.Column), dy, ClipCol(f.Column))).ToList(),
                 });
             }
@@ -701,7 +703,7 @@ public static class Arrangement
                 int dyc = dy + CenterY(u.Object, u.Object.Cells[0]) - CenterY(u.Title, reference);
                 lines.Add(new ViewLine
                 {
-                    Line = u.Title, Page = u.Page, Table = u.Table, Dy = dyc, Moved = true, CarriedOnly = true,
+                    Line = u.Title, Page = u.Page, Table = u.Table, Dy = dyc, Moved = true, Unit = u, CarriedOnly = true,
                     Cells = u.Title.Cells.Where(c => carried.TryGetValue(c, out var cu) && cu == u).Select(f => Place(f, ShiftOf(f.Column), dyc, ClipCol(f.Column))).ToList(),
                 });
             }
