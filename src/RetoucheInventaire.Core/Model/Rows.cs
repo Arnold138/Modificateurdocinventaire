@@ -416,7 +416,7 @@ public static class Rows
     {
         if (Locate(page, line) is not { } at) return [];
         var ids = at.Row.Lines.Select(l => l.Cells.FirstOrDefault()?.Id).ToHashSet();
-        return page.Inserts.Where(b => b.Kind == "Trim" && b.Line != null && ids.Contains(b.Line)).ToList();
+        return page.Inserts.Where(b => (b.Kind == "Trim" || b.Kind == "Space") && b.Line != null && ids.Contains(b.Line)).ToList();
     }
 
     /// <summary>« Remettre la hauteur d'origine » : l'espace enlevé revient.</summary>
@@ -426,5 +426,136 @@ public static class Rows
         foreach (var b in bands) PageLayout.RemoveBand(page, b);
         if (bands.Count > 0) RowBounds(Locate(page, line)!.Table);
         return bands.Count > 0;
+    }
+
+    // ---------- Écarts : espace vide au-dessus, entre et en dessous des lignes d'une rangée (réglable à la souris) ----------
+
+    private static string GapKey(PrintedLine? a, PrintedLine? b) => $"{a?.Cells.FirstOrDefault()?.Id ?? "^"}>{b?.Cells.FirstOrDefault()?.Id ?? "$"}";
+
+    /// <summary>Écart d'une rangée : Kind « top », « mid » ou « bottom » ; Line : la ligne sous l'écart (au-dessus pour l'écart du bas).</summary>
+    public sealed record Gap(string Key, string Kind, int Y0, int H, int Min, int Normal, PrintedLine Line);
+
+    /// <summary>Rangée dont on peut régler les écarts (mêmes limites que « Réduire la rangée »).</summary>
+    private static Location? GapRow(Page page, PrintedLine? line)
+    {
+        if (line is null || line.OutsideTable || page.Added != null || Locate(page, line) is not { } at) return null;
+        if (at.R + 1 >= at.Table.RowYs.Count) return null;
+        if (BandOf(page, at.Row)?.Kind == "Copy" || at.Row.Lines.Any(l => l.Deleted || l.Extra > 0)) return null;
+        if (at.Row.Lines.Any(l => l.Cells.Any(c => c.IsModified && (c.Text.Contains('\n') || c.Text.Contains('\r'))))) return null;
+        return at;
+    }
+
+    /// <summary>Écarts de la rangée de la ligne, de haut en bas.</summary>
+    public static List<Gap> RowGaps(Page page, PrintedLine line)
+    {
+        var output = new List<Gap>();
+        if (GapRow(page, line) is not { } at) return output;
+        var (t, r, _, row) = at;
+        var items = row.Lines.Select(l => (L: l, B: ContentOf(l))).Where(x => x.B != null).Select(x => (x.L, B: x.B!.Value)).ToList();
+        if (items.Count == 0) return output;
+        items = items.Select((x, k) => (x, k)).OrderBy(p => p.x.B.Y).ThenBy(p => p.k).Select(p => p.x).ToList();
+        // Lignes qui se chevauchent : un seul bloc d'écriture.
+        var groups = new List<(int Top, int Bottom, PrintedLine First, PrintedLine Last)>();
+        foreach (var (l, b) in items)
+        {
+            int top = (int)Math.Floor(b.Y), bottom = (int)Math.Ceiling(b.Bottom);
+            if (groups.Count > 0 && top <= groups[^1].Bottom) { var g = groups[^1]; groups[^1] = (g.Top, Math.Max(g.Bottom, bottom), g.First, l); }
+            else groups.Add((top, bottom, l, l));
+        }
+        var pads = NormalPads(t);
+        int mid = Math.Max(6, (int)Math.Floor((pads?.Height ?? 16) * 0.4 + 0.5));
+        int y0 = Arrangement.CutY(t.RowYs[r]) + Arrangement.Filet, y1 = Arrangement.CutY(t.RowYs[r + 1]);
+        void Push(string kind, PrintedLine? a, PrintedLine? b, int y, int z, PrintedLine l)
+        {
+            if (z - y > 0) output.Add(new Gap(GapKey(a, b), kind, y, z - y, kind == "mid" ? 4 : 3, kind == "top" ? pads?.Top ?? 6 : kind == "bottom" ? pads?.Bottom ?? 6 : mid, l));
+        }
+        Push("top", null, groups[0].First, y0, groups[0].Top, groups[0].First);
+        for (int k = 0; k + 1 < groups.Count; k++) Push("mid", groups[k].Last, groups[k + 1].First, groups[k].Bottom, groups[k + 1].Top, groups[k + 1].First);
+        var last = groups[^1];
+        Push("bottom", last.Last, null, last.Bottom, y1, last.Last);
+        return output;
+    }
+
+    private static List<InsertedBand> GapBands(Page page, string key) => page.Inserts.Where(b => b.Gap == key).ToList();
+
+    /// <summary>
+    /// Règle un écart à <paramref name="want"/> pixels : l'espace vide imprimé est enlevé (milieu de l'écart) ou un interligne
+    /// propre est ajouté (filets verticaux prolongés) ; ce qui suit remonte ou descend. Vrai si la page a changé.
+    /// </summary>
+    public static bool SetGap(Page page, PrintedLine line, string key, double want)
+    {
+        if (GapRow(page, line) is not { } at) return false;
+        string? rowId = at.Row.Lines.FirstOrDefault()?.Cells.FirstOrDefault()?.Id;
+        var old = GapBands(page, key).OrderByDescending(b => b.At).ToList();
+        foreach (var b in old) PageLayout.RemoveBand(page, b);
+        var g = RowGaps(page, line).FirstOrDefault(x => x.Key == key);
+        bool changed = old.Count > 0;
+        if (g != null)
+        {
+            int w = Math.Max(g.Min, Math.Min((int)Math.Floor(want + 0.5), g.H + 400));
+            int delta = w - g.H;
+            if (delta < 0)
+            {
+                // Au milieu de l'écart ; sinon au plus près du milieu, là où l'image d'origine est d'un seul tenant (rangée déjà réduite).
+                int cut = -delta, c = g.Y0 + (g.H - cut) / 2;
+                int? y = null;
+                for (int d = 0; y is null && d <= g.H - cut; d++)
+                    foreach (int p in d == 0 ? new[] { c } : new[] { c - d, c + d })
+                        if (y is null && p >= g.Y0 && p + cut <= g.Y0 + g.H && Contiguous(page, p, cut)) y = p;
+                if (y is int yy) { PageLayout.CutBand(page, yy, cut, rowId).Gap = key; changed = true; }
+            }
+            else if (delta > 0)
+            {
+                var t = at.Table;
+                int y = g.Y0 + g.H / 2;
+                bool whole = Contiguous(page, g.Y0, g.H);
+                if ((whole ? PageLayout.ToBase(page, g.Y0) : PageLayout.ToBase(page, y)) is int src)
+                {
+                    var cols = t.ColumnXs.Select(x => (int)Math.Floor(x + 0.5)).ToList();
+                    int x0 = (int)Math.Floor(t.ColumnXs[0]) - 4, x1 = (int)Math.Ceiling(t.ColumnXs[^1]) + 4;
+                    var band = PageLayout.InsertBand(page, y, [new BandPart { Src = src, Height = delta, Gap = true, Span = whole ? g.H : 1, Cols = cols, X0 = x0, X1 = x1 }], "Space");
+                    band.Line = rowId; band.Gap = key;
+                    changed = true;
+                }
+            }
+        }
+        if (changed) RowBounds(at.Table);
+        return changed;
+    }
+
+    /// <summary>« Réduire les espaces vides » possible : espace en trop au-dessus / en dessous, ou grand écart entre deux lignes.</summary>
+    public static bool CanCompact(Page page, PrintedLine line) => RowTrimOf(page, line) != null || RowGaps(page, line).Any(g => g.Kind == "mid" && g.H > g.Normal + 2);
+
+    /// <summary>Écarts réglés à la main dans la rangée de la ligne.</summary>
+    public static bool GapsChanged(Page page, PrintedLine line) => RowGaps(page, line).Any(g => GapBands(page, g.Key).Count > 0);
+
+    /// <summary>
+    /// « Réduire la rangée » complet : espace vide en trop au-dessus et en dessous (comme TrimRow), et grands écarts entre les
+    /// lignes ramenés à un interligne normal. Vrai si la rangée a changé.
+    /// </summary>
+    public static bool CompactRow(Page page, PrintedLine line)
+    {
+        bool changed = TrimRow(page, line);
+        foreach (var g in RowGaps(page, line)) if (g.Kind == "mid" && g.H > g.Normal + 2) changed = SetGap(page, g.Line, g.Key, g.Normal) || changed;
+        return changed;
+    }
+
+    /// <summary>
+    /// Lignes rangées par numéro ou déplacées : leurs grands espaces vides imprimés sont réduits une fois (Row.AutoCompact),
+    /// le client peut ensuite les remettre (« Remettre la hauteur d'origine ») ou les régler à la souris. Vrai si une page a changé.
+    /// </summary>
+    public static bool AutoCompactMoved(Arrangement.Plan plan)
+    {
+        bool changed = false;
+        foreach (var u in plan.Moving)
+        {
+            if (u.Kind is not ("sort" or "move")) continue;
+            if (u.R >= u.Table.Rows.Count) continue;
+            var row = u.Table.Rows[u.R];
+            if (row.AutoCompact) continue;
+            row.AutoCompact = true;
+            changed = CompactRow(u.Page, u.Object) || changed;
+        }
+        return changed;
     }
 }

@@ -382,7 +382,7 @@ export function trimsOf(page, line) {
   const at = line ? locate(page, line) : null;
   if (!at) return [];
   const ids = new Set(at.row.Lines.map((l) => l.Cells[0]?.Id));
-  return insertsOf(page).filter((b) => b.Kind === 'Trim' && b.Line && ids.has(b.Line));
+  return insertsOf(page).filter((b) => (b.Kind === 'Trim' || b.Kind === 'Space') && b.Line && ids.has(b.Line));
 }
 
 /** « Remettre la hauteur d'origine » : l'espace enlevé revient (les cases reprennent la place qu'il leur faut). */
@@ -391,4 +391,119 @@ export function untrimRow(page, line) {
   for (const b of bands) removeBand(page, b);
   if (bands.length) rowBounds(locate(page, line).table);
   return bands.length > 0;
+}
+
+// ---------- Écarts : espace vide au-dessus, entre et en dessous des lignes d'une rangée (réglable à la souris) ----------
+
+const gapKey = (a, b) => `${a?.Cells[0]?.Id ?? '^'}>${b?.Cells[0]?.Id ?? '$'}`;
+
+/** Rangée dont on peut régler les écarts (mêmes limites que « Réduire la rangée ») : sa position, ou null. */
+function gapRow(page, line) {
+  const at = line && !line.OutsideTable && !page.Added ? locate(page, line) : null;
+  if (!at || at.r + 1 >= at.table.RowYs.length) return null;
+  if (bandOf(page, at.row)?.Kind === 'Copy' || at.row.Lines.some((l) => l.Deleted || (l.Extra ?? 0) > 0)) return null;
+  if (at.row.Lines.some((l) => l.Cells.some((c) => isModified(c) && c.Text.includes('\n')))) return null;
+  return at;
+}
+
+/**
+ * Écarts de la rangée de la ligne, de haut en bas : { key, kind ('top' | 'mid' | 'bottom'), y0, h, min, normal, line }.
+ * `line` : la ligne sous l'écart (au-dessus pour l'écart du bas) — c'est elle qu'on passe à setGap.
+ */
+export function rowGaps(page, line) {
+  const at = gapRow(page, line);
+  if (!at) return [];
+  const { table: t, r, row } = at;
+  const items = row.Lines.map((l) => ({ l, b: contentOf(l) })).filter((x) => x.b).sort((a, b) => a.b.Y - b.b.Y);
+  if (!items.length) return [];
+  // Lignes qui se chevauchent : un seul bloc d'écriture.
+  const groups = [];
+  for (const { l, b } of items) {
+    const g = groups[groups.length - 1];
+    const top = Math.floor(b.Y), bottom = Math.ceil(Rect.bottom(b));
+    if (g && top <= g.bottom) { g.bottom = Math.max(g.bottom, bottom); g.last = l; } else groups.push({ top, bottom, first: l, last: l });
+  }
+  const pads = normalPads(t);
+  const mid = Math.max(6, Math.floor((pads ? pads.height : 16) * 0.4 + 0.5));
+  const y0 = cutY(t.RowYs[r]) + FILET, y1 = cutY(t.RowYs[r + 1]);
+  const out = [];
+  const push = (kind, a, b, y, z, l) => { if (z - y > 0) out.push({ key: gapKey(a, b), kind, y0: y, h: z - y, min: kind === 'mid' ? 4 : 3, normal: kind === 'top' ? (pads?.top ?? 6) : kind === 'bottom' ? (pads?.bottom ?? 6) : mid, line: l }); };
+  push('top', null, groups[0].first, y0, groups[0].top, groups[0].first);
+  for (let k = 0; k + 1 < groups.length; k++) push('mid', groups[k].last, groups[k + 1].first, groups[k].bottom, groups[k + 1].top, groups[k + 1].first);
+  const last = groups[groups.length - 1];
+  push('bottom', last.last, null, last.bottom, y1, last.last);
+  return out;
+}
+
+/** Hauteur réglée à la main sur cet écart (bandes « Trim » / « Space » marquées), en plus ou en moins. */
+const gapBands = (page, key) => insertsOf(page).filter((b) => b.Gap === key);
+
+/**
+ * Règle un écart à `want` pixels : l'espace vide imprimé est enlevé (milieu de l'écart) ou un interligne propre est ajouté
+ * (filets verticaux prolongés) ; ce qui suit remonte ou descend. Vrai si la page a changé.
+ */
+export function setGap(page, line, key, want) {
+  const at = gapRow(page, line);
+  if (!at) return false;
+  const rowId = at.row.Lines[0]?.Cells[0]?.Id ?? null;
+  const old = gapBands(page, key).sort((a, b) => b.At - a.At);
+  for (const b of old) removeBand(page, b);
+  const g = rowGaps(page, line).find((x) => x.key === key);
+  let changed = old.length > 0;
+  if (g) {
+    want = Math.max(g.min, Math.min(Math.floor(want + 0.5), g.h + 400));
+    const delta = want - g.h;
+    if (delta < 0) {
+      // Au milieu de l'écart ; sinon au plus près du milieu, là où l'image d'origine est d'un seul tenant (rangée déjà réduite).
+      const cut = -delta, c = g.y0 + Math.floor((g.h - cut) / 2);
+      let y = null;
+      for (let d = 0; y === null && d <= g.h - cut; d++)
+        for (const p of d === 0 ? [c] : [c - d, c + d]) if (y === null && p >= g.y0 && p + cut <= g.y0 + g.h && contiguous(page, p, cut)) y = p;
+      if (y !== null) { cutBand(page, y, cut, rowId).Gap = key; changed = true; }
+    } else if (delta > 0) {
+      const t = at.table, y = g.y0 + Math.floor(g.h / 2);
+      const whole = contiguous(page, g.y0, g.h);
+      const src = whole ? toBase(page, g.y0) : toBase(page, y);
+      if (src !== null) {
+        const cols = t.ColumnXs.map((x) => Math.floor(x + 0.5)), x0 = Math.floor(t.ColumnXs[0]) - 4, x1 = Math.ceil(t.ColumnXs[t.ColumnXs.length - 1]) + 4;
+        const band = insertBand(page, y, [{ Src: src, Height: delta, Gap: true, Span: whole ? g.h : 1, Cols: cols, X0: x0, X1: x1 }], 'Space');
+        band.Line = rowId; band.Gap = key;
+        changed = true;
+      }
+    }
+  }
+  if (changed) rowBounds(at.table);
+  return changed;
+}
+
+/** « Réduire les espaces vides » possible : espace en trop au-dessus / en dessous, ou grand écart entre deux lignes. */
+export const canCompact = (page, line) => !!rowTrimOf(page, line) || rowGaps(page, line).some((g) => g.kind === 'mid' && g.h > g.normal + 2);
+
+/** Écarts réglés à la main dans la rangée de la ligne. */
+export const gapsChanged = (page, line) => rowGaps(page, line).some((g) => gapBands(page, g.key).length > 0);
+
+/**
+ * « Réduire la rangée » complet : espace vide en trop au-dessus et en dessous (comme trimRow), et grands écarts entre les
+ * lignes ramenés à un interligne normal. Vrai si la rangée a changé.
+ */
+export function compactRow(page, line) {
+  let changed = trimRow(page, line);
+  for (const g of rowGaps(page, line)) if (g.kind === 'mid' && g.h > g.normal + 2) changed = setGap(page, g.line, g.key, g.normal) || changed;
+  return changed;
+}
+
+/**
+ * Lignes rangées par numéro ou déplacées : leurs grands espaces vides imprimés sont réduits une fois (Row.AutoCompact),
+ * le client peut ensuite les remettre (« Remettre la hauteur d'origine ») ou les régler à la souris. Vrai si une page a changé.
+ */
+export function autoCompactMoved(plan) {
+  let changed = false;
+  for (const u of plan.moving) {
+    if (u.kind !== 'sort' && u.kind !== 'move') continue;
+    const row = u.table.Rows[u.r];
+    if (!row || row.AutoCompact) continue;
+    row.AutoCompact = true;
+    changed = compactRow(u.page, u.object) || changed;
+  }
+  return changed;
 }

@@ -295,13 +295,38 @@ export function numberBox(table, line, width) {
   const right = tableLeft(table), left = Math.max(0, right - width);
   const h = Math.max(8, b.Height);
   let cy = Rect.cy(b);
-  const r = line.LotAlign === 'Middle' || line.LotAlign === 'Bottom' ? table.Rows.findIndex((x) => x.Lines.includes(line)) : -1;
+  const free = Number.isInteger(line.LotPos);
+  const r = free || line.LotAlign === 'Middle' || line.LotAlign === 'Bottom' ? table.Rows.findIndex((x) => x.Lines.includes(line)) : -1;
   if (r >= 0 && r + 1 < table.RowYs.length) {
     const s = lotSegment(table, r, line);
-    cy = line.LotAlign === 'Middle' ? (s.top + s.bottom) / 2 : s.bottom - (cy - s.top);
+    // Glissé à la souris : LotPos de 0 (en haut de la case) à 100 (en bas).
+    if (free) cy = s.top + h / 2 + Math.max(0, s.bottom - s.top - h) * Math.min(100, Math.max(0, line.LotPos)) / 100;
+    else cy = line.LotAlign === 'Middle' ? (s.top + s.bottom) / 2 : s.bottom - (cy - s.top);
     if (s.bottom - s.top >= h) cy = Math.min(s.bottom - h / 2, Math.max(s.top + h / 2, cy));
   }
   return Rect.make(left + 2, cy - h / 2, Math.max(4, right - left - 4), h);
+}
+
+/**
+ * Case de lot d'une ligne à l'écran (entrée de viewOf) : [top, bottom] de sa case (toute la grande case, ou sa petite case),
+ * pour y glisser le numéro et y faire un clic droit. Null sans case.
+ */
+export function lotZone(entry) {
+  if (!entry.lotBox) return null;
+  const t = entry.table, r = t.Rows.findIndex((x) => x.Lines.includes(entry.line));
+  if (r < 0 || r + 1 >= t.RowYs.length) return { top: entry.lotBox.Y, bottom: entry.lotBox.Y + entry.lotBox.Height };
+  const s = lotSegment(t, r, entry.line);
+  return { top: Math.min(s.top + entry.dy, entry.lotBox.Y), bottom: Math.max(s.bottom + entry.dy, entry.lotBox.Y + entry.lotBox.Height) };
+}
+
+/** Position glissée (centre du numéro à l'ordonnée `cy`, page) → LotPos 0…100 dans la case de la ligne. */
+export function lotPosAt(table, line, cy) {
+  const r = table.Rows.findIndex((x) => x.Lines.includes(line));
+  if (r < 0 || r + 1 >= table.RowYs.length) return null;
+  const s = lotSegment(table, r, line), lb = lineBounds(line);
+  const h = Math.max(8, lb.Height - (line.Extra ?? 0)), room = s.bottom - s.top - h;
+  if (room <= 0) return null;
+  return Math.max(0, Math.min(100, Math.floor(((cy - s.top - h / 2) / room) * 100 + 0.5)));
 }
 
 export function lotLabels(page) {

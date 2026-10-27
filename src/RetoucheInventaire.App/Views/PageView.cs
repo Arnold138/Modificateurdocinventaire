@@ -1,6 +1,7 @@
 using Microsoft.UI;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
@@ -53,6 +54,8 @@ public sealed class PageView
     private readonly Canvas _addedLayer = new();
     /// <summary>Colonne des lots vide, à la hauteur d'une ligne : cliquer ajoute la case (et on tape le numéro).</summary>
     private readonly Canvas _zoneLayer = new();
+    /// <summary>Mode Modifier : poignées ↕ des espaces vides (au-dessus de tout le reste).</summary>
+    private readonly Canvas _gapLayer = new();
     private double _uiScale = 1;
     private readonly Canvas _gutter = new() { Width = GutterWidth };
     private readonly Rectangle _focusFrame = new() { Stroke = Accent, StrokeThickness = 2, Visibility = Visibility.Collapsed, IsHitTestVisible = false };
@@ -103,6 +106,10 @@ public sealed class PageView
     public event Action<PageView, Table, PrintedLine, int?>? LineMoved;
     /// <summary>Poignée d'un lot 0 recollé lâchée : (tableau, lot 0, rangée avant laquelle le poser ou null : à la fin du tableau).</summary>
     public event Action<PageView, Table, Arrangement.Unit, int?>? UnitMoved;
+    /// <summary>Numéro de lot glissé dans sa case : centre du numéro à l'ordonnée (page) donnée.</summary>
+    public event Action<PageView, PrintedLine, Table, double>? LotPosChanged;
+    /// <summary>Poignée ↕ (Modifier) : écart de la rangée (page, ligne, repère) réglé à la hauteur donnée.</summary>
+    public event Action<PageView, ModelPage, PrintedLine, string, int>? GapChanged;
     /// <summary>Page ajoutée : « + » au-dessus de la colonne c (la couper en deux).</summary>
     public event Action<PageView, Table, int>? ColumnAdded;
     /// <summary>Page ajoutée : « − » sous le trait k (réunir les colonnes k−1 et k).</summary>
@@ -165,6 +172,7 @@ public sealed class PageView
         Root.Children.Add(_overlayLayer);
         Root.Children.Add(_addedLayer);
         Root.Children.Add(_inputLayer);
+        Root.Children.Add(_gapLayer);
 
         _textMenu.Opening += OnTextMenuOpening;
         _inputLayer.PointerPressed += OnLockPressed;
@@ -423,7 +431,7 @@ public sealed class PageView
     }
 
     /// <summary>Menu de la ligne (mêmes actions que le clic droit) sous le bouton « + ».</summary>
-    private void ShowLineCommands(Field f, FrameworkElement anchor)
+    private void ShowLineCommands(Field f, FrameworkElement anchor, Point? at = null)
     {
         if (LineCommands is null) return;
         var menu = new MenuFlyout();
@@ -435,7 +443,11 @@ public sealed class PageView
             item.Click += (_, _) => c.Run();
             menu.Items.Add(item);
         }
-        if (menu.Items.Count > 0) menu.ShowAt(anchor);
+        if (menu.Items.Count > 0)
+        {
+            if (at is Point p) menu.ShowAt(anchor, new Microsoft.UI.Xaml.Controls.Primitives.FlyoutShowOptions { Position = p });
+            else menu.ShowAt(anchor);
+        }
     }
 
     /// <summary>Textes changés ailleurs (totaux recalculés) : les cases affichées suivent.</summary>
@@ -493,13 +505,14 @@ public sealed class PageView
         _lotLayer.Children.Clear();
         _lotBoxes.Clear();
         foreach (var entry in _view.Lines)
-            if (entry.LotBox is RectD box) AddLotBox(entry.Line, box);
+            if (entry.LotBox is RectD box) AddLotBox(entry, box);
         if (focused != null && _lotBoxes.TryGetValue(focused, out var again)) again.Focus(FocusState.Programmatic);
         RefreshGutter();
     }
 
-    private void AddLotBox(PrintedLine line, RectD box)
+    private void AddLotBox(Arrangement.ViewLine entry, RectD box)
     {
+        var line = entry.Line;
         var tb = new TextBox
         {
             Style = (Style)Application.Current.Resources["FieldBox"],
@@ -513,6 +526,8 @@ public sealed class PageView
         var scope = new InputScope();
         scope.Names.Add(new InputScopeName(InputScopeNameValue.Number));
         tb.InputScope = scope;
+        AutomationProperties.SetName(tb, "Numéro de lot");
+        AutomationProperties.SetAutomationId(tb, "lot-" + (line.Cells.FirstOrDefault()?.Id ?? ""));
         Canvas.SetLeft(tb, box.X);
         Canvas.SetTop(tb, box.Y);
         LayoutLot(tb, line, box);
@@ -529,10 +544,80 @@ public sealed class PageView
             e.Handled = true;
             Commit();
         };
-        // Clic droit sur la case : place du numéro (haut, milieu, bas) ou retirer la case.
+        // Clic droit sur la case : place du numéro (haut, milieu, bas) ou retirer la case (pas le menu copier / coller du texte).
+        tb.ContextFlyout = null;
         tb.ContextRequested += (_, e) => { e.Handled = true; if (line.Cells.Count > 0) ShowLineCommands(line.Cells[0], tb); };
         _lotBoxes[line] = tb;
+        // Toute la case de lot (même au-dessus ou en dessous du numéro) : clic droit, et le numéro se glisse à la souris.
+        if (Lots.LotZone(entry) is { } zone)
+        {
+            var area = new Border
+            {
+                Width = Math.Max(1, box.Width), Height = Math.Max(1, zone.Bottom - zone.Top),
+                Background = new SolidColorBrush(Colors.Transparent), CornerRadius = new CornerRadius(3),
+                BorderBrush = Accent, BorderThickness = new Thickness(0),
+            };
+            ToolTipService.SetToolTip(area, "Glisser le numéro vers le haut ou le bas pour le placer dans sa case ; clic droit : plus de choix");
+            AutomationProperties.SetName(area, "Case du lot");
+            AutomationProperties.SetAutomationId(area, "case-" + (line.Cells.FirstOrDefault()?.Id ?? ""));
+            Canvas.SetLeft(area, box.X);
+            Canvas.SetTop(area, zone.Top);
+            area.PointerEntered += (_, _) => { area.Background = new SolidColorBrush(ColorHelper.FromArgb(16, 0, 103, 192)); area.BorderThickness = new Thickness(1); };
+            area.PointerExited += (_, _) => { area.Background = new SolidColorBrush(Colors.Transparent); area.BorderThickness = new Thickness(0); };
+            area.RightTapped += (_, e) => { e.Handled = true; if (line.Cells.Count > 0) ShowLineCommands(line.Cells[0], area, e.GetPosition(area)); };
+            _lotLayer.Children.Add(area);
+            LotDrag(area, tb, entry, zone, true);
+            LotDrag(tb, tb, entry, zone, false);
+        }
         _lotLayer.Children.Add(tb);
+    }
+
+    /// <summary>Glisser le numéro de lot dans sa case (vers le haut ou le bas) ; un simple clic dans la case met le curseur dedans.</summary>
+    private void LotDrag(UIElement target, TextBox tb, Arrangement.ViewLine entry, (double Top, double Bottom) zone, bool isZone)
+    {
+        bool pressed = false, dragging = false;
+        double y0 = 0, top0 = 0;
+        double h = entry.LotBox!.Value.Height;
+        target.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, e) =>
+        {
+            var pt = e.GetCurrentPoint(Root);
+            if (!pt.Properties.IsLeftButtonPressed) return;
+            pressed = true; dragging = false;
+            y0 = pt.Position.Y;
+            top0 = Canvas.GetTop(tb);
+            if (isZone) { target.CapturePointer(e.Pointer); e.Handled = true; }
+        }), true);
+        target.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler((_, e) =>
+        {
+            if (!pressed) return;
+            double dy = e.GetCurrentPoint(Root).Position.Y - y0;
+            if (!dragging && Math.Abs(dy) < 6) return;
+            if (!dragging)
+            {
+                dragging = true;
+                if (!isZone) target.CapturePointer(e.Pointer);
+                tb.BorderBrush = Accent;
+                tb.BorderThickness = new Thickness(2);
+            }
+            Canvas.SetTop(tb, Math.Min(zone.Bottom - h, Math.Max(zone.Top, top0 + dy)));
+            e.Handled = true;
+        }), true);
+        void End(bool ok)
+        {
+            if (!pressed) return;
+            pressed = false;
+            if (dragging)
+            {
+                dragging = false;
+                tb.BorderThickness = new Thickness(0);
+                if (ok) LotPosChanged?.Invoke(this, entry.Line, entry.Table, Canvas.GetTop(tb) + h / 2 - entry.Dy);
+                else Canvas.SetTop(tb, top0);
+            }
+            else if (ok && isZone) tb.Focus(FocusState.Pointer);
+        }
+        target.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler((_, e) => { bool was = pressed; End(true); if (was) target.ReleasePointerCapture(e.Pointer); }), true);
+        target.PointerCanceled += (_, _) => End(false);
+        target.PointerCaptureLost += (_, _) => { if (dragging) End(true); else pressed = false; };
     }
 
     /// <summary>Taille du numéro : celle du texte de l'objet, réduite si la colonne est étroite ; à la hauteur de la ligne.</summary>
@@ -674,8 +759,71 @@ public sealed class PageView
 
     // ---------- Déplacer une rangée (poignée ⋮⋮ juste à gauche de la poubelle) ----------
 
+    /// <summary>Mode Modifier : une poignée ↕ sur chaque espace vide d'une rangée ; la tirer réduit ou agrandit l'écart.</summary>
+    private void DrawGapHandles()
+    {
+        _gapLayer.Children.Clear();
+        if (!MoveMode) return;
+        var seen = new HashSet<Row>();
+        foreach (var entry in _view.Lines)
+        {
+            if (entry.CarriedOnly || (entry.Moved && entry.Unit is { Whole: false })) continue;
+            var row = entry.Table.Rows.FirstOrDefault(r => r.Lines.Contains(entry.Line));
+            if (row is null || !seen.Add(row)) continue;
+            double x = Lots.TableLeft(entry.Table) + 36;
+            foreach (var g in Rows.RowGaps(entry.Page, entry.Line))
+            {
+                // Seulement les vrais espaces vides (ou ceux déjà réglés) : pas une poignée sur chaque interligne normal.
+                if (g.H <= g.Normal + 8 && !entry.Page.Inserts.Any(b => b.Gap == g.Key)) continue;
+                double top = g.Y0 + entry.Dy;
+                double hh = Math.Min(22, Math.Max(14, g.H - 2));
+                var handle = new Border
+                {
+                    Width = 28, Height = hh, CornerRadius = new CornerRadius(6), Background = GripFill,
+                    BorderBrush = GripBorder, BorderThickness = new Thickness(1),
+                    Child = new TextBlock { Text = "↕", FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = GripInk, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center },
+                };
+                AutomationProperties.SetName(handle, "Espace vide");
+                ToolTipService.SetToolTip(handle, $"Espace vide ({g.H} px) : tirer vers le haut pour le réduire, vers le bas pour l'agrandir");
+                Canvas.SetLeft(handle, x);
+                Canvas.SetTop(handle, top + g.H / 2.0 - hh / 2);
+                var ghost = new Rectangle { Fill = new SolidColorBrush(ColorHelper.FromArgb(30, 0, 103, 192)), Stroke = Accent, StrokeThickness = 2, StrokeDashArray = [3, 2], Visibility = Visibility.Collapsed, IsHitTestVisible = false };
+                double right = entry.Table.ColumnXs.Count > 0 ? entry.Table.ColumnXs[^1] : _view.Width;
+                ghost.Width = Math.Max(1, right - Lots.TableLeft(entry.Table));
+                Canvas.SetLeft(ghost, Lots.TableLeft(entry.Table));
+                Canvas.SetTop(ghost, top);
+                bool down = false;
+                double y0 = 0;
+                int want = g.H;
+                var gap = g;
+                var page = entry.Page;
+                handle.PointerPressed += (_, e) => { down = true; y0 = e.GetCurrentPoint(Root).Position.Y; want = gap.H; handle.CapturePointer(e.Pointer); ghost.Height = gap.H; ghost.Visibility = Visibility.Visible; e.Handled = true; };
+                handle.PointerMoved += (_, e) =>
+                {
+                    if (!down) return;
+                    want = Math.Max(gap.Min, (int)Math.Floor(gap.H + e.GetCurrentPoint(Root).Position.Y - y0 + 0.5));
+                    ghost.Height = want;
+                    e.Handled = true;
+                };
+                void End(bool ok)
+                {
+                    if (!down) return;
+                    down = false;
+                    ghost.Visibility = Visibility.Collapsed;
+                    if (ok && want != gap.H) GapChanged?.Invoke(this, page, gap.Line, gap.Key, want);
+                }
+                handle.PointerReleased += (_, e) => { End(true); handle.ReleasePointerCapture(e.Pointer); e.Handled = true; };
+                handle.PointerCanceled += (_, _) => End(false);
+                handle.PointerCaptureLost += (_, _) => End(true);
+                _gapLayer.Children.Add(ghost);
+                _gapLayer.Children.Add(handle);
+            }
+        }
+    }
+
     private void DrawGrips()
     {
+        DrawGapHandles();
         if (!MoveMode) return;
         foreach (var vt in _view.Tables)
         {

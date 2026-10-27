@@ -5,7 +5,8 @@
 import { Rect } from '../core/geometry.js';
 import { isModified, addLockZone, removeLockZoneAt, looksLikeTotal } from '../core/model.js';
 import { paperColor } from '../core/exports.js';
-import { canAddLot, hasLotCell, isZeroLot, itemTable, columnWidth, tableLeft } from '../core/lots.js';
+import { canAddLot, hasLotCell, isZeroLot, itemTable, columnWidth, tableLeft, lotZone } from '../core/lots.js';
+import { rowGaps } from '../core/rows.js';
 import { frameToggles } from '../core/lotcolumn.js';
 import { font, lotSize, textLayout, isMultiline, LINE_HEIGHT, strikeSegments, rasterToCanvas, freeCanvas, cleanPatch } from '../services/canvas.js';
 import { adjustStrikes, colorRuns, hasColors, textColor } from '../core/strikes.js';
@@ -307,11 +308,59 @@ export class PageView {
       input.addEventListener('blur', commit);
       input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } });
       // Clic droit sur la case : place du numéro (haut, milieu, bas) ou retirer la case.
-      input.addEventListener('contextmenu', (e) => { e.preventDefault(); if (line.Cells[0]) this.cb.onLineMenu?.(this, line.Cells[0], { x: e.clientX, y: e.clientY }); });
+      const menu = (e) => { e.preventDefault(); if (line.Cells[0]) this.cb.onLineMenu?.(this, line.Cells[0], { x: e.clientX, y: e.clientY }); };
+      input.addEventListener('contextmenu', menu);
       this.lotInputs.set(line, input);
+      // Toute la case de lot (même au-dessus ou en dessous du numéro) : clic droit, et le numéro se glisse à la souris / au doigt.
+      const zone = lotZone(entry);
+      if (zone && this.cb.onLotPos) {
+        const z = el('div', 'lotcase', this.lots);
+        Object.assign(z.style, { left: box.X + 'px', width: box.Width + 'px', top: zone.top + 'px', height: Math.max(1, zone.bottom - zone.top) + 'px' });
+        this.lots.insertBefore(z, input);
+        z.title = 'Glisser le numéro vers le haut ou le bas pour le placer dans sa case ; clic droit : plus de choix';
+        z.addEventListener('contextmenu', menu);
+        this.lotDrag(z, input, entry, zone, true);
+        this.lotDrag(input, input, entry, zone, false);
+      }
     }
     if (focused && this.lotInputs.has(focused)) this.lotInputs.get(focused).focus({ preventScroll: true });
     this.refreshGutter();
+  }
+
+  /** Glisser le numéro de lot dans sa case (vers le haut ou le bas) ; un simple toucher dans la case met le curseur dedans. */
+  lotDrag(target, input, entry, zone, isZone) {
+    const yOf = (e) => (e.clientY - this.root.getBoundingClientRect().top) / this.cb.zoom();
+    target.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      if (isZone) e.preventDefault(); // la case ne prend pas le focus de la page
+      const y0 = yOf(e), top0 = parseFloat(input.style.top), h = entry.lotBox.Height;
+      let dragging = false;
+      const move = (ev) => {
+        const dy = yOf(ev) - y0;
+        if (!dragging && Math.abs(dy) < 6) return;
+        if (!dragging) {
+          dragging = true;
+          try { target.setPointerCapture(e.pointerId); } catch { /* déjà relâché */ }
+          input.blur();
+          input.classList.add('dragging');
+        }
+        ev.preventDefault();
+        input.style.top = Math.min(zone.bottom - h, Math.max(zone.top, top0 + dy)) + 'px';
+      };
+      const up = () => {
+        target.removeEventListener('pointermove', move);
+        target.removeEventListener('pointerup', up);
+        target.removeEventListener('pointercancel', cancel);
+        if (dragging) {
+          input.classList.remove('dragging');
+          this.cb.onLotPos?.(this, entry.line, entry.table, parseFloat(input.style.top) + h / 2 - entry.dy);
+        } else if (isZone) input.focus({ preventScroll: true });
+      };
+      const cancel = () => { dragging = false; input.style.top = top0 + 'px'; input.classList.remove('dragging'); up(); };
+      target.addEventListener('pointermove', move);
+      target.addEventListener('pointerup', up);
+      target.addEventListener('pointercancel', cancel);
+    });
   }
 
   updateLots() {
@@ -380,7 +429,54 @@ export class PageView {
 
   // ---------- Déplacer une rangée (poignée ⋮⋮ à gauche) ----------
 
+  /** Mode Modifier : une poignée ↕ sur chaque espace vide d'une rangée ; la tirer réduit ou agrandit l'écart. */
+  drawGapHandles() {
+    if (!this.moveMode || !this.cb.onGap) return;
+    const seen = new Set();
+    for (const entry of this.view.lines) {
+      if (entry.carriedOnly || (entry.moved && !entry.unit?.whole)) continue;
+      const row = entry.table.Rows?.find((r) => r.Lines.includes(entry.line));
+      if (!row || seen.has(row)) continue;
+      seen.add(row);
+      const x = tableLeft(entry.table) + 36;
+      for (const g of rowGaps(entry.page, entry.line)) {
+        // Seulement les vrais espaces vides (ou ceux déjà réglés) : pas une poignée sur chaque interligne normal.
+        if (g.h <= g.normal + 8 && !(entry.page.Inserts ?? []).some((b) => b.Gap === g.key)) continue;
+        const top = g.y0 + entry.dy;
+        const h = el('div', 'gaphandle', this.overlay);
+        h.textContent = '↕';
+        h.title = `Espace vide (${g.h} px) : tirer vers le haut pour le réduire, vers le bas pour l'agrandir`;
+        h.setAttribute('aria-label', 'Régler l\'espace vide');
+        const hh = Math.min(22, Math.max(14, g.h - 2));
+        Object.assign(h.style, { left: x + 'px', top: top + g.h / 2 - hh / 2 + 'px', height: hh + 'px' });
+        const yOf = (e) => (e.clientY - this.root.getBoundingClientRect().top) / this.cb.zoom();
+        let ghost = null, y0 = 0, want = g.h;
+        h.addEventListener('pointerdown', (e) => {
+          e.preventDefault();
+          h.setPointerCapture(e.pointerId);
+          y0 = yOf(e); want = g.h;
+          ghost = px(el('div', 'gapghost', this.overlay), Rect.make(tableLeft(entry.table), top, (entry.table.ColumnXs?.at(-1) ?? this.view.width) - tableLeft(entry.table), g.h));
+        });
+        h.addEventListener('pointermove', (e) => {
+          if (!ghost) return;
+          want = Math.max(g.min, Math.round(g.h + yOf(e) - y0));
+          ghost.style.height = want + 'px';
+          ghost.dataset.h = want;
+        });
+        const end = (ok) => {
+          if (!ghost) return;
+          ghost.remove(); ghost = null;
+          if (ok && want !== g.h) this.cb.onGap(this, entry.page, g.line, g.key, want);
+        };
+        h.addEventListener('pointerup', () => end(true));
+        h.addEventListener('pointercancel', () => end(false));
+      }
+    }
+  }
+
   drawHandles() {
+    for (const z of this.overlay.querySelectorAll('.gaphandle')) z.remove();
+    this.drawGapHandles();
     if (!this.moveMode || !this.cb.onMoveRow) return;
     for (const vt of this.view.tables) {
       // Lots 0 recollés ici (fin de partie ou endroit choisi) : leur poignée les replace où on veut dans ce tableau.

@@ -97,6 +97,23 @@ public sealed partial class MainWindow : Window
         else
             SetStatus("Prêt. Fonctionne sans Internet : aucun document ne quitte la tablette.");
 
+        // Fichier .inventaire donné au lancement (double-clic, « Ouvrir avec », essai automatique) : ouvert à la place du travail en cours.
+        string? given = Environment.GetCommandLineArgs().Skip(1).FirstOrDefault(a => a.EndsWith(ProjectStore.Extension, StringComparison.OrdinalIgnoreCase) && File.Exists(a));
+        if (given != null)
+        {
+            await RunBusyAsync(async () =>
+            {
+                try
+                {
+                    await OpenProjectAsync(given, rememberPath: true);
+                    SetStatus($"Projet ouvert : {System.IO.Path.GetFileName(given)} ({_project.Pages.Count} page(s)). Enregistrement continu dans ce fichier.");
+                    ShowSaveState();
+                }
+                catch (Exception ex) { SetStatus($"Le projet {System.IO.Path.GetFileName(given)} n'a pas pu être ouvert : {ex.Message}"); }
+            });
+            UpdateCommands();
+            return;
+        }
         if (File.Exists(AutosavePath))
         {
             await RunBusyAsync(async () =>
@@ -297,7 +314,10 @@ public sealed partial class MainWindow : Window
             _crops.Clear();
             UpdateCommands();
         }
-        return _plan = Arrangement.Build(_project);
+        _plan = Arrangement.Build(_project);
+        // Lignes rangées ou déplacées : leurs grands espaces vides sont réduits une fois (réglables ensuite).
+        if (Rows.AutoCompactMoved(_plan)) _plan = Arrangement.Build(_project);
+        return _plan;
     }
 
     /// <summary>Totaux recalculés (cases non tapées à la main) ; renvoie les cases changées.</summary>
@@ -319,7 +339,8 @@ public sealed partial class MainWindow : Window
     private async Task<Arrangement.Crop?> CropOfAsync(Arrangement.Unit u)
     {
         if (u.Page.Source != PageSource.Image) return null;
-        string key = string.Join("|", u.Page.Id, ImageKey(u.Page), LotColumn.Signature(u.Page, _project.LotFrame), ColorSignature(u.Page), u.BodyTop, u.Bottom, u.Title != null);
+        string key = string.Join("|", u.Page.Id, ImageKey(u.Page), LotColumn.Signature(u.Page, _project.LotFrame), ColorSignature(u.Page), u.BodyTop, u.Bottom, u.Title != null,
+            string.Join(",", u.Page.Inserts.Select(b => $"{b.At}:{b.Height}")));
         if (_crops.TryGetValue(key, out var crop)) return crop;
         var own = await OwnDisplayAsync(u.Page);
         crop = own is null ? null : Arrangement.UnitCrop(u, own);
@@ -465,6 +486,29 @@ public sealed partial class MainWindow : Window
             ScheduleAutosave();
         });
         view.LineMoved += async (v, table, line, before) => await MoveLineAsync(v.Page, table, line, before);
+        view.LotPosChanged += async (v, line, table, cy) => await GuardAsync("Numéro de lot", async () =>
+        {
+            // Numéro glissé dans sa case : il reste à cette hauteur (clic droit › en haut / au milieu / en bas pour revenir).
+            if (Lots.LotPosAt(table, line, cy) is not int pos) { v.UpdateLots(); return; }
+            PushUndo();
+            line.LotPos = pos;
+            Replan();
+            RecomputeTotals();
+            await RefreshViewAsync();
+            SetStatus($"Numéro {line.Lot} placé dans sa case. Clic droit › Numéro de lot en haut pour revenir. ↶ pour annuler.");
+            ScheduleAutosave();
+        });
+        view.GapChanged += async (v, pg, line, key, want) => await GuardAsync("Espace vide", async () =>
+        {
+            // Poignée ↕ (Modifier) : espace vide réduit ou agrandi.
+            PushUndo();
+            if (!Rows.SetGap(pg, line, key, want)) { DropUndo(); SetStatus("Cet espace ne peut pas être réduit davantage."); return; }
+            Replan();
+            RecomputeTotals();
+            await RefreshViewAsync();
+            SetStatus("Espace vide réglé : ce qui suit a suivi. Clic droit › Remettre la hauteur d'origine pour revenir. ↶ pour annuler.");
+            ScheduleAutosave();
+        });
         view.UnitMoved += async (v, table, unit, before) =>
         {
             if (unit.Kind == "zero") { await PlaceZeroAsync(v.Page, table, unit, before); return; }
@@ -832,10 +876,10 @@ public sealed partial class MainWindow : Window
                 var seg = Lots.LotSegment(atL.Table, atL.R, line);
                 if (seg.Bottom - seg.Top > line.Bounds.Height - line.Extra + 24)
                     foreach (var (v, label) in new (string?, string)[] { (null, "en haut"), ("Middle", "au milieu"), ("Bottom", "en bas") })
-                        if (line.LotAlign != v)
+                        if (line.LotAlign != v || line.LotPos.HasValue)
                         {
                             string? value = v;
-                            list.Add(new($"Numéro de lot {label}", "Place du numéro dans sa case (grande case).", "\uE8FD",
+                            list.Add(new($"Numéro de lot {label}", "Place du numéro dans sa case (grande case). Ou glissez le numéro à la souris.", "\uE8FD",
                                 () => _ = LotAlignAsync(line, value)));
                         }
             }
@@ -874,10 +918,10 @@ public sealed partial class MainWindow : Window
         if (Lots.IsActive(_project) && Rows.Locate(page, line) is { } at0 && (!at0.Table.LotsOff || Lots.ItemTable(at0.Table)) && !Lots.HasCell(line) && line.FirstText.Length > 0)
             list.Add(new("Ajouter une case de lot ici", "Une case vide à la hauteur de cette ligne (même dans une grande case) : tapez le numéro. Les autres numéros ne bougent pas.", "\uE710",
                 () => _ = LineActionAsync("addLot", 0, f)));
-        if (Rows.RowTrimOf(page, line) != null)
-            list.Add(new("Réduire la rangée (enlever l'espace vide)", "La rangée prend la hauteur des autres ; ce qui suit remonte.", "\uE73F",
+        if (Rows.CanCompact(page, line))
+            list.Add(new("Réduire les espaces vides de la rangée", "Au-dessus, entre et en dessous des lignes : la rangée se resserre, ce qui suit remonte. Réglage fin : Modifier, puis tirer les poignées ↕.", "\uE73F",
                 () => _ = LineActionAsync("trim", 0, f)));
-        else if (Rows.TrimsOf(page, line).Count > 0)
+        if (Rows.TrimsOf(page, line).Count > 0)
             list.Add(new("Remettre la hauteur d'origine", "L'espace vide imprimé revient.", "\uE740",
                 () => _ = LineActionAsync("untrim", 0, f)));
         if (line.TotalScope is { } ts)
@@ -959,14 +1003,14 @@ public sealed partial class MainWindow : Window
         if (act is "trim" or "untrim")
         {
             PushUndo();
-            if (act == "trim") Rows.TrimRow(page, line); else Rows.UntrimRow(page, line);
+            if (act == "trim") Rows.CompactRow(page, line); else Rows.UntrimRow(page, line);
             Replan();
             RecomputeTotals();
             await RefreshViewAsync();
             _view?.FlashLine(line);
             string rowName = Short(Rows.Locate(page, line)?.Row.Lines.Select(l => l.FirstText).FirstOrDefault(x => x.Length > 0) ?? "");
             if (rowName.Length == 0) rowName = "cette ligne";
-            SetStatus(act == "trim" ? $"Rangée de « {rowName} » réduite : même hauteur que les autres. ↶ pour annuler." : $"Rangée de « {rowName} » remise à sa hauteur d'origine.");
+            SetStatus(act == "trim" ? $"Espaces vides de « {rowName} » réduits. Réglage fin : Modifier, puis tirer les poignées ↕. ↶ pour annuler." : $"Rangée de « {rowName} » remise à sa hauteur d'origine.");
             ScheduleAutosave();
             return;
         }
@@ -1342,6 +1386,7 @@ public sealed partial class MainWindow : Window
     {
         PushUndo();
         line.LotAlign = value;
+        line.LotPos = null;
         Replan();
         RecomputeTotals();
         await RefreshViewAsync();
@@ -2175,6 +2220,13 @@ public sealed partial class MainWindow : Window
     {
         _undo.Add(System.Text.Json.JsonSerializer.Serialize(_project, ProjectStore.Json));
         if (_undo.Count > 30) _undo.RemoveAt(0);
+        UpdateCommands();
+    }
+
+    /// <summary>Action refusée juste après PushUndo : l'état mémorisé est retiré.</summary>
+    private void DropUndo()
+    {
+        if (_undo.Count > 0) _undo.RemoveAt(_undo.Count - 1);
         UpdateCommands();
     }
 

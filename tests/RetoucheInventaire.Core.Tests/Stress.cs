@@ -75,6 +75,8 @@ public static class Stress
         Lots.Resync(project);
         Arrangement.SyncEndPages(project);
         var plan = Arrangement.Build(project);
+        // Comme l'application : lignes rangées ou déplacées resserrées une fois.
+        if (Rows.AutoCompactMoved(plan)) plan = Arrangement.Build(project);
         Totals.Recompute(project, plan);
         return plan;
     }
@@ -201,7 +203,7 @@ public static class Stress
             }
             case "unmoveLot": line.MoveTo = null; break;
             case "sortLots": project.SortLots = a.GetProperty("on").GetBoolean(); break;
-            case "align": line.LotAlign = a.GetProperty("v").ValueKind == JsonValueKind.Null ? null : a.GetProperty("v").GetString(); break;
+            case "align": line.LotPos = null; line.LotAlign = a.GetProperty("v").ValueKind == JsonValueKind.Null ? null : a.GetProperty("v").GetString(); break;
             case "frameToggle": foreach (var x in a.GetProperty("rows").EnumerateArray()) table.Rows[x.GetInt32()].LotFrame = a.GetProperty("on").GetBoolean(); break;
             case "sync":
             {
@@ -237,7 +239,15 @@ public static class Stress
                 break;
             }
             case "number": Lots.Number(project, 1); break;
-            case "trim": Rows.TrimRow(page, line); break;
+            case "trim": Rows.CompactRow(page, line); break;
+            case "gap":
+            {
+                var gs = Rows.RowGaps(page, line);
+                int k = a.GetProperty("k").GetInt32();
+                if (k < gs.Count) Rows.SetGap(page, gs[k].Line, gs[k].Key, a.GetProperty("want").GetInt32());
+                break;
+            }
+            case "lotPos": line.LotPos = a.GetProperty("v").ValueKind == JsonValueKind.Null ? null : a.GetProperty("v").GetInt32(); break;
             case "untrim": Rows.UntrimRow(page, line); break;
             case "moveRow":
             {

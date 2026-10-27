@@ -22,7 +22,7 @@ import { planArrangement, composePage, unitCrop, viewOf, syncEndPages, lotKey, c
 import { recomputeTotals } from '../core/totals.js';
 import {
   copyLine, addBlankLine, splitAt, splitBelow, splitTypedText, removeAddedRow, canCopyLine, canSplit, canSplitBelow,
-  addedRowOf, locate, addTotalLine, trimRow, untrimRow, trimsOf, rowTrimOf,
+  addedRowOf, locate, addTotalLine, trimRow, untrimRow, trimsOf, rowTrimOf, compactRow, canCompact, rowGaps, setGap, autoCompactMoved,
 } from '../core/rows.js';
 
 const [projectPath, imagesDir, outDir, countArg, seedArg] = process.argv.slice(2);
@@ -92,7 +92,9 @@ const extraOf = (line) => Math.max(0, tallExtra(line), ...line.Cells.filter((f) 
 function after() {
   resyncLots(project);
   syncEndPages(project);
-  const plan = planArrangement(project);
+  let plan = planArrangement(project);
+  // Comme l'application : lignes rangées ou déplacées resserrées une fois.
+  if (autoCompactMoved(plan)) plan = planArrangement(project);
   recomputeTotals(project, plan);
   return plan;
 }
@@ -179,7 +181,7 @@ const ACTIONS = {
   sortLots(t, a) { project.SortLots = a.on; },
   moveLot(t, a) { resolve(t).line.MoveTo = { Page: pages()[a.page].Id, Where: a.where, Anchor: a.anchor ? resolve(a.anchor).line.Cells[0].Id : '' }; },
   unmoveLot(t) { delete resolve(t).line.MoveTo; },
-  align(t, a) { const { line } = resolve(t); if (a.v) line.LotAlign = a.v; else delete line.LotAlign; },
+  align(t, a) { const { line } = resolve(t); delete line.LotPos; if (a.v) line.LotAlign = a.v; else delete line.LotAlign; },
   frameToggle(t, a) { for (const r of a.rows) resolve(t).table.Rows[r].LotFrame = a.on; },
   restore(t) { resolve(t).line.Deleted = false; },
   lot(t, a) { setLot(project, resolve(t).line, a.v); },
@@ -205,7 +207,11 @@ const ACTIONS = {
     moveToRow(u.dest.page, u.dest.table, u.lines.filter((l) => hasLotCell(l) && !isZeroLot(l)), a.before);
   },
   number() { numberLots(project, 1); },
-  trim(t) { const { page, line } = resolve(t); trimRow(page, line); },
+  trim(t) { const { page, line } = resolve(t); compactRow(page, line); },
+  // Poignée ↕ d'un écart (Modifier) : l'écart k de la rangée réglé à `want` pixels.
+  gap(t, a) { const { page, line } = resolve(t); const g = rowGaps(page, line)[a.k]; if (g) setGap(page, g.line, g.key, a.want); },
+  // Numéro glissé à la souris dans sa case (0 en haut … 100 en bas), ou remis en haut (null).
+  lotPos(t, a) { const { line } = resolve(t); if (a.v === null) delete line.LotPos; else line.LotPos = a.v; },
   untrim(t) { const { page, line } = resolve(t); untrimRow(page, line); },
   moveRow(t, a) {
     const { table } = resolve(t);
@@ -291,7 +297,11 @@ function chooseApp() {
   const all = targets(hasText);
   const objs = targets((x) => hasText(x) && hasLotCell(x.line) && !x.table.LotsOff);
   const q = random();
-  if (q < 0.12) return ['syncApp', all[0], { page: chance(0.3) ? pick(all).p : null }];
+  if (q < 0.06) { const x = pick(all.filter((y) => rowGaps(y.page, y.line).length)); if (!x) return null; const gs = rowGaps(x.page, x.line); const k = Math.floor(random() * gs.length); return ['gap', x, { k, want: Math.max(0, gs[k].h + Math.floor(random() * 120) - 70) }]; }
+  if (q < 0.09) { const x = pick(objs); return x && ['lotPos', x, { v: chance(0.15) ? null : Math.floor(random() * 101) }]; }
+  if (q < 0.11) { const x = pick(all.filter((y) => canCompact(y.page, y.line))); if (x) return ['trim', x, {}]; }
+  if (q < 0.12) { const x = pick(all.filter((y) => trimsOf(y.page, y.line).length)); if (x) return ['untrim', x, {}]; }
+  if (q < 0.18) return ['syncApp', all[0], { page: chance(0.3) ? pick(all).p : null }];
   if (q < 0.45) { const x = pick(objs); return x && ['lot', x, { v: chance(0.05) ? '0' : chance(0.1) ? pick(['VGG', '?']) : chance(0.5) ? pick(['1', '2', '2', '3', '5']) : String(1 + Math.floor(random() * 150)) }]; }
   if (q < 0.65) {
     const x = pick(all); if (!x) return null;
@@ -361,7 +371,7 @@ function choose() {
     if (chance(0.7)) { const x = pick(all.filter((y) => canCopyLine(y.page, y.line))); return x && ['addRows', x, { n: pick([1, 3, 5, 10, 15]), above: chance(0.2), id: `ln${++pageN}` }]; }
     return ['number', all[0], {}];
   }
-  if (r < 0.86) { const x = pick(all.filter((y) => rowTrimOf(y.page, y.line))); return x && ['trim', x, {}]; }
+  if (r < 0.86) { const x = pick(all.filter((y) => canCompact(y.page, y.line))); return x && ['trim', x, {}]; }
   if (r < 0.87) { const x = pick(all.filter((y) => trimsOf(y.page, y.line).length)); return x && ['untrim', x, {}]; }
   if (r < 0.92) { const x = pick(all); return x && ['moveRow', x, { to: Math.floor(random() * rowOrder(x.table).length) }]; }
   if (r < 0.95) { const x = pick(all.filter((y) => y.row.Lines.filter((l) => firstText(l)).length > 1)); return x && ['moveLine', x, { to: Math.floor(random() * rowOrder(x.table).length) }]; }

@@ -130,6 +130,35 @@ jobs:
           name: RetoucheInventaire-${{ matrix.rid }}
           path: publish/${{ matrix.rid }}
 
+  # L'interface Windows essayée par un robot sur un vrai poste Windows : clic droit dans la case de lot, numéro au milieu,
+  # numéro glissé à la souris, Modifier › poignée ↕ d'un espace vide ; captures d'écran gardées (onglet Actions › Artifacts).
+  interface-windows:
+    needs: application
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/download-artifact@v4
+        with:
+          name: RetoucheInventaire-win-x64
+          path: appli
+      - name: Projet d'essai (pages de test, lots rangés, VGG en haut de la page 1)
+        shell: bash
+        run: |
+          dotnet build tests/RetoucheInventaire.Core.Tests -c Release -v q
+          tests/RetoucheInventaire.Core.Tests/bin/Release/net10.0/RetoucheInventaire.Core.Tests.exe make-inventaire "$RUNNER_TEMP/essai.inventaire"
+      - name: Le robot utilise l'application (souris, clic droit, glisser)
+        shell: pwsh
+        run: |
+          dotnet run --project tests/RetoucheInventaire.UiTests -c Release -- "$PWD\appli\RetoucheInventaire.exe" "$env:RUNNER_TEMP\essai.inventaire" "$PWD\captures"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: captures-interface-windows
+          path: captures
+
   # Publie l'application prête à installer : lien direct, sans passer par l'onglet Actions.
   publication:
     needs: [tests, application, essais-windows]

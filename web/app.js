@@ -10,7 +10,7 @@ import { buildPdf } from './core/pdf.js';
 import { buildTxt, txtBlob, composeIntoSource, outputName } from './core/exports.js';
 import { decodeText, parseDelimited, readXlsx, buildDataPage } from './core/importers.js';
 import { packProject, unpackProject, EXTENSION } from './core/store.js';
-import { itemTable, addLotHere, objectLines, lotsActive, numberLots, clearLots, setLot, resyncLots, removeLot, addLot, repairName, naturalCompare, createEmptyLots, fillLotsAutomatically, emptyLots, isZeroLot, rowOrder, lotTables, defaultLotChoice, setLotTables } from './core/lots.js';
+import { itemTable, addLotHere, objectLines, lotsActive, numberLots, clearLots, setLot, resyncLots, removeLot, addLot, repairName, naturalCompare, createEmptyLots, fillLotsAutomatically, emptyLots, isZeroLot, rowOrder, lotTables, defaultLotChoice, setLotTables, lotPosAt } from './core/lots.js';
 import { unzipSync } from './vendor/fflate.js';
 import { stretch, setExtra, baseHeight, totalExtra } from './core/layout.js';
 import { toggleStrike, isStruck, setColor, RED, BLACK, TEXT_COLORS } from './core/strikes.js';
@@ -18,7 +18,7 @@ import { planArrangement, viewOf, composePage, unitCrop, pageArranged, mapY, unm
 import { recomputeTotals, isComputedCell, computedValue } from './core/totals.js';
 import { hasLotCell, lotSegment, printedLotZone, applyPrintedLots, numberBox, columnWidth, moveToRow } from './core/lots.js';
 import { frameSignature, lotFrameEnabled, frameToggles } from './core/lotcolumn.js';
-import { canCopyLine, canAddRows, canAddAbove, canSplit, addedRowOf, copyLine, addBlankLine, locate, splitAt, splitTypedText, removeAddedRow, canSplitBelow, splitBelow, addTotalLine, lastObjectLine, rowTrimOf, trimRow, untrimRow, trimsOf } from './core/rows.js';
+import { canCopyLine, canAddRows, canAddAbove, canSplit, addedRowOf, copyLine, addBlankLine, locate, splitAt, splitTypedText, removeAddedRow, canSplitBelow, splitBelow, addTotalLine, lastObjectLine, rowTrimOf, trimRow, untrimRow, trimsOf, compactRow, canCompact, setGap, autoCompactMoved } from './core/rows.js';
 import { decodeImage, pdfPages, isImageName, mimeOf } from './services/decode.js';
 import { recognize, warmUp } from './services/ocr.js';
 import { rasterToCanvas, canvasToBlob, renderEdits, freeCanvas, lineExtra, pageRaster } from './services/canvas.js';
@@ -287,6 +287,8 @@ function replan() {
     updateButtons();
   }
   state.plan = planArrangement(state.project);
+  // Lignes rangées ou déplacées : leurs grands espaces vides sont réduits une fois (réglables ensuite).
+  if (autoCompactMoved(state.plan)) state.plan = planArrangement(state.project);
   return state.plan;
 }
 
@@ -312,7 +314,7 @@ async function ownDisplay(page) {
 /** Morceau d'image d'un lot 0 (gardé en mémoire : sa page n'a pas besoin d'être rouverte). */
 async function cropOf(u) {
   if (u.page.Source !== 'Image') return null;
-  const key = JSON.stringify([u.page.Id, imageKey(u.page), frameSignature(u.page, lotFrameEnabled(state.project)), colorSig(u.page), u.bodyTop, u.bottom, !!u.title]);
+  const key = JSON.stringify([u.page.Id, imageKey(u.page), frameSignature(u.page, lotFrameEnabled(state.project)), colorSig(u.page), u.bodyTop, u.bottom, !!u.title, (u.page.Inserts ?? []).map((b) => `${b.At}:${b.Height}`)]);
   if (state.crops.has(key)) return state.crops.get(key);
   const own = await ownDisplay(u.page);
   const crop = own ? unitCrop(u, own) : null;
@@ -440,6 +442,26 @@ async function showPage(n, { flat = null, fit = true, keepScroll = false } = {})
       scheduleSave();
     },
     onMoveLine: (v, table, line, before) => run(() => moveLine(page, table, line, before)),
+    // Numéro glissé dans sa case : il reste à cette hauteur (clic droit › en haut / au milieu / en bas pour revenir).
+    onLotPos: (v, line, table, cy) => run(async () => {
+      const pos = lotPosAt(table, line, cy);
+      if (pos === null) return v.updateLots();
+      pushUndo();
+      line.LotPos = pos;
+      replan(); recomputeAll();
+      await refreshView();
+      status(`Numéro ${line.Lot || ''} placé dans sa case. Clic droit › Numéro de lot en haut pour revenir. ↶ pour annuler.`);
+      scheduleSave();
+    }),
+    // Poignée ↕ (Modifier) : espace vide réduit ou agrandi.
+    onGap: (v, pg, line, key, want) => run(async () => {
+      pushUndo();
+      if (!setGap(pg, line, key, want)) { state.undo.pop(); return status('Cet espace ne peut pas être réduit davantage.'); }
+      replan(); recomputeAll();
+      await refreshView();
+      status('Espace vide réglé : ce qui suit a suivi. Clic droit › Remettre la hauteur d\'origine pour revenir. ↶ pour annuler.');
+      scheduleSave();
+    }),
     onMoveUnit: (v, table, unit, before) => run(async () => {
       if (unit.kind === 'zero') return placeZero(page, table, unit, before);
       // Ligne triée ou déplacée : posée à la main là où on la lâche.
@@ -529,7 +551,7 @@ function lineChoices(f) {
     const seg = at ? lotSegment(at.table, at.r, line) : null;
     if (seg && seg.bottom - seg.top > lineBounds(line).Height - (line.Extra ?? 0) + 24)
       for (const [v, label] of [[null, 'en haut'], ['Middle', 'au milieu'], ['Bottom', 'en bas']])
-        if ((line.LotAlign ?? null) !== v) items.push({ act: 'lotAlign', value: v, icon: 'i-rows', label: `Numéro de lot ${label}`, hint: 'Place du numéro dans sa case (grande case).' });
+        if ((line.LotAlign ?? null) !== v || Number.isInteger(line.LotPos)) items.push({ act: 'lotAlign', value: v, icon: 'i-rows', label: `Numéro de lot ${label}`, hint: 'Place du numéro dans sa case (grande case). Ou glissez le numéro au doigt.' });
     items.push({ act: 'lotRemove', icon: 'i-trash', label: 'Retirer la case de lot', hint: 'Cette ligne n\'est pas un objet : sa case disparaît (les autres numéros ne bougent pas).', danger: true });
   }
   if (hasLotCell(line) && !isZeroLot(line)) {
@@ -546,9 +568,9 @@ function lineChoices(f) {
   }
   if (lotsActive(state.project) && at0 && (!at0.table.LotsOff || itemTable(at0.table)) && !hasLotCell(line) && firstText(line))
     items.push({ act: 'addLot', icon: 'i-plus', label: 'Ajouter une case de lot ici', hint: 'Une case vide à la hauteur de cette ligne (même dans une grande case) : tapez le numéro. Les autres numéros ne bougent pas.' });
-  if (rowTrimOf(page, line))
-    items.push({ act: 'trim', icon: 'i-merge', label: 'Réduire la rangée (enlever l\'espace vide)', hint: 'La rangée prend la hauteur des autres ; ce qui suit remonte.' });
-  else if (trimsOf(page, line).length)
+  if (canCompact(page, line))
+    items.push({ act: 'trim', icon: 'i-merge', label: 'Réduire les espaces vides de la rangée', hint: 'Au-dessus, entre et en dessous des lignes : la rangée se resserre, ce qui suit remonte. Réglage fin : Modifier, puis tirer les poignées ↕.' });
+  if (trimsOf(page, line).length)
     items.push({ act: 'untrim', icon: 'i-split', label: 'Remettre la hauteur d\'origine', hint: 'L\'espace vide imprimé revient.' });
   if (line.TotalScope)
     items.push({ act: 'bold', icon: 'i-sum', label: line.TotalScope.Bold ? 'Enlever le gras' : 'Mettre en gras', hint: 'Ligne TOTAL ajoutée : écriture en gras ou comme les autres lignes.' });
@@ -622,7 +644,7 @@ async function lineAction(item, f) {
   if (item.act === 'oneBelow' || item.act === 'oneAbove') return addRowsNow(page, line, 1, item.act === 'oneAbove');
   if (item.act === 'lotAlign' || item.act === 'lotRemove') {
     pushUndo();
-    if (item.act === 'lotAlign') { if (item.value) line.LotAlign = item.value; else delete line.LotAlign; } else removeLot(state.project, line);
+    if (item.act === 'lotAlign') { delete line.LotPos; if (item.value) line.LotAlign = item.value; else delete line.LotAlign; } else removeLot(state.project, line);
     replan(); recomputeAll();
     await refreshView();
     status(item.act === 'lotRemove' ? `Case de lot retirée : « ${name} » n'est pas un objet. ↶ pour annuler.` : 'Numéro de lot déplacé dans sa case. ↶ pour annuler.');
@@ -639,12 +661,12 @@ async function lineAction(item, f) {
   }
   if (item.act === 'trim' || item.act === 'untrim') {
     pushUndo();
-    if (item.act === 'trim') trimRow(page, line); else untrimRow(page, line);
+    if (item.act === 'trim') compactRow(page, line); else untrimRow(page, line);
     replan(); recomputeAll();
     await refreshView();
     state.view?.flashLine(line);
     const rowName = short(locate(page, line)?.row.Lines.map(firstText).find(Boolean) ?? '') || 'cette ligne';
-    status(item.act === 'trim' ? `Rangée de « ${rowName} » réduite : même hauteur que les autres. ↶ pour annuler.` : `Rangée de « ${rowName} » remise à sa hauteur d'origine.`);
+    status(item.act === 'trim' ? `Espaces vides de « ${rowName} » réduits. Réglage fin : Modifier, puis tirer les poignées ↕. ↶ pour annuler.` : `Rangée de « ${rowName} » remise à sa hauteur d'origine.`);
     return scheduleSave();
   }
   if (item.act === 'taller' || item.act === 'shorter') {

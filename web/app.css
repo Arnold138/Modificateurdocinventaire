@@ -92,6 +92,15 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 .lotfield { position: absolute; pointer-events: auto; margin: 0; border: 0; border-radius: 0; padding: 0; outline: none; color: #000; text-align: center;
   -webkit-appearance: none; appearance: none; -webkit-user-select: text; user-select: text; caret-color: #000; }
 .lotfield:focus { outline: 2px solid var(--accent); outline-offset: 1px; z-index: 2; }
+/* Toute la case de lot : clic droit et glisser le numéro (vers le haut ou le bas). */
+.lotcase { position: absolute; pointer-events: auto; touch-action: none; cursor: ns-resize; border-radius: 3px; }
+.lotcase:hover { background: rgba(0, 103, 192, .06); outline: 1px dashed rgba(0, 103, 192, .45); }
+.lotfield { touch-action: none; }
+.lotfield.dragging { outline: 2px dashed var(--accent); background: rgba(0, 103, 192, .10) !important; cursor: grabbing; }
+/* Mode Modifier : poignée ↕ d'un espace vide, et aperçu de sa nouvelle hauteur. */
+.gaphandle { position: absolute; width: 28px; display: grid; place-items: center; font: 600 13px/1 system-ui, sans-serif; color: #4a5560; background: #eef1f4; border: 1px solid #cdd3da; border-radius: 6px; touch-action: none; cursor: ns-resize; pointer-events: auto; z-index: 3; }
+.gaphandle:hover, .gaphandle:active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.gapghost { position: absolute; background: rgba(0, 103, 192, .12); border-top: 2px dashed var(--accent); border-bottom: 2px dashed var(--accent); pointer-events: none; z-index: 2; }
 .page { position: relative; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12), 0 8px 24px rgba(0,0,0,.06); overflow: hidden; flex: none; }
 .page .bg, .page .grid { position: absolute; left: 0; top: 0; }
 .layer { position: absolute; inset: 0; }

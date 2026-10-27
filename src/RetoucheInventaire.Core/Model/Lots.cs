@@ -342,14 +342,42 @@ public static class Lots
         double right = TableLeft(table), left = Math.Max(0, right - columnWidth);
         double h = Math.Max(8, b.Height);
         double cy = b.CenterY;
-        int r = line.LotAlign is "Middle" or "Bottom" ? table.Rows.FindIndex(x => x.Lines.Contains(line)) : -1;
+        bool free = line.LotPos.HasValue;
+        int r = free || line.LotAlign is "Middle" or "Bottom" ? table.Rows.FindIndex(x => x.Lines.Contains(line)) : -1;
         if (r >= 0 && r + 1 < table.RowYs.Count)
         {
             var s = LotSegment(table, r, line);
-            cy = line.LotAlign == "Middle" ? (s.Top + s.Bottom) / 2 : s.Bottom - (cy - s.Top);
+            // Glissé à la souris : LotPos de 0 (en haut de la case) à 100 (en bas).
+            if (free) cy = s.Top + h / 2 + Math.Max(0, s.Bottom - s.Top - h) * Math.Min(100, Math.Max(0, line.LotPos!.Value)) / 100;
+            else cy = line.LotAlign == "Middle" ? (s.Top + s.Bottom) / 2 : s.Bottom - (cy - s.Top);
             if (s.Bottom - s.Top >= h) cy = Math.Min(s.Bottom - h / 2, Math.Max(s.Top + h / 2, cy));
         }
         return new RectD(left + 2, cy - h / 2, Math.Max(4, right - left - 4), h);
+    }
+
+    /// <summary>
+    /// Case de lot d'une ligne à l'écran (entrée de ViewOf) : (Top, Bottom) de sa case (toute la grande case, ou sa petite case),
+    /// pour y glisser le numéro et y faire un clic droit. Null sans case.
+    /// </summary>
+    public static (double Top, double Bottom)? LotZone(Export.Arrangement.ViewLine entry)
+    {
+        if (entry.LotBox is not RectD box) return null;
+        var t = entry.Table;
+        int r = t.Rows.FindIndex(x => x.Lines.Contains(entry.Line));
+        if (r < 0 || r + 1 >= t.RowYs.Count) return (box.Y, box.Bottom);
+        var s = LotSegment(t, r, entry.Line);
+        return (Math.Min(s.Top + entry.Dy, box.Y), Math.Max(s.Bottom + entry.Dy, box.Bottom));
+    }
+
+    /// <summary>Position glissée (centre du numéro à l'ordonnée <paramref name="cy"/>, page) → LotPos 0…100 dans la case de la ligne.</summary>
+    public static int? LotPosAt(Table table, PrintedLine line, double cy)
+    {
+        int r = table.Rows.FindIndex(x => x.Lines.Contains(line));
+        if (r < 0 || r + 1 >= table.RowYs.Count) return null;
+        var s = LotSegment(table, r, line);
+        double h = Math.Max(8, line.Bounds.Height - line.Extra), room = s.Bottom - s.Top - h;
+        if (room <= 0) return null;
+        return (int)Math.Max(0, Math.Min(100, Math.Floor((cy - s.Top - h / 2) / room * 100 + 0.5)));
     }
 
     /// <summary>Numéros de lot d'une page, avec la case où les écrire.</summary>

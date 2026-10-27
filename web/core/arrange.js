@@ -678,6 +678,12 @@ function closeLotColumns(project, page, pp, image, out, paper) {
     const framed = new Set(framedRows(t));
     const bands = [];
     for (const r of framed) { const st = strip(r); if (st) bands.push({ y0: st.s + CUT - hh, y1: st.e + CUT - hh + hT, st }); }
+    // Ligne déplacée ou rangée avec sa case de lot : cadrée à son arrivée, même entre des rangées sans cadre (haut de page…).
+    for (const pc of units) {
+      if (pc.unit.dest.table !== t || !pc.unit.lines.some(hasLotCell)) continue;
+      const st = { s: pc.dst, e: pc.dst + pc.h };
+      bands.push({ y0: st.s + CUT - hh, y1: st.e + CUT - hh + hT, st });
+    }
     const inside = (y) => bands.some((b) => y >= b.y0 && y < b.y1) || units.some((u) => y >= u.dst && y < u.dst + u.h);
     // Haut des rangées sans cadre : le trait d'une rangée tracée qui n'est plus là est effacé (encre seulement).
     for (const r of rowOrder(t)) {

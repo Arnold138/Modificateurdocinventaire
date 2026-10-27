@@ -881,6 +881,12 @@ public static class Arrangement
             var framed = LotColumn.FramedRows(t).ToHashSet();
             var bands = new List<(int Y0, int Y1, int S, int E)>();
             foreach (int r in framed) if (Strip(r) is { } st) bands.Add((st.S + Cut - hh, st.E + Cut - hh + hT, st.S, st.E));
+            // Ligne déplacée ou rangée avec sa case de lot : cadrée à son arrivée, même entre des rangées sans cadre (haut de page…).
+            foreach (var pc in units)
+            {
+                if (pc.Unit!.Dest.Table != t || !pc.Unit.Lines.Any(Lots.HasCell)) continue;
+                bands.Add((pc.Dst + Cut - hh, pc.Dst + pc.H + Cut - hh + hT, pc.Dst, pc.Dst + pc.H));
+            }
             bool Inside(int y) => bands.Any(b => y >= b.Y0 && y < b.Y1) || units.Any(u => y >= u.Dst && y < u.Dst + u.H);
             // Haut des rangées sans cadre : le trait d'une rangée tracée qui n'est plus là est effacé (encre seulement).
             foreach (int r in Lots.RowOrder(t))

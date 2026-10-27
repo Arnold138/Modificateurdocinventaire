@@ -90,6 +90,9 @@ public sealed class PrintedLine
     /// <summary>Numéro de lot dans sa case : null = en haut (à la hauteur de la ligne), « Middle » ou « Bottom » (clic droit).</summary>
     public string? LotAlign { get; set; }
 
+    /// <summary>Numéro glissé à la souris dans sa case : 0 (en haut) … 100 (en bas) ; null = LotAlign.</summary>
+    public int? LotPos { get; set; }
+
     /// <summary>Lot déplacé à la main (Lots › Déplacer des lots) : page et endroit où il s'affiche ; null = à sa place.</summary>
     public LotMove? MoveTo { get; set; }
 
@@ -157,6 +160,8 @@ public sealed class Row
     public string? Inserted { get; set; }
     /// <summary>Colonne des lots sur cette rangée sans case : null = règle (pas sur un total), vrai / faux = choisi (« + » / corbeille).</summary>
     public bool? LotFrame { get; set; }
+    /// <summary>Grands espaces vides déjà réduits une fois parce que la ligne a été rangée ou déplacée (le client a pu les remettre).</summary>
+    public bool AutoCompact { get; set; }
 }
 
 /// <summary>
@@ -191,6 +196,8 @@ public sealed class InsertedBand
     public int Skip { get; set; }
     /// <summary>Bande « Trim » : case (Id) de la 1re ligne de la rangée réduite (la réduction suit sa rangée).</summary>
     public string? Line { get; set; }
+    /// <summary>Écart réglé à la souris (bande « Trim » ou « Space ») : repère de l'écart (cases au-dessus et en dessous).</summary>
+    public string? Gap { get; set; }
     public List<BandPart> Parts { get; set; } = [];
 }
 

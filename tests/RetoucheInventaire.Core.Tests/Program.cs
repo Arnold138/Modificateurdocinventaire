@@ -122,6 +122,32 @@ if (args.Length > 0 && args[0] == "stress-fixtures")
     for (int k = 0; k < project.Pages.Count; k++) Pgm.Write(Path.Combine(args[1], $"p{k + 1}.pgm"), Fixtures.Load(project.Pages[k].Id).Image);
     return 0;
 }
+if (args.Length > 0 && args[0] == "make-inventaire")
+{
+    // Projet .inventaire pour l'essai de l'interface Windows (tests/RetoucheInventaire.UiTests) : pages de test,
+    // lots créés et synchronisés (lignes rangées par numéro), un lot « VGG » déplacé en haut de la 1re page.
+    var project = new InventoryProject { Name = "essai-interface" };
+    var sources = new Dictionary<string, byte[]>();
+    foreach (var n in new[] { "page1", "page2", "page5" })
+    {
+        var pg = Fixtures.Analyze(n);
+        pg.SourceEntry = $"sources/{n}.jpg";
+        sources[pg.SourceEntry] = File.ReadAllBytes(Path.Combine(Fixtures.Dir, n + ".jpg"));
+        project.Pages.Add(pg);
+    }
+    Lots.SetTables(project, project.Pages.SelectMany(pg => Lots.LotTables(pg).Where(x => Lots.DefaultChoice(project, x.Table)).Select(x => x.Table)).ToHashSet());
+    Lots.CreateEmpty(project);
+    Lots.FillAutomatically(project);
+    project.SortLots = true;
+    var objs = Lots.ObjectLines(project).Where(o => o.Page == project.Pages[1]).ToList();
+    var mover = objs.FirstOrDefault(o => o.Line.FirstText.Contains("autolaveuse"));
+    if (mover.Line is null) mover = objs[0];
+    Lots.Set(project, mover.Line, "VGG");
+    mover.Line.MoveTo = new LotMove { Page = project.Pages[0].Id, Where = "start", Anchor = "" };
+    RetoucheInventaire.Core.Storage.ProjectStore.Save(args[1], project, sources);
+    Console.WriteLine($"{args[1]} : {project.Pages.Count} pages, {Lots.ObjectLines(project).Count()} objets, « {mover.Line.FirstText} » en VGG en haut de la page 1.");
+    return 0;
+}
 if (args.Length > 0 && args[0] == "plan-dump")
 {
     var pj = System.Text.Json.JsonSerializer.Deserialize<RetoucheInventaire.Core.Model.InventoryProject>(File.ReadAllText(args[1]), RetoucheInventaire.Core.Storage.ProjectStore.Json)!;
