@@ -16,7 +16,7 @@ import { stretch, setExtra, baseHeight, totalExtra } from './core/layout.js';
 import { toggleStrike, isStruck, setColor, RED, BLACK, TEXT_COLORS } from './core/strikes.js';
 import { planArrangement, viewOf, composePage, unitCrop, pageArranged, mapY, unmapY, syncEndPages } from './core/arrange.js';
 import { recomputeTotals, isComputedCell, computedValue } from './core/totals.js';
-import { hasLotCell, lotSegment, printedLotZone, applyPrintedLots, numberBox, columnWidth } from './core/lots.js';
+import { hasLotCell, lotSegment, printedLotZone, applyPrintedLots, numberBox, columnWidth, moveToRow } from './core/lots.js';
 import { frameSignature, lotFrameEnabled, frameToggles } from './core/lotcolumn.js';
 import { canCopyLine, canAddRows, canAddAbove, canSplit, addedRowOf, copyLine, addBlankLine, locate, splitAt, splitTypedText, removeAddedRow, canSplitBelow, splitBelow, addTotalLine, lastObjectLine, rowTrimOf, trimRow, untrimRow, trimsOf } from './core/rows.js';
 import { decodeImage, pdfPages, isImageName, mimeOf } from './services/decode.js';
@@ -364,7 +364,7 @@ async function showPage(n, { flat = null, fit = true, keepScroll = false } = {})
   const sync = document.createElement('button');
   sync.className = 'sync';
   sync.innerHTML = '<svg><use href="#i-sync"/></svg>Synchroniser…';
-  sync.title = 'Remplir les cases vides de cette page ou de toutes les pages (les numéros déjà là ne bougent pas)';
+  sync.title = 'Remplir les cases vides (cette page ou toutes) et ranger les lignes entières dans l\'ordre des numéros';
   sync.onclick = () => run(syncDialog);
   const addPage = document.createElement('button');
   addPage.innerHTML = '<svg><use href="#i-plus"/></svg>Ajouter une page';
@@ -423,6 +423,15 @@ async function showPage(n, { flat = null, fit = true, keepScroll = false } = {})
     onRemoveColumn: (v, table, k) => run(() => columnAction(page, table, k, false)),
     onMoveRow: (v, table, from, before) => {
       pushUndo();
+      // Lignes triées par numéro : la rangée posée à la main garde sa place (elle ne revient pas à son numéro).
+      const numbered = table.Rows[from].Lines.filter((l) => hasLotCell(l) && (l.Lot ?? '').trim() && !isZeroLot(l));
+      if (state.project.SortLots && numbered.length) {
+        moveToRow(page, table, numbered, before, from);
+        replan(); recomputeAll();
+        refreshView();
+        status('Rangée déplacée : elle reste là, même avec les lignes triées. Clic droit › Remettre ce lot à sa place pour revenir. ↶ pour annuler.');
+        return scheduleSave();
+      }
       const order = rowOrder(table).filter((r) => r !== from);
       order.splice(before === null ? order.length : order.indexOf(before), 0, from);
       table.RowOrder = order;
@@ -431,7 +440,16 @@ async function showPage(n, { flat = null, fit = true, keepScroll = false } = {})
       scheduleSave();
     },
     onMoveLine: (v, table, line, before) => run(() => moveLine(page, table, line, before)),
-    onMoveUnit: (v, table, unit, before) => run(() => placeZero(page, table, unit, before)),
+    onMoveUnit: (v, table, unit, before) => run(async () => {
+      if (unit.kind === 'zero') return placeZero(page, table, unit, before);
+      // Ligne triée ou déplacée : posée à la main là où on la lâche.
+      pushUndo();
+      moveToRow(page, table, unit.lines.filter((l) => hasLotCell(l) && !isZeroLot(l)), before);
+      replan(); recomputeAll();
+      await refreshView();
+      status(`« ${short(firstText(unit.object))} » posé ici à la main. Clic droit › Remettre ce lot à sa place pour revenir. ↶ pour annuler.`);
+      scheduleSave();
+    }),
   });
   view.baseFlat = state.flats.get(page) ?? null;
   view.setLockMode(state.lock);
@@ -515,7 +533,7 @@ function lineChoices(f) {
     items.push({ act: 'lotRemove', icon: 'i-trash', label: 'Retirer la case de lot', hint: 'Cette ligne n\'est pas un objet : sa case disparaît (les autres numéros ne bougent pas).', danger: true });
   }
   if (hasLotCell(line) && !isZeroLot(line)) {
-    items.push({ act: 'moveLot', icon: 'i-rows', label: 'Déplacer ce lot vers une autre page…', hint: 'Choisir la page et l\'endroit (début, fin, après un lot).' });
+    items.push({ act: 'moveLot', icon: 'i-rows', label: 'Déplacer ce lot vers une autre page…', hint: 'Choisir la page : à sa place dans l\'ordre des numéros, au début, à la fin ou après un lot.' });
     if (line.MoveTo) items.push({ act: 'unmoveLot', icon: 'i-merge', label: 'Remettre ce lot à sa place', hint: 'Il revient là où il était imprimé.' });
   }
   if (hasLotCell(line) && !isZeroLot(line))
@@ -777,7 +795,10 @@ async function applyLot(v, line, value) {
       ? `Lot 0 : « ${short(firstText(line))} » est maintenant à la fin : ${where.text}.${added > 0 ? ` Page « Lots de fin » ajoutée (page ${where.k + 1}) : les pages suivantes ont été renumérotées.` : ''} Pour le placer ailleurs : Modifier, puis glissez sa poignée orange ⋮⋮. Pour le remettre : retapez son numéro, ou clic droit › Remettre à sa place.`
       : 'Lot 0 : aucun autre lot numéroté, la ligne reste en place.');
   } else if (wasZero && !zero) status(`Lot ${line.Lot || '(vide)'} : « ${short(firstText(line))} » est revenu à sa place.`);
-  else status(line.Lot ? `Lot ${line.Lot} enregistré.` : 'Case de lot vidée.');
+  else if (state.project.SortLots && line.Lot && state.plan?.moving.some((u) => u.kind === 'sort' && u.lines.includes(line))) {
+    const u = state.plan.moving.find((x) => x.kind === 'sort' && x.lines.includes(line));
+    status(`Lot ${line.Lot} enregistré : la ligne entière rejoint sa place dans l'ordre des numéros (page ${u.dest.p + 1}).`);
+  } else status(line.Lot ? `Lot ${line.Lot} enregistré.` : 'Case de lot vidée.');
   scheduleSave();
 }
 
@@ -1004,7 +1025,8 @@ async function moveLotsDialog(preselect = null) {
     <input id="mvSearch" type="search" placeholder="Chercher un numéro ou un mot…" style="width:100%">
     <ul class="list lotpages" id="mvList" style="max-height:38vh;overflow:auto">${all.map((e, i) => `<li data-i="${i}"><label><input type="checkbox" data-i="${i}" ${e.line === preselect ? 'checked' : ''}> <b>${escapeHtml(e.lot || '(vide)')}</b> ${escapeHtml(e.name)} <small>page ${e.k + 1}</small>${where(e)}</label></li>`).join('')}</ul>
     <p><label>Vers la page <select id="mvPage">${targetPages.map((x) => `<option value="${x.k}" ${x === defPage ? 'selected' : ''}>Page ${x.k + 1}</option>`).join('')}</select></label></p>
-    <label class="choice"><input type="radio" name="mvWhere" value="start" checked> <span><b>Au début de la page</b></span></label>
+    <label class="choice"><input type="radio" name="mvWhere" value="order" checked> <span><b>À sa place dans l'ordre des numéros</b><small>Entre le numéro plus petit et le plus grand de cette page.</small></span></label>
+    <label class="choice"><input type="radio" name="mvWhere" value="start"> <span><b>Au début de la page</b></span></label>
     <label class="choice"><input type="radio" name="mvWhere" value="end"> <span><b>À la fin de la page</b></span></label>
     <label class="choice"><input type="radio" name="mvWhere" value="after"> <span><b>Juste après le lot</b> <select id="mvAnchor"></select></span></label>`;
   const shown = dialog('Déplacer des lots', html, [
@@ -1024,9 +1046,9 @@ async function moveLotsDialog(preselect = null) {
     for (const li of $('mvList').children) { const e = all[+li.dataset.i]; li.hidden = !!q && !(`${e.lot} ${e.name}`.toLowerCase().includes(q)); }
   };
   const chosen = () => [...$('mvList').querySelectorAll('input[type=checkbox]:checked')].map((c) => all[+c.dataset.i]);
-  let picked = [], target = null, mode = 'start', anchor = null;
+  let picked = [], target = null, mode = 'order', anchor = null;
   // Lu avant la fermeture (le contenu du dialogue est remplacé ensuite).
-  const read = () => { picked = chosen(); target = pages()[+$('mvPage').value]; mode = document.querySelector('input[name=mvWhere]:checked')?.value ?? 'start'; anchor = all[+$('mvAnchor').value] ?? null; };
+  const read = () => { picked = chosen(); target = pages()[+$('mvPage').value]; mode = document.querySelector('input[name=mvWhere]:checked')?.value ?? 'order'; anchor = all[+$('mvAnchor').value] ?? null; };
   for (const b of $('dialogButtons').querySelectorAll('button')) b.addEventListener('pointerdown', read, true);
   const choice = await shown;
   if (!choice) return;
@@ -1043,7 +1065,7 @@ async function moveLotsDialog(preselect = null) {
   replan(); recomputeAll();
   const k = pages().indexOf(target);
   if (k !== state.index) await showPage(k, { fit: false }); else await refreshView();
-  status(`${picked.length} lot(s) (${picked.map((e) => e.lot || e.name).slice(0, 6).join(', ')}${picked.length > 6 ? '…' : ''}) déplacé(s) page ${k + 1}, ${mode === 'start' ? 'au début' : mode === 'end' ? 'à la fin' : `après le lot ${anchor?.lot || anchor?.name}`}. ↶ pour annuler ; Lots › Déplacer des lots › Remettre à leur place pour revenir.`);
+  status(`${picked.length} lot(s) (${picked.map((e) => e.lot || e.name).slice(0, 6).join(', ')}${picked.length > 6 ? '…' : ''}) déplacé(s) page ${k + 1}, ${mode === 'order' ? 'dans l\'ordre des numéros' : mode === 'start' ? 'au début' : mode === 'end' ? 'à la fin' : `après le lot ${anchor?.lot || anchor?.name}`}. ↶ pour annuler ; Lots › Déplacer des lots › Remettre à leur place pour revenir.`);
   scheduleSave();
 }
 
@@ -1062,8 +1084,9 @@ async function syncWithoutLots() {
 async function syncDialog() {
   if (!lotsActive(state.project)) return syncWithoutLots();
   const page = currentPage();
-  const choice = await dialog('Synchroniser les lots', `<p>Remplit les <b>cases vides</b>. Les numéros déjà là <b>ne bougent pas</b> : une case vide prend le numéro qui suit et décale seulement les lots qui la suivent directement (6, 7, 8 → 7, 8, 9). Un ordre fait à la main (30, 29, 6…) est gardé.</p>
-    <p class="muted">Pour tout renuméroter dans l'ordre affiché : Lots › Renuméroter tout.</p>`, [
+  const choice = await dialog('Synchroniser les lots', `<p>Remplit les <b>cases vides</b>. Les numéros déjà là <b>ne bougent pas</b> : une case vide prend le numéro qui suit et décale seulement les lots qui la suivent directement (6, 7, 8 → 7, 8, 9).</p>
+    <p>Puis les <b>lignes entières</b> (case de lot, désignation, prix) sont <b>rangées dans l'ordre des numéros</b> sur tout le document : tous les 2 ensemble après les 1…, lettres (VGG, ?) à la fin. Ensuite c'est <b>gardé à chaque changement</b> : un numéro tapé rejoint aussitôt sa place.</p>
+    <p class="muted">Pour poser un lot ailleurs : clic droit › Déplacer ce lot (page choisie, dans l'ordre), ou Modifier puis glisser ses ⋮⋮. Pour tout renuméroter dans l'ordre affiché : Lots › Renuméroter tout.</p>`, [
     ...(page && !page.EndLots ? [{ label: `Cette page (page ${state.index + 1})`, value: 'page', className: 'accent' }] : []),
     { label: 'Toutes les pages', value: 'all' },
     { label: 'Annuler', value: null },
@@ -1077,6 +1100,8 @@ async function syncDialog() {
 function syncLots(only = null, read = 0) {
   const before = new Map([...objectLines(state.project)].map((o) => [o.line, o.line.Lot ?? '']));
   fillLotsAutomatically(state.project, only);
+  // Synchroniser range aussi les lignes entières dans l'ordre des numéros (et le garde ensuite à chaque changement).
+  state.project.SortLots = true;
   replan(); recomputeAll();
   refreshView();
   const objs = [...objectLines(state.project)];
@@ -1088,7 +1113,8 @@ function syncLots(only = null, read = 0) {
   for (const o of objs) if (o.line.Lot && !isZeroLot(o.line)) seen.set(o.line.Lot, (seen.get(o.line.Lot) ?? 0) + 1);
   const dup = [...seen].filter(([, n]) => n > 1).map(([v]) => v);
   const warn = dup.length ? ` Attention, numéro(s) en double : ${dup.slice(0, 6).join(', ')}${dup.length > 6 ? '…' : ''} (touchez la case pour corriger).` : '';
-  status((read ? `${read} numéro(s) déjà imprimé(s) repris. ` : '') + (!objs.length ? 'Aucun objet à numéroter.'
+  const movedNow = state.plan.moving.filter((u) => u.kind === 'sort').length;
+  status((read ? `${read} numéro(s) déjà imprimé(s) repris. ` : '') + `Lignes rangées dans l'ordre des numéros (${movedNow} déplacée(s)). ` + (!objs.length ? 'Aucun objet à numéroter.'
     : filled === 0 ? `Rien à remplir${where} : toutes les cases ont un numéro (rien n'a bougé).`
       : `${filled} case(s) remplie(s)${where}${shifted ? `, ${shifted} lot(s) suivant(s) décalé(s) d'un cran` : ''} ; les autres numéros n'ont pas bougé. ↶ pour annuler.`) + warn);
   scheduleSave();

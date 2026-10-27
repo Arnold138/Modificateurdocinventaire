@@ -426,4 +426,18 @@ public static class Lots
         if (n > 0) Resync(project);
         return n;
     }
+
+    /// <summary>
+    /// Poignée ⋮⋮ (Modifier) quand les lignes sont triées ou déplacées : la ligne est posée à la main avant la rangée
+    /// <paramref name="before"/> du tableau (null : à la fin) — elle y reste, même triée (PrintedLine.MoveTo).
+    /// </summary>
+    public static void MoveToRow(Page page, Table table, List<PrintedLine> lines, int? before, int skip = -1)
+    {
+        var order = RowOrder(table).Where(r => r != skip).ToList();
+        int i = before is int b ? order.IndexOf(b) : order.Count;
+        PrintedLine? anchor = null;
+        for (int k = i - 1; k >= 0 && anchor is null; k--) anchor = table.Rows[order[k]].Lines.FirstOrDefault(l => l.Cells.Count > 0 && !string.IsNullOrEmpty(l.Cells[0].Id) && !lines.Contains(l));
+        foreach (var l in lines)
+            l.MoveTo = anchor != null ? new LotMove { Page = page.Id, Where = "after", Anchor = anchor.Cells[0].Id } : new LotMove { Page = page.Id, Where = "start", Anchor = "" };
+    }
 }

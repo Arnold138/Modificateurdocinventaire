@@ -682,7 +682,9 @@ public sealed class PageView
             // Lots 0 recollés ici (fin de partie ou endroit choisi) : leur poignée les replace où on veut dans ce tableau.
             foreach (var u in vt.Units ?? [])
                 AddGrip(vt, new Arrangement.Strip(-1, u.Top, u.Bottom), null, (u.Top + u.Bottom) / 2, Math.Max(24, Math.Min(40, u.Bottom - u.Top - 4)),
-                    "Lot 0 : glisser pour le placer ailleurs dans ce tableau", u.Unit);
+                    u.Unit.Kind == "zero" ? "Lot 0 : glisser pour le placer ailleurs dans ce tableau"
+                    : u.Unit.Kind == "sort" ? $"Lot {u.Unit.Object.Lot} rangé par numéro : glisser pour le poser ailleurs à la main"
+                    : $"Lot {u.Unit.Object.Lot} déplacé : glisser pour le poser ailleurs dans ce tableau", u.Unit);
             if (vt.Strips.Count < 2) continue;
             foreach (var strip in vt.Strips)
             {

@@ -277,7 +277,7 @@ function choose() {
     const x = pick(objs.filter((y) => !isZeroLot(y.line)));
     const dest = pick(pages().filter((pg) => !pg.EndLots && pg.Tables.some((t) => t.Rows.some((rw) => rw.Lines.some(hasLotCell)))));
     if (x && dest) {
-      const where = pick(['start', 'end', 'after']);
+      const where = pick(['start', 'end', 'after', 'order', 'order']);
       const anchors = all.filter((y) => y.page === dest && hasLotCell(y.line) && y.line !== x.line && y.line.Cells[0]?.Id);
       const an = where === 'after' && anchors.length ? pick(anchors) : null;
       return ['moveLot', x, { page: pages().indexOf(dest), where, anchor: an ? ref(an) : null }];

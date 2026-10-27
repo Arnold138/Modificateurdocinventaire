@@ -386,7 +386,7 @@ public sealed partial class MainWindow : Window
         var syncContent = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
         syncContent.Children.Add(new FontIcon { Glyph = "", FontSize = 15 });
         syncContent.Children.Add(new TextBlock { Text = "Synchroniser…" });
-        ToolTipService.SetToolTip(sync, "Remplir les cases vides de cette page ou de toutes les pages (les numéros déjà là ne bougent pas)");
+        ToolTipService.SetToolTip(sync, "Remplir les cases vides (cette page ou toutes) et ranger les lignes entières dans l'ordre des numéros");
         sync.Content = syncContent;
         sync.Click += async (_, _) => await SyncDialogAsync();
         _syncButton = sync;
@@ -442,9 +442,21 @@ public sealed partial class MainWindow : Window
             SetStatus("Case de lot ajoutée : tapez le numéro.");
             ScheduleAutosave();
         });
-        view.RowMoved += async (_, table, movedRow, beforeRow) => await GuardAsync("Déplacer la rangée", async () =>
+        view.RowMoved += async (v, table, movedRow, beforeRow) => await GuardAsync("Déplacer la rangée", async () =>
         {
             PushUndo();
+            // Lignes triées par numéro : la rangée posée à la main garde sa place (elle ne revient pas à son numéro).
+            var numbered = table.Rows[movedRow].Lines.Where(l => Lots.HasCell(l) && l.Lot.Trim().Length > 0 && !Lots.IsZero(l)).ToList();
+            if (_project.SortLots && numbered.Count > 0)
+            {
+                Lots.MoveToRow(v.Page, table, numbered, beforeRow, movedRow);
+                Replan();
+                RecomputeTotals();
+                await RefreshViewAsync();
+                SetStatus("Rangée déplacée : elle reste là, même avec les lignes triées. Clic droit › Remettre ce lot à sa place pour revenir. ↶ pour annuler.");
+                ScheduleAutosave();
+                return;
+            }
             var order = Lots.RowOrder(table).Where(r => r != movedRow).ToList();
             order.Insert(beforeRow is int b ? order.IndexOf(b) : order.Count, movedRow);
             table.RowOrder = order;
@@ -453,7 +465,21 @@ public sealed partial class MainWindow : Window
             ScheduleAutosave();
         });
         view.LineMoved += async (v, table, line, before) => await MoveLineAsync(v.Page, table, line, before);
-        view.UnitMoved += async (v, table, unit, before) => await PlaceZeroAsync(v.Page, table, unit, before);
+        view.UnitMoved += async (v, table, unit, before) =>
+        {
+            if (unit.Kind == "zero") { await PlaceZeroAsync(v.Page, table, unit, before); return; }
+            // Ligne triée ou déplacée : posée à la main là où on la lâche.
+            await GuardAsync("Déplacer la ligne", async () =>
+            {
+                PushUndo();
+                Lots.MoveToRow(v.Page, table, unit.Lines.Where(l => Lots.HasCell(l) && !Lots.IsZero(l)).ToList(), before);
+                Replan();
+                RecomputeTotals();
+                await RefreshViewAsync();
+                SetStatus($"« {Short(unit.Object.FirstText)} » posé ici à la main. Clic droit › Remettre ce lot à sa place pour revenir. ↶ pour annuler.");
+                ScheduleAutosave();
+            });
+        };
         view.LineCommands = LineCommandsFor;
         view.ColumnAdded += async (v, table, c) => await ColumnActionAsync(v.Page, table, c, true);
         view.RowsRequested += async (v, line) => await AddRowsDialogAsync(v.Page, line);
@@ -546,7 +572,7 @@ public sealed partial class MainWindow : Window
         if (page is { EndLots: false }) options.Add(($"Cette page (page {_index + 1})", "page", false));
         options.Add(("Toutes les pages", "all", false));
         var choice = await ChooseAsync("Synchroniser les lots",
-            "Remplit les cases vides. Les numéros déjà là ne bougent pas : une case vide prend le numéro qui suit et décale seulement les lots qui la suivent directement (6, 7, 8 → 7, 8, 9). Un ordre fait à la main (30, 29, 6…) est gardé. Pour tout renuméroter dans l'ordre affiché : Lots › Renuméroter tout.",
+            "Remplit les cases vides. Les numéros déjà là ne bougent pas : une case vide prend le numéro qui suit et décale seulement les lots qui la suivent directement (6, 7, 8 → 7, 8, 9).\n\nPuis les lignes entières (case de lot, désignation, prix) sont rangées dans l'ordre des numéros sur tout le document : tous les 2 ensemble après les 1…, lettres (VGG, ?) à la fin. Ensuite c'est gardé à chaque changement : un numéro tapé rejoint aussitôt sa place.\n\nPour poser un lot ailleurs : clic droit › Déplacer ce lot (page choisie, dans l'ordre), ou Modifier puis glisser ses ⋮⋮. Pour tout renuméroter dans l'ordre affiché : Lots › Renuméroter tout.",
             [.. options]);
         if (choice is null) return;
         PushUndo();
@@ -613,6 +639,8 @@ public sealed partial class MainWindow : Window
     {
         var before = Lots.ObjectLines(_project).ToDictionary(o => o.Line, o => o.Line.Lot);
         Lots.FillAutomatically(_project, only);
+        // Synchroniser range aussi les lignes entières dans l'ordre des numéros (et le garde ensuite à chaque changement).
+        _project.SortLots = true;
         Replan();
         RecomputeTotals();
         _ = RefreshViewAsync();
@@ -623,7 +651,8 @@ public sealed partial class MainWindow : Window
         // Numéros en double (ex. après un ordre fait à la main 30, 29 puis une case vide → 30) : signalés, pas corrigés en douce.
         var dup = objs.Where(o => o.Line.Lot.Length > 0 && !Lots.IsZero(o.Line)).GroupBy(o => o.Line.Lot).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
         string warn = dup.Count > 0 ? $" Attention, numéro(s) en double : {string.Join(", ", dup.Take(6))}{(dup.Count > 6 ? "…" : "")} (touchez la case pour corriger)." : "";
-        SetStatus((read > 0 ? $"{read} numéro(s) déjà imprimé(s) repris. " : "") + (objs.Count == 0 ? "Aucun objet à numéroter."
+        int movedNow = _plan.Moving.Count(u => u.Kind == "sort");
+        SetStatus((read > 0 ? $"{read} numéro(s) déjà imprimé(s) repris. " : "") + $"Lignes rangées dans l'ordre des numéros ({movedNow} déplacée(s)). " + (objs.Count == 0 ? "Aucun objet à numéroter."
             : filled == 0 ? $"Rien à remplir{where} : toutes les cases ont un numéro (rien n'a bougé)."
             : $"{filled} case(s) remplie(s){where}{(shifted > 0 ? $", {shifted} lot(s) suivant(s) décalé(s) d'un cran" : "")} ; les autres numéros n'ont pas bougé. ↶ pour annuler.") + warn);
         ScheduleAutosave();
@@ -816,7 +845,7 @@ public sealed partial class MainWindow : Window
         if (Lots.HasCell(line) && !Lots.IsZero(line))
         {
             var lotLine = line;
-            list.Add(new("Déplacer ce lot vers une autre page…", "Choisir la page et l'endroit (début, fin, après un lot).", "\uE8DE",
+            list.Add(new("Déplacer ce lot vers une autre page…", "Choisir la page : à sa place dans l'ordre des numéros, au début, à la fin ou après un lot.", "\uE8DE",
                 () => _ = MoveLotsDialogAsync(lotLine)));
             if (line.MoveTo != null)
                 list.Add(new("Remettre ce lot à sa place", "Il revient là où il était imprimé.", "\uE7A7", () => _ = GuardAsync("Remettre à sa place", async () =>
@@ -1248,7 +1277,8 @@ public sealed partial class MainWindow : Window
         int def = pagesWithLots.IndexOf(_index);
         pageBox.SelectedIndex = def >= 0 ? def : 0;
         panel.Children.Add(pageBox);
-        var start = new RadioButton { Content = "Au début de la page", GroupName = "mv", IsChecked = true };
+        var inOrder = new RadioButton { Content = "À sa place dans l'ordre des numéros", GroupName = "mv", IsChecked = true };
+        var start = new RadioButton { Content = "Au début de la page", GroupName = "mv" };
         var end = new RadioButton { Content = "À la fin de la page", GroupName = "mv" };
         var after = new RadioButton { Content = "Juste après le lot :", GroupName = "mv" };
         var anchorBox = new ComboBox { MinWidth = 300 };
@@ -1263,6 +1293,7 @@ public sealed partial class MainWindow : Window
         FillAnchors();
         pageBox.SelectionChanged += (_, _) => FillAnchors();
         anchorBox.SelectionChanged += (_, _) => { if (anchorBox.SelectedItem != null && anchorBox.IsDropDownOpen) after.IsChecked = true; };
+        panel.Children.Add(inOrder);
         panel.Children.Add(start);
         panel.Children.Add(end);
         var afterRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
@@ -1290,7 +1321,7 @@ public sealed partial class MainWindow : Window
             return;
         }
         int target = pagesWithLots[Math.Max(0, pageBox.SelectedIndex)];
-        string mode = after.IsChecked == true ? "after" : end.IsChecked == true ? "end" : "start";
+        string mode = after.IsChecked == true ? "after" : end.IsChecked == true ? "end" : start.IsChecked == true ? "start" : "order";
         var anchor = anchorBox.SelectedItem as LotEntry;
         foreach (var e in picked)
             e.Line.MoveTo = new LotMove
@@ -1301,7 +1332,7 @@ public sealed partial class MainWindow : Window
         Replan();
         RecomputeTotals();
         if (target != _index) await ShowPageAsync(target, fit: false); else await RefreshViewAsync();
-        string where = mode == "start" ? "au début" : mode == "end" ? "à la fin" : $"après le lot {(anchor?.Lot.Length > 0 ? anchor.Lot : anchor?.Name)}";
+        string where = mode == "order" ? "dans l'ordre des numéros" : mode == "start" ? "au début" : mode == "end" ? "à la fin" : $"après le lot {(anchor?.Lot.Length > 0 ? anchor.Lot : anchor?.Name)}";
         SetStatus($"{picked.Count} lot(s) ({string.Join(", ", picked.Take(6).Select(e => e.Lot.Length > 0 ? e.Lot : e.Name))}{(picked.Count > 6 ? "…" : "")}) déplacé(s) page {target + 1}, {where}. ↶ pour annuler ; Lots › Déplacer des lots › Remettre à leur place pour revenir.");
         ScheduleAutosave();
     }
@@ -1441,7 +1472,7 @@ public sealed partial class MainWindow : Window
         bool zero = Lots.IsZero(line);
         Replan();
         RecomputeTotals();
-        if (zero != wasZero || before != _project.Pages.Count || sig != LotColumn.Signature(v.Page, _project.LotFrame)) await RefreshViewAsync();
+        if (zero != wasZero || before != _project.Pages.Count || sig != LotColumn.Signature(v.Page, _project.LotFrame) || _project.SortLots) await RefreshViewAsync(); // trié : la ligne rejoint son numéro
         else v.UpdateLots();
         if (zero && !wasZero)
         {
@@ -1453,6 +1484,8 @@ public sealed partial class MainWindow : Window
                 : "Lot 0 : aucun autre lot numéroté, la ligne reste en place.");
         }
         else if (wasZero && !zero) SetStatus($"Lot {(line.Lot.Length > 0 ? line.Lot : "(vide)")} : « {Short(line.FirstText)} » est revenu à sa place.");
+        else if (_project.SortLots && line.Lot.Length > 0 && _plan.Moving.FirstOrDefault(u => u.Kind == "sort" && u.Lines.Contains(line)) is { } su)
+            SetStatus($"Lot {line.Lot} enregistré : la ligne entière rejoint sa place dans l'ordre des numéros (page {su.Dest.P + 1}).");
         else SetStatus(line.Lot.Length > 0 ? $"Lot {line.Lot} enregistré." : "Case de lot vidée.");
         ScheduleAutosave();
     }

@@ -141,6 +141,16 @@ public static class Arrangement
             var x = here.FirstOrDefault(y => y.Table.Rows[y.R].Lines.Any(l => l.Cells.Count > 0 && l.Cells[0].Id == m.Anchor));
             if (x != null) return At(x);
         }
+        if (m.Where == "order")
+        {
+            // À sa place dans l'ordre des numéros de cette page : après la dernière rangée qui a un numéro plus petit ou égal.
+            var k = LotKey(u.Object.Lot);
+            OrderedRow? last = null;
+            foreach (var x in objRows)
+                if (x.Table.Rows[x.R].Lines.Any(l => l != u.Object && Lots.HasCell(l) && l.MoveTo == null && l.Lot.Trim().Length > 0 && CompareKeys(LotKey(l.Lot), k) <= 0)) last = x;
+            if (last != null) return At(last);
+            return objRows.Count > 0 ? At(objRows[0], true) : At(here[0], true);
+        }
         if (m.Where == "start") return objRows.Count > 0 ? At(objRows[0], true) : At(here[0], true);
         return objRows.Count > 0 ? At(objRows[^1]) : At(here[^1]);
     }
@@ -228,7 +238,8 @@ public static class Arrangement
                         bool deleted = l.Deleted;
                         bool zero = lotsOn && Lots.HasCell(l) && Lots.IsZero(l);
                         bool move = !deleted && !zero && lotsOn && Lots.HasCell(l) && l.MoveTo != null;
-                        bool sort = !deleted && !zero && !move && sorting && objects!.Contains(l);
+                        // Case encore vide : elle reste à sa place (elle n'a pas de numéro à suivre).
+                        bool sort = !deleted && !zero && !move && sorting && objects!.Contains(l) && l.Lot.Trim().Length > 0;
                         if (!deleted && !zero && !move && !sort) continue;
                         if (found.Any(u => u.Lines.Contains(l))) continue;
                         var own = new List<PrintedLine> { l };
@@ -702,7 +713,7 @@ public static class Arrangement
             if (end != null) ys.Add(end.Value);
             ys.Sort();
             // Lots 0 recollés dans ce tableau : déplaçables avec une poignée (mode Modifier).
-            tables.Add(new ViewTable(t, t.ColumnXs, ys, strips, units.Where(pc => pc.Unit!.Kind == "zero").Select(pc => new UnitStrip(pc.Unit!, pc.Dst + Cut, pc.Dst + pc.H)).ToList()));
+            tables.Add(new ViewTable(t, t.ColumnXs, ys, strips, units.Where(pc => pc.Unit!.Kind != "deleted").Select(pc => new UnitStrip(pc.Unit!, pc.Dst + Cut, pc.Dst + pc.H)).ToList()));
         }
         return new ViewPage(page, page.Width, pp.Height, lines, tables);
     }

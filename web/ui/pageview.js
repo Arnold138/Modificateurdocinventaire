@@ -387,8 +387,8 @@ export class PageView {
       for (const u of vt.units ?? []) {
         const g = el('div', 'grip unit', this.gutter);
         g.innerHTML = '<svg><use href="#i-grip"/></svg>';
-        g.title = 'Lot 0 : glisser pour le placer ailleurs dans ce tableau';
-        g.setAttribute('aria-label', 'Déplacer ce lot 0');
+        g.title = u.unit.kind === 'zero' ? 'Lot 0 : glisser pour le placer ailleurs dans ce tableau' : 'Glisser pour poser cette ligne ailleurs (elle y reste)';
+        g.setAttribute('aria-label', u.unit.kind === 'zero' ? 'Déplacer ce lot 0' : 'Déplacer cette ligne');
         const gh = Math.max(24, Math.min(40, u.bottom - u.top - 4));
         Object.assign(g.style, { top: (u.top + u.bottom) / 2 - gh / 2 + 'px', height: gh + 'px' });
         this.initDrag(g, vt, { r: -1, top: u.top, bottom: u.bottom }, null, u.unit);

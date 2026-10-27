@@ -375,3 +375,15 @@ export function applyPrintedLots(project, page, table, words, digitsOnly = false
   if (n) resyncLots(project);
   return n;
 }
+
+/**
+ * Poignée ⋮⋮ (Modifier) quand les lignes sont triées ou déplacées : la ligne est posée à la main avant la rangée
+ * `before` du tableau (null : à la fin) — elle y reste, même triée (Line.MoveTo). `skip` : la rangée qu'on déplace.
+ */
+export function moveToRow(page, table, lines, before, skip = -1) {
+  const order = rowOrder(table).filter((r) => r !== skip);
+  const i = before === null ? order.length : order.indexOf(before);
+  let anchor = null;
+  for (let k = i - 1; k >= 0 && !anchor; k--) anchor = table.Rows[order[k]].Lines.find((l) => l.Cells[0]?.Id && !lines.includes(l)) ?? null;
+  for (const l of lines) l.MoveTo = anchor ? { Page: page.Id, Where: 'after', Anchor: anchor.Cells[0].Id } : { Page: page.Id, Where: 'start', Anchor: '' };
+}

@@ -71,7 +71,8 @@ function movedUnits(project) {
         const deleted = !!l.Deleted;
         const zero = lots && hasLotCell(l) && isZeroLot(l);
         const move = !deleted && !zero && lots && hasLotCell(l) && !!l.MoveTo;
-        const sort = !deleted && !zero && !move && sorting && objects.has(l);
+        // Case encore vide : elle reste à sa place (elle n'a pas de numéro à suivre).
+        const sort = !deleted && !zero && !move && sorting && objects.has(l) && (l.Lot ?? '').trim().length > 0;
         if (!deleted && !zero && !move && !sort) return;
         if (found.some((u) => u.lines.includes(l))) return;
         const own = [l];
@@ -126,6 +127,14 @@ function moveDest(project, u, rows) {
   if (m.Where === 'after') {
     const x = here.find((y) => y.table.Rows[y.r].Lines.some((l) => l.Cells[0]?.Id === m.Anchor));
     if (x) return at(x);
+  }
+  if (m.Where === 'order') {
+    // À sa place dans l'ordre des numéros de cette page : après la dernière rangée qui a un numéro plus petit ou égal.
+    const k = lotKey(u.object.Lot);
+    let last = null;
+    for (const x of objRows) if (x.table.Rows[x.r].Lines.some((l) => l !== u.object && hasLotCell(l) && !l.MoveTo && (l.Lot ?? '').trim() && compareKeys(lotKey(l.Lot), k) <= 0)) last = x;
+    if (last) return at(last);
+    return objRows.length ? at(objRows[0], true) : at(here[0], true);
   }
   if (m.Where === 'start') return objRows.length ? at(objRows[0], true) : at(here[0], true);
   return objRows.length ? at(objRows[objRows.length - 1]) : at(here[here.length - 1]);
@@ -464,7 +473,7 @@ export function viewOf(project, plan, k) {
     if (end !== null) ys.push(end);
     ys.sort((a, b) => a - b);
     // Lots 0 recollés dans ce tableau : déplaçables avec une poignée (mode Modifier).
-    out.tables.push({ table: t, ColumnXs: t.ColumnXs, RowYs: ys, strips, units: units.filter((pc) => pc.unit.kind === 'zero').map((pc) => ({ unit: pc.unit, top: pc.dst + CUT, bottom: pc.dst + pc.h })) });
+    out.tables.push({ table: t, ColumnXs: t.ColumnXs, RowYs: ys, strips, units: units.filter((pc) => pc.unit.kind !== 'deleted').map((pc) => ({ unit: pc.unit, top: pc.dst + CUT, bottom: pc.dst + pc.h })) });
   });
   return out;
 }
