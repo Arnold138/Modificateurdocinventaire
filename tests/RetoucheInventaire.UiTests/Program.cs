@@ -27,15 +27,15 @@ var trace = Path.Combine(outDir, "trace.txt");
 var psi = new ProcessStartInfo(exe, $"\"{file}\"") { UseShellExecute = false };
 psi.Environment["RI_TRACE"] = trace;
 var app = Application.Launch(psi);
-// Glisser comme une main : appui, petits pas, capture au milieu, lâcher.
+// Glisser comme une main : vrais mouvements de souris de Windows (SendInput), appui, petits pas, capture au milieu, lâcher.
 void Drag(Point from, Point to, string name)
 {
-    Mouse.MoveTo(from); Thread.Sleep(300);
-    Mouse.Down(MouseButton.Left); Thread.Sleep(300);
-    for (int k = 1; k <= 20; k++) { Mouse.MoveTo(new Point(from.X + (to.X - from.X) * k / 20, from.Y + (to.Y - from.Y) * k / 20)); Thread.Sleep(40); }
+    Input.Move(from); Thread.Sleep(300);
+    Input.Button(down: true); Thread.Sleep(300);
+    for (int k = 1; k <= 20; k++) { Input.Move(new Point(from.X + (to.X - from.X) * k / 20, from.Y + (to.Y - from.Y) * k / 20)); Thread.Sleep(40); }
     Thread.Sleep(300);
     Shot(name + "-pendant");
-    Mouse.Up(MouseButton.Left);
+    Input.Button(down: false);
     Thread.Sleep(2500);
 }
 using var automation = new UIA3Automation();
@@ -159,3 +159,29 @@ finally
 if (File.Exists(trace)) Console.WriteLine("--- trace de l'application ---\n" + File.ReadAllText(trace));
 Console.WriteLine(failures == 0 ? "Interface Windows : tout est bon." : $"Interface Windows : {failures} échec(s).");
 return failures == 0 ? 0 : 1;
+
+/// <summary>Souris de Windows (SendInput) : mouvements avec le bouton enfoncé, reçus par l'application comme une vraie main.</summary>
+static class Input
+{
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct MOUSEINPUT { public int dx, dy; public uint mouseData, dwFlags, time; public IntPtr dwExtraInfo; }
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Explicit)]
+    private struct INPUT { [System.Runtime.InteropServices.FieldOffset(0)] public uint type; [System.Runtime.InteropServices.FieldOffset(8)] public MOUSEINPUT mi; }
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern uint SendInput(uint n, INPUT[] inputs, int size);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
+    private const uint MOVE = 0x0001, LEFTDOWN = 0x0002, LEFTUP = 0x0004, ABSOLUTE = 0x8000, VIRTUALDESK = 0x4000;
+
+    private static void Send(uint flags, int dx = 0, int dy = 0)
+    {
+        var input = new INPUT { type = 0, mi = new MOUSEINPUT { dx = dx, dy = dy, dwFlags = flags } };
+        SendInput(1, [input], System.Runtime.InteropServices.Marshal.SizeOf<INPUT>());
+    }
+
+    public static void Move(Point p)
+    {
+        int w = Math.Max(1, GetSystemMetrics(0) - 1), h = Math.Max(1, GetSystemMetrics(1) - 1);
+        Send(MOVE | ABSOLUTE, (int)Math.Round(p.X * 65535.0 / w), (int)Math.Round(p.Y * 65535.0 / h));
+    }
+
+    public static void Button(bool down) => Send(down ? LEFTDOWN : LEFTUP);
+}
