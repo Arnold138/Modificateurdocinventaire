@@ -321,3 +321,57 @@ export function repairName(name) {
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   } catch { return name; }
 }
+
+// ---------- Document déjà numéroté (numéros imprimés dans la marge, ex. PDF exporté puis réimporté) ----------
+
+/**
+ * Bande de la marge gauche d'un tableau à lots, là où un numéro peut déjà être imprimé : à lire (OCR) quand on crée
+ * les cases, pour ne pas effacer les numéros du document. null si pas de marge.
+ */
+export function printedLotZone(page, table) {
+  const objs = [...objectLines({ Pages: [page] })].filter((o) => o.table === table);
+  if (objs.length === 0) return null;
+  const w = columnWidth(page);
+  const right = Math.floor(tableLeft(table)) - 2, left = Math.max(0, Math.floor(tableLeft(table) - 1.8 * w));
+  if (right - left < 10) return null;
+  const top = Math.max(0, Math.floor(table.RowYs[0]) - 4), bottom = Math.ceil(table.RowYs[table.RowYs.length - 1]) + 4;
+  return { X: left, Y: top, Width: right - left, Height: bottom - top };
+}
+
+/** Texte lu qui ressemble à un numéro de lot : chiffres (« 83 », « 0 »), ou un court code en lettres (« VGG »). */
+export function lotWord(text) {
+  let t = (text ?? '').trim().replace(/[|\][(){}.,:;'"`_~-]/g, '');
+  if (/\d/.test(t)) t = t.replace(/[Oo]/g, '0').replace(/[lI!]/g, '1').replace(/[Ss](?=\d|$)/g, '5');
+  if (/^\d{1,5}$/.test(t)) return String(parseInt(t, 10));
+  if (/^\d{1,4}[A-Za-z]{0,3}$/.test(t) || /^[A-Z]{2,4}$/.test(t)) return t;
+  return null;
+}
+
+/**
+ * Numéros déjà imprimés dans la marge (mots lus, en coordonnées de la page) : chaque case vide prend celui qui est à
+ * sa hauteur, comme s'il avait été tapé. Les cases déjà remplies ne changent pas. Renvoie le nombre de numéros repris.
+ */
+export function applyPrintedLots(project, page, table, words, digitsOnly = false) {
+  const w = columnWidth(page);
+  const cands = words.map((x) => ({ lot: digitsOnly && !/^\d+$/.test(lotWord(x.Text) ?? '') ? null : lotWord(x.Text), cy: x.Box.Y + x.Box.Height / 2, h: x.Box.Height })).filter((x) => x.lot !== null);
+  let n = 0;
+  const used = new Set();
+  for (const o of objectLines({ Pages: [page] })) {
+    if (o.table !== table || (o.line.Lot ?? '').length > 0) continue;
+    const b = numberBox(table, o.line, w);
+    const cy = b.Y + b.Height / 2;
+    let best = null;
+    for (const c of cands) {
+      if (used.has(c)) continue;
+      const d = Math.abs(c.cy - cy);
+      if (d <= Math.max(b.Height, c.h) * 0.6 && (!best || d < Math.abs(best.cy - cy))) best = c;
+    }
+    if (!best) continue;
+    used.add(best);
+    o.line.Lot = best.lot;
+    o.line.LotManual = true;
+    n++;
+  }
+  if (n) resyncLots(project);
+  return n;
+}

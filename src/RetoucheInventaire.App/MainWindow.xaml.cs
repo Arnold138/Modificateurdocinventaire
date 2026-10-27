@@ -382,7 +382,6 @@ public sealed partial class MainWindow : Window
         {
             MinHeight = 40, Padding = new Thickness(14, 4, 14, 4), CornerRadius = new CornerRadius(20),
             Style = (Style)Application.Current.Resources["PillButton"],
-            Visibility = Lots.IsActive(_project) ? Visibility.Visible : Visibility.Collapsed,
         };
         var syncContent = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
         syncContent.Children.Add(new FontIcon { Glyph = "", FontSize = 15 });
@@ -528,7 +527,20 @@ public sealed partial class MainWindow : Window
 
     private async Task SyncDialogAsyncCore()
     {
-        if (_busy || !Lots.IsActive(_project)) return;
+        if (_busy) return;
+        if (!Lots.IsActive(_project))
+        {
+            // Pas encore de colonne des lots : on choisit les pages, les cases sont créées (numéros imprimés gardés), puis remplies.
+            var chosen = await ChooseLotTablesAsync();
+            if (chosen is null) return;
+            if (chosen.Count == 0) { SetStatus("Aucune page cochée : pas de numéros de lot."); return; }
+            PushUndo();
+            Lots.SetTables(_project, chosen);
+            Lots.CreateEmpty(_project);
+            int read = await ReadPrintedLotsAsync();
+            SyncLots(null, read);
+            return;
+        }
         var page = CurrentPage;
         var options = new List<(string, string, bool)>();
         if (page is { EndLots: false }) options.Add(($"Cette page (page {_index + 1})", "page", false));
@@ -542,7 +554,62 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>Remplit les cases vides (pages choisies, ou toutes) sans toucher aux numéros déjà là ; dit ce qui a changé.</summary>
-    private void SyncLots(List<ModelPage>? only = null)
+    /// <summary>Trait du cadre (vertical ou horizontal) effacé d'un morceau d'image : la lecture ne voit plus que les chiffres.</summary>
+    private static Raster WithoutRules(Raster img)
+    {
+        int w = img.Width, h = img.Height, ch = img.Channels;
+        var d = img.Data;
+        var o2 = (byte[])d.Clone();
+        bool Dark(int x, int y) { int o = (y * w + x) * ch; return (ch == 1 ? d[o] : (d[o] * 29 + d[o + 1] * 150 + d[o + 2] * 77) >> 8) < 150; }
+        void Clear(int x, int y) { int o = (y * w + x) * ch; for (int c = 0; c < ch; c++) o2[o + c] = 255; }
+        for (int x = 0; x < w; x++) { int n = 0; for (int y = 0; y < h; y++) if (Dark(x, y)) n++; if (n > 0.6 * h) for (int y = 0; y < h; y++) Clear(x, y); }
+        for (int y = 0; y < h; y++) { int n = 0; for (int x = 0; x < w; x++) if (Dark(x, y)) n++; if (n > 0.6 * w) for (int x = 0; x < w; x++) Clear(x, y); }
+        return new Raster(w, h, ch, o2);
+    }
+
+    /// <summary>
+    /// Document déjà numéroté (ex. PDF sorti du logiciel puis réimporté) : les numéros imprimés dans la marge sont lus et
+    /// mis dans les cases vides, pour que créer la colonne ne les efface pas. Renvoie le nombre de numéros repris.
+    /// </summary>
+    private async Task<int> ReadPrintedLotsAsync()
+    {
+        if (!_ocr.IsAvailable) return 0;
+        int n = 0;
+        foreach (var page in _project.Pages.ToList())
+        {
+            if (page.Source != PageSource.Image || page.Added != null || page.EndLots) continue;
+            var tables = page.Tables.Select(t => (T: t, Zone: Lots.PrintedLotZone(page, t))).Where(x => x.Zone != null).ToList();
+            if (tables.Count == 0) continue;
+            SetStatus($"Lecture des numéros déjà imprimés, page {_project.Pages.IndexOf(page) + 1}…");
+            var flat = _flats.TryGetValue(page, out var cached) ? cached : await RestoreFlatAsync(page);
+            if (flat is null) continue;
+            var img = PageLayout.Stretch(flat, page);
+            foreach (var (t, zoneN) in tables)
+            {
+                var zone = zoneN!.Value;
+                const int k = 2; // agrandie : les petits chiffres se lisent mieux
+                var crop = ImageOps.Warp(img, (int)zone.Width * k, (int)zone.Height * k, (u, v) => new PointD(zone.X + u / k, zone.Y + v / k));
+                List<RetoucheInventaire.Core.Analysis.OcrWord> words;
+                try { words = await _ocr.RecognizeAsync(WithoutRules(crop)); } catch { words = []; }
+                n += Lots.ApplyPrintedLots(_project, page, t, words.Select(w => (w.Text, new RectD(zone.X + w.Box.X / k, zone.Y + w.Box.Y / k, w.Box.Width / k, w.Box.Height / k))));
+                // Numéro pas lu dans la bande : relu seul, à la hauteur de sa case (plus grand, une seule ligne).
+                var solo = new InventoryProject { Pages = [page] };
+                foreach (var o in Lots.ObjectLines(solo).Where(x => x.Table == t && x.Line.Lot.Length == 0).ToList())
+                {
+                    var b = Lots.NumberBox(t, o.Line, Lots.ColumnWidth(page));
+                    var box = new RectD(zone.X, Math.Max(0, Math.Floor(b.Y - 0.4 * b.Height)), zone.Width, Math.Ceiling(1.8 * b.Height));
+                    const int k3 = 3;
+                    var one = ImageOps.Warp(img, (int)box.Width * k3, (int)box.Height * k3, (u, v) => new PointD(box.X + u / k3, box.Y + v / k3));
+                    List<RetoucheInventaire.Core.Analysis.OcrWord> ws;
+                    try { ws = await _ocr.RecognizeAsync(WithoutRules(one)); } catch { ws = []; }
+                    n += Lots.ApplyPrintedLots(_project, page, t, ws.Select(w => (w.Text, new RectD(box.X + w.Box.X / k3, box.Y + w.Box.Y / k3, w.Box.Width / k3, w.Box.Height / k3))), digitsOnly: true);
+                }
+            }
+        }
+        return n;
+    }
+
+    private void SyncLots(List<ModelPage>? only = null, int read = 0)
     {
         var before = Lots.ObjectLines(_project).ToDictionary(o => o.Line, o => o.Line.Lot);
         Lots.FillAutomatically(_project, only);
@@ -556,7 +623,7 @@ public sealed partial class MainWindow : Window
         // Numéros en double (ex. après un ordre fait à la main 30, 29 puis une case vide → 30) : signalés, pas corrigés en douce.
         var dup = objs.Where(o => o.Line.Lot.Length > 0 && !Lots.IsZero(o.Line)).GroupBy(o => o.Line.Lot).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
         string warn = dup.Count > 0 ? $" Attention, numéro(s) en double : {string.Join(", ", dup.Take(6))}{(dup.Count > 6 ? "…" : "")} (touchez la case pour corriger)." : "";
-        SetStatus((objs.Count == 0 ? "Aucun objet à numéroter."
+        SetStatus((read > 0 ? $"{read} numéro(s) déjà imprimé(s) repris. " : "") + (objs.Count == 0 ? "Aucun objet à numéroter."
             : filled == 0 ? $"Rien à remplir{where} : toutes les cases ont un numéro (rien n'a bougé)."
             : $"{filled} case(s) remplie(s){where}{(shifted > 0 ? $", {shifted} lot(s) suivant(s) décalé(s) d'un cran" : "")} ; les autres numéros n'ont pas bougé. ↶ pour annuler.") + warn);
         ScheduleAutosave();
@@ -1776,9 +1843,10 @@ public sealed partial class MainWindow : Window
             PushUndo();
             Lots.SetTables(_project, chosen);
             Lots.CreateEmpty(_project);
+            int read = await ReadPrintedLotsAsync();
             Replan();
             await RefreshViewAsync();
-            SetStatus($"Colonne des lots créée sur {PagesWithLots()} : {Lots.ObjectLines(_project).Count()} cases vides. Touchez une case pour taper un numéro (0 = absent : la ligne passe à la fin). Aide : Lots › Comment ça marche ?");
+            SetStatus($"Colonne des lots créée sur {PagesWithLots()} : {Lots.ObjectLines(_project).Count()} cases{(read > 0 ? $", dont {read} avec le numéro déjà imprimé (gardé)" : " vides")}. Touchez une case pour taper un numéro (0 = absent : la ligne passe à la fin). Aide : Lots › Comment ça marche ?");
             ScheduleAutosave();
             return;
         }
@@ -1885,7 +1953,7 @@ public sealed partial class MainWindow : Window
                 if (chosen is null) break;
                 PushUndo();
                 Lots.SetTables(_project, chosen);
-                if (!Lots.IsActive(_project) && chosen.Count > 0) Lots.CreateEmpty(_project);
+                if (!Lots.IsActive(_project) && chosen.Count > 0) { Lots.CreateEmpty(_project); await ReadPrintedLotsAsync(); }
                 SetStatus(Lots.ObjectLines(_project).Any() ? $"Lots sur {PagesWithLots()} (les numéros déjà tapés restent)." : "Plus aucune page avec des lots.");
                 frameChanged = true;
                 break;
@@ -2500,7 +2568,7 @@ public sealed partial class MainWindow : Window
         PageLabel.IsEnabled = !_busy;
         EmptyHint.Visibility = n == 0 ? Visibility.Visible : Visibility.Collapsed;
         ProjectName.Text = _project.Name;
-        if (_syncButton != null) _syncButton.Visibility = Lots.IsActive(_project) ? Visibility.Visible : Visibility.Collapsed;
+        if (_syncButton != null) _syncButton.Visibility = Visibility.Visible; // toujours là : sans lots, il les crée puis les remplit
         LotsButton.Background = Lots.IsActive(_project)
             ? new SolidColorBrush(ColorHelper.FromArgb(255, 232, 241, 251))
             : new SolidColorBrush(Colors.Transparent);

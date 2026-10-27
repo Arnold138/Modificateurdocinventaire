@@ -361,4 +361,69 @@ public static class Lots
                 .Select(l => (l, NumberBox(t, l, w))))
             .ToList();
     }
+
+    // ---------- Document déjà numéroté (numéros imprimés dans la marge, ex. PDF exporté puis réimporté) ----------
+
+    /// <summary>
+    /// Bande de la marge gauche d'un tableau à lots, là où un numéro peut déjà être imprimé : à lire (OCR) quand on crée
+    /// les cases, pour ne pas effacer les numéros du document. null si pas de marge.
+    /// </summary>
+    public static RectD? PrintedLotZone(Page page, Table table)
+    {
+        var solo = new InventoryProject { Pages = [page] };
+        if (!ObjectLines(solo).Any(o => o.Table == table)) return null;
+        double w = ColumnWidth(page);
+        int right = (int)Math.Floor(TableLeft(table)) - 2, left = Math.Max(0, (int)Math.Floor(TableLeft(table) - 1.8 * w));
+        if (right - left < 10) return null;
+        int top = Math.Max(0, (int)Math.Floor(table.RowYs[0]) - 4), bottom = (int)Math.Ceiling(table.RowYs[^1]) + 4;
+        return new RectD(left, top, right - left, bottom - top);
+    }
+
+    /// <summary>Texte lu qui ressemble à un numéro de lot : chiffres (« 83 », « 0 »), ou un court code en lettres (« VGG »).</summary>
+    public static string? LotWord(string? text)
+    {
+        string t = System.Text.RegularExpressions.Regex.Replace((text ?? "").Trim(), @"[|\][(){}.,:;'""`_~-]", "");
+        if (t.Any(char.IsDigit))
+        {
+            t = System.Text.RegularExpressions.Regex.Replace(t, "[Oo]", "0");
+            t = System.Text.RegularExpressions.Regex.Replace(t, "[lI!]", "1");
+            t = System.Text.RegularExpressions.Regex.Replace(t, @"[Ss](?=\d|$)", "5");
+        }
+        if (System.Text.RegularExpressions.Regex.IsMatch(t, @"^\d{1,5}$")) return int.Parse(t).ToString();
+        if (System.Text.RegularExpressions.Regex.IsMatch(t, @"^\d{1,4}[A-Za-z]{0,3}$") || System.Text.RegularExpressions.Regex.IsMatch(t, "^[A-Z]{2,4}$")) return t;
+        return null;
+    }
+
+    /// <summary>
+    /// Numéros déjà imprimés dans la marge (mots lus, en coordonnées de la page) : chaque case vide prend celui qui est à
+    /// sa hauteur, comme s'il avait été tapé. Les cases déjà remplies ne changent pas. Renvoie le nombre de numéros repris.
+    /// </summary>
+    public static int ApplyPrintedLots(InventoryProject project, Page page, Table table, IEnumerable<(string Text, RectD Box)> words, bool digitsOnly = false)
+    {
+        double w = ColumnWidth(page);
+        var cands = words.Select(x => (Lot: LotWord(x.Text), Cy: x.Box.Y + x.Box.Height / 2, H: x.Box.Height))
+            .Where(c => c.Lot != null && (!digitsOnly || c.Lot.All(char.IsDigit))).ToList();
+        var used = new HashSet<int>();
+        int n = 0;
+        foreach (var o in ObjectLines(new InventoryProject { Pages = [page] }).ToList())
+        {
+            if (o.Table != table || o.Line.Lot.Length > 0) continue;
+            var b = NumberBox(table, o.Line, w);
+            double cy = b.Y + b.Height / 2;
+            int best = -1;
+            for (int i = 0; i < cands.Count; i++)
+            {
+                if (used.Contains(i)) continue;
+                double d = Math.Abs(cands[i].Cy - cy);
+                if (d <= Math.Max(b.Height, cands[i].H) * 0.6 && (best < 0 || d < Math.Abs(cands[best].Cy - cy))) best = i;
+            }
+            if (best < 0) continue;
+            used.Add(best);
+            o.Line.Lot = cands[best].Lot!;
+            o.Line.LotManual = true;
+            n++;
+        }
+        if (n > 0) Resync(project);
+        return n;
+    }
 }

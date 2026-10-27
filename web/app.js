@@ -2,7 +2,7 @@
 // Même logique que la version Windows : importer → corriger sur la page → exporter JPEG ou .txt.
 // Une seule page est affichée à la fois (navigation « 3 / 10 ») : les longs inventaires restent légers en mémoire.
 import { Quad } from './core/geometry.js';
-import { normalize, render, rotate90 } from './core/imaging.js';
+import { normalize, render, rotate90, warp } from './core/imaging.js';
 import { detectGrids } from './core/rules.js';
 import { prepare, mapBack, emptyFieldsWithInk, prepareCell, applyCellWords } from './core/ocrprep.js';
 import { newPage, newProject, analyze, reclassify, allFields, isModified, cycleKind, kindLabel, findLine, firstText, upgradePage, carryOver, allLines, lineBounds } from './core/model.js';
@@ -16,7 +16,7 @@ import { stretch, setExtra, baseHeight, totalExtra } from './core/layout.js';
 import { toggleStrike, isStruck, setColor, RED, BLACK, TEXT_COLORS } from './core/strikes.js';
 import { planArrangement, viewOf, composePage, unitCrop, pageArranged, mapY, unmapY, syncEndPages } from './core/arrange.js';
 import { recomputeTotals, isComputedCell, computedValue } from './core/totals.js';
-import { hasLotCell, lotSegment } from './core/lots.js';
+import { hasLotCell, lotSegment, printedLotZone, applyPrintedLots, numberBox, columnWidth } from './core/lots.js';
 import { frameSignature, lotFrameEnabled, frameToggles } from './core/lotcolumn.js';
 import { canCopyLine, canAddRows, canAddAbove, canSplit, addedRowOf, copyLine, addBlankLine, locate, splitAt, splitTypedText, removeAddedRow, canSplitBelow, splitBelow, addTotalLine, lastObjectLine, rowTrimOf, trimRow, untrimRow, trimsOf } from './core/rows.js';
 import { decodeImage, pdfPages, isImageName, mimeOf } from './services/decode.js';
@@ -95,7 +95,7 @@ function updateButtons() {
   $('emptyHint').hidden = n > 0;
   $('projectName').textContent = state.project.Name;
   $('btnLots').classList.toggle('on', lotsActive(state.project));
-  document.querySelector('.page-head .sync')?.toggleAttribute('hidden', !lotsActive(state.project));
+  document.querySelector('.page-head .sync')?.removeAttribute('hidden'); // toujours là : sans lots, il les crée puis les remplit
   updateEditBar();
 }
 
@@ -922,7 +922,66 @@ async function totalsMenu(page) {
 }
 
 /** « Synchroniser » : cette page ou toutes les pages. */
+/**
+ * Document déjà numéroté (ex. PDF sorti du logiciel puis réimporté) : les numéros imprimés dans la marge sont lus et
+ * mis dans les cases vides, pour que créer la colonne ne les efface pas. Renvoie le nombre de numéros repris.
+ */
+/** Traits du cadre (verticaux et horizontaux) effacés d'un morceau d'image : la lecture ne voit plus que les chiffres. */
+function withoutRules(img) {
+  const { w, h, ch, data } = img;
+  const dark = (x, y) => { const o = (y * w + x) * ch; return (ch === 1 ? data[o] : (data[o] * 77 + data[o + 1] * 150 + data[o + 2] * 29) >> 8) < 150; };
+  const out = new Uint8ClampedArray(data);
+  const clear = (x, y) => { const o = (y * w + x) * ch; for (let c = 0; c < ch; c++) out[o + c] = 255; };
+  for (let x = 0; x < w; x++) { let n = 0; for (let y = 0; y < h; y++) if (dark(x, y)) n++; if (n > 0.6 * h) for (let y = 0; y < h; y++) clear(x, y); }
+  for (let y = 0; y < h; y++) { let n = 0; for (let x = 0; x < w; x++) if (dark(x, y)) n++; if (n > 0.6 * w) for (let x = 0; x < w; x++) clear(x, y); }
+  return { w, h, ch, data: out };
+}
+
+async function readPrintedLots(only = null) {
+  let n = 0;
+  for (const page of only ?? pages()) {
+    if (page.Source !== 'Image' || page.Added || page.EndLots) continue;
+    const tables = page.Tables.map((t) => ({ t, zone: printedLotZone(page, t) })).filter((x) => x.zone);
+    if (!tables.length) continue;
+    status(`Lecture des numéros déjà imprimés, page ${pages().indexOf(page) + 1}…`); await tick();
+    const flat = state.flats.get(page) ?? (await restoreFlat(page));
+    if (!flat) continue;
+    const img = stretch(flat, page);
+    for (const { t, zone } of tables) {
+      const k = 2; // agrandie : les petits chiffres se lisent mieux
+      const crop = warp(img, zone.Width * k, zone.Height * k, (u, v) => ({ X: zone.X + u / k, Y: zone.Y + v / k }));
+      let words = [];
+      try { words = await recognize(withoutRules(crop), 11); } catch { words = []; }
+      n += applyPrintedLots(state.project, page, t, words.map((w) => ({ Text: w.Text, Box: { X: zone.X + w.Box.X / k, Y: zone.Y + w.Box.Y / k, Width: w.Box.Width / k, Height: w.Box.Height / k } })));
+      // Numéro pas lu dans la bande : relu seul, à la hauteur de sa case (plus grand, une seule ligne).
+      for (const o of [...objectLines({ Pages: [page] })].filter((x) => x.table === t && !x.line.Lot)) {
+        const b = numberBox(t, o.line, columnWidth(page));
+        const box = { X: zone.X, Y: Math.max(0, Math.floor(b.Y - 0.4 * b.Height)), Width: zone.Width, Height: Math.ceil(1.8 * b.Height) };
+        const k3 = 3;
+        const one = warp(img, box.Width * k3, box.Height * k3, (u, v) => ({ X: box.X + u / k3, Y: box.Y + v / k3 }));
+        let ws = [];
+        try { ws = await recognize(withoutRules(one), 7, '0123456789'); } catch { ws = []; }
+        n += applyPrintedLots(state.project, page, t, ws.map((w) => ({ Text: w.Text, Box: { X: box.X + w.Box.X / k3, Y: box.Y + w.Box.Y / k3, Width: w.Box.Width / k3, Height: w.Box.Height / k3 } })), true);
+      }
+    }
+  }
+  return n;
+}
+
+/** « Synchroniser » sans colonne des lots : on choisit les pages, les cases sont créées (numéros imprimés gardés), puis remplies. */
+async function syncWithoutLots() {
+  const chosen = await chooseLotTables();
+  if (!chosen) return;
+  if (chosen.size === 0) return status('Aucune page cochée : pas de numéros de lot.');
+  pushUndo();
+  setLotTables(state.project, chosen);
+  createEmptyLots(state.project);
+  const read = await readPrintedLots();
+  syncLots(null, read);
+}
+
 async function syncDialog() {
+  if (!lotsActive(state.project)) return syncWithoutLots();
   const page = currentPage();
   const choice = await dialog('Synchroniser les lots', `<p>Remplit les <b>cases vides</b>. Les numéros déjà là <b>ne bougent pas</b> : une case vide prend le numéro qui suit et décale seulement les lots qui la suivent directement (6, 7, 8 → 7, 8, 9). Un ordre fait à la main (30, 29, 6…) est gardé.</p>
     <p class="muted">Pour tout renuméroter dans l'ordre affiché : Lots › Renuméroter tout.</p>`, [
@@ -936,7 +995,7 @@ async function syncDialog() {
 }
 
 /** Remplit les cases vides (pages choisies, ou toutes) sans toucher aux numéros déjà là ; dit ce qui a changé. */
-function syncLots(only = null) {
+function syncLots(only = null, read = 0) {
   const before = new Map([...objectLines(state.project)].map((o) => [o.line, o.line.Lot ?? '']));
   fillLotsAutomatically(state.project, only);
   replan(); recomputeAll();
@@ -950,7 +1009,7 @@ function syncLots(only = null) {
   for (const o of objs) if (o.line.Lot && !isZeroLot(o.line)) seen.set(o.line.Lot, (seen.get(o.line.Lot) ?? 0) + 1);
   const dup = [...seen].filter(([, n]) => n > 1).map(([v]) => v);
   const warn = dup.length ? ` Attention, numéro(s) en double : ${dup.slice(0, 6).join(', ')}${dup.length > 6 ? '…' : ''} (touchez la case pour corriger).` : '';
-  status((!objs.length ? 'Aucun objet à numéroter.'
+  status((read ? `${read} numéro(s) déjà imprimé(s) repris. ` : '') + (!objs.length ? 'Aucun objet à numéroter.'
     : filled === 0 ? `Rien à remplir${where} : toutes les cases ont un numéro (rien n'a bougé).`
       : `${filled} case(s) remplie(s)${where}${shifted ? `, ${shifted} lot(s) suivant(s) décalé(s) d'un cran` : ''} ; les autres numéros n'ont pas bougé. ↶ pour annuler.`) + warn);
   scheduleSave();
@@ -1523,10 +1582,11 @@ async function lotsDialog() {
     pushUndo();
     setLotTables(state.project, chosen);
     createEmptyLots(state.project);
+    const read = await readPrintedLots();
     const n = [...objectLines(state.project)].length;
     const pagesOn = new Set([...objectLines(state.project)].map((o) => pages().indexOf(o.page) + 1));
     await refreshView();
-    status(`Colonne des lots créée sur ${pagesOn.size > 1 ? 'les pages' : 'la page'} ${[...pagesOn].join(', ')} : ${n} cases vides. Touchez une case pour taper un numéro (0 = absent : la ligne passe après le dernier lot).`);
+    status(`Colonne des lots créée sur ${pagesOn.size > 1 ? 'les pages' : 'la page'} ${[...pagesOn].join(', ')} : ${n} cases${read ? `, dont ${read} avec le numéro déjà imprimé (gardé)` : ' vides'}. Touchez une case pour taper un numéro (0 = absent : la ligne passe après le dernier lot).`);
     scheduleSave();
     return;
   }
@@ -1577,7 +1637,7 @@ async function lotsDialog() {
     if (!chosen) return frameChanged && refreshView();
     pushUndo();
     setLotTables(state.project, chosen);
-    if (!lotsActive(state.project) && chosen.size > 0) createEmptyLots(state.project);
+    if (!lotsActive(state.project) && chosen.size > 0) { createEmptyLots(state.project); await readPrintedLots(); }
     const pagesOn = new Set([...objectLines(state.project)].map((o) => pages().indexOf(o.page) + 1));
     status(pagesOn.size ? `Lots sur ${pagesOn.size > 1 ? 'les pages' : 'la page'} ${[...pagesOn].join(', ')} (les numéros déjà tapés restent).` : 'Plus aucune page avec des lots.');
   } else if (choice === 'number') {

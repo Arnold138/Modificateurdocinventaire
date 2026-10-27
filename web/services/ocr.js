@@ -25,9 +25,9 @@ export const warmUp = () => getWorker().then(() => true, () => false);
  * @param psm 11 = texte épars (page entière), 7 = une seule ligne (case)
  * @returns {{Text:string, Box:{X,Y,Width,Height}}[]}
  */
-export async function recognize(image, psm) {
+export async function recognize(image, psm, whitelist = '') {
   const worker = await getWorker();
-  await worker.setParameters({ tessedit_pageseg_mode: String(psm) });
+  await worker.setParameters({ tessedit_pageseg_mode: String(psm), tessedit_char_whitelist: whitelist });
   const canvas = rasterToCanvas(image);
   let data;
   try { ({ data } = await worker.recognize(canvas, {}, { blocks: true, text: false })); }
