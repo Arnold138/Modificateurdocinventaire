@@ -917,6 +917,21 @@ test('Réduire ne coupe jamais dans le texte (gros bloc, en-tête dont l\'écrit
   eq(3, table.RowYs.length, 'tout défait : filets d\'origine');
 });
 
+test('Vieux projet où le 1 était lu « l » : le « + » revient sur les lignes du bloc (vidéo du client)', () => {
+  const page = { Id: 'v', Source: 'Image', Width: 1300, Height: 600, LooseLines: [], LockZones: [], Inserts: [], Rev: 0, Tables: [{
+    HasGrid: true, ColumnXs: [60, 1065, 1260], RowYs: [100, 400], Bounds: { X: 60, Y: 100, Width: 1200, Height: 300 },
+    Rows: [{ Bounds: { X: 60, Y: 100, Width: 1200, Height: 300 }, Lines: ['BUREAU 4', 'l caisson en bois beige à 2 tiroirs', 'I caisson à roulettes à 3 tiroirs'].map((t, i) => ({
+      Kind: 'Article', KindChosenByUser: false, OutsideTable: false, Lot: i === 0 ? '5' : '', LotManual: false, NoLot: false, ForceLot: false, Extra: 0, ExtraAt: 0,
+      Cells: [{ Id: 'v' + i, Column: 0, Text: t, OriginalText: t, Box: { X: 60, Y: 110 + 40 * i, Width: 1000, Height: 34 }, Ink: { X: 64, Y: 114 + 40 * i, Width: 300, Height: 26 }, FontSize: 24, Align: 'Left', Indent: 0, Locked: false, Strikes: [], Colors: [], Manual: false }],
+    })) }] }] };
+  const row = page.Tables[0].Rows[0];
+  check(!canAddLot(row.Lines[1], row), 'avant : pas de « + »');
+  upgradePage(page);
+  eq('1 caisson en bois beige à 2 tiroirs', row.Lines[1].Cells[0].Text, 'lecture corrigée');
+  check(canAddLot(row.Lines[1], row) && canAddLot(row.Lines[2], row), '« + » sur les deux caissons');
+  eq('5', row.Lines[0].Lot, 'numéro gardé');
+});
+
 test('Rouvrir un projet ne change rien (rangées agrandies : les autres ne sont plus réunies)', () => {
   const p = fromPages(['page1']);
   const page = p.Pages[0];

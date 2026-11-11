@@ -1314,6 +1314,23 @@ public static class Tests
         Equal(3, t.RowYs.Count, "tout défait : filets d'origine");
     }
 
+    public static void T_Vieux_projet_un_lu_l_le_plus_revient()
+    {
+        // Vidéo du client : bloc « BUREAU 4 » + deux caissons ; la version d'avant lisait « l caisson » (1 lu comme l) :
+        // BUREAU 4 pris pour l'objet (lot 5), et pas de « + » sur les caissons. Rouvert avec cette version : le « + » est là.
+        var page = BlockPage();
+        page.Rev = 0;
+        var row = page.Tables[0].Rows[1];
+        var titles = new[] { "BUREAU 4", "l caisson en bois beige à 2 tiroirs", "I caisson à roulettes à 3 tiroirs", "l écran JVC" };
+        for (int i = 0; i < row.Lines.Count; i++) { row.Lines[i].Cells[0].Text = row.Lines[i].Cells[0].OriginalText = titles[i]; row.Lines[i].Kind = LineKind.Article; }
+        row.Lines[0].Lot = "5";
+        Check(!Lots.CanAdd(row.Lines[1], row), "avant : pas de « + » sur « l caisson »");
+        PageAnalyzer.Upgrade(page);
+        Equal("1 caisson en bois beige à 2 tiroirs", row.Lines[1].Cells[0].Text, "lecture corrigée");
+        for (int i = 1; i < row.Lines.Count; i++) Check(Lots.CanAdd(row.Lines[i], row), $"« + » sur « {row.Lines[i].FirstText} »");
+        Equal("5", row.Lines[0].Lot, "le numéro déjà tapé reste");
+    }
+
     public static void T_Rouvrir_un_projet_ne_change_rien()
     {
         // Avant : à chaque ouverture, les rangées « fines » étaient réunies. Après avoir agrandi la moitié des rangées
