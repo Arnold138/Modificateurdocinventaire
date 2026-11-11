@@ -33,6 +33,9 @@ public static class Stress
         // Comme à l'écran : la page s'affiche (colonne des lots tracée) avant toute manipulation.
         foreach (var pg in project.Pages.Where(pg => !pg.EndLots)) LotColumn.Draw(PageLayout.Stretch(images[pg.Id], pg), pg);
 
+        // Le contrôle que fait l'application après chaque action (retour automatique à l'état d'avant s'il trouve un problème).
+        var sound = Integrity.Check(project);
+
         using var doc = JsonDocument.Parse(File.ReadAllText(opsPath));
         int step = 0;
         foreach (var o in doc.RootElement.GetProperty("ops").EnumerateArray())
@@ -47,6 +50,9 @@ public static class Stress
             {
                 var plan = After(project);
                 Check(project, plan, baseH, step, op, Fail);
+                foreach (var x in Integrity.NewProblems(sound, Integrity.Check(project))) Fail(step, $"{op} : contrôle de l'application : {x}");
+                // Fermer puis rouvrir l'application (ou revenir en arrière) ne doit rien changer au projet.
+                if (Reopen(project) is { } diff) Fail(step, $"{op} : le projet change quand on le rouvre ({diff})");
             }
             catch (Exception e) { Fail(step, $"{op} (après) : ERREUR {e.GetType().Name} {e.Message}\n{e.StackTrace?.Split('\n').Take(3).Aggregate((x, y) => x + "\n" + y)}"); }
         }
@@ -65,7 +71,169 @@ public static class Stress
             if (img.Height != final.Pages[k].Height) Fail(step, $"page {k + 1} : image {img.Height} ≠ plan {final.Pages[k].Height}");
             Pgm.Write(Path.Combine(outDir, $"page{k + 1}.pgm"), img);
         }
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < 5; i++) Integrity.Check(project);
+        long check = sw.ElapsedMilliseconds / 5;
+        sw.Restart();
+        string snap = JsonSerializer.Serialize(project, ProjectStore.Json);
+        Console.WriteLine($"Contrôle de l'application : {check} ms ; état du projet : {snap.Length / 1024} Ko, {sw.ElapsedMilliseconds} ms.");
         Console.WriteLine($"Windows : {step} manipulations rejouées, {project.Pages.Count} pages, {Lots.ObjectLines(project).Count()} objets.");
+        Console.WriteLine(problems.Count == 0 ? "Aucun problème." : $"{problems.Count} problème(s) :\n" + string.Join("\n", problems.Take(30)));
+        return problems.Count == 0 ? 0 : 1;
+    }
+
+    /// <summary>Enregistre et rouvre le projet comme l'application (copie de secours, ↶) : null s'il revient identique.</summary>
+    public static string? Reopen(InventoryProject project)
+    {
+        string before = JsonSerializer.Serialize(project, ProjectStore.Json);
+        var again = JsonSerializer.Deserialize<InventoryProject>(before, ProjectStore.Json)!;
+        foreach (var p in again.Pages) PageAnalyzer.Upgrade(p);
+        Lots.Resync(again);
+        string after = JsonSerializer.Serialize(again, ProjectStore.Json);
+        if (after == before) return null;
+        var x = before.Split('\n'); var y = after.Split('\n');
+        int i = 0;
+        while (i < x.Length && i < y.Length && x[i] == y[i]) i++;
+        return $"ligne {i + 1} : « {(i < x.Length ? x[i].Trim() : "fin")} » devient « {(i < y.Length ? y[i].Trim() : "fin")} », {x.Length} → {y.Length} lignes";
+    }
+
+    /// <summary>
+    /// Scénario « client » : sur chaque page à lots d'un vrai inventaire, ce qu'un utilisateur fait pendant une longue séance.
+    /// Six ou sept lignes de description tapées sous un lot sur deux, dix lignes vides ajoutées sous un lot et remplies,
+    /// texte tapé séparé en rangées, numéros de lot tapés, cases de lot ajoutées sur des lignes de suite, lots mis à 0 et
+    /// replacés, rangées et lignes déplacées, « Synchroniser » ; et, toutes les quatre manipulations, un retour en arrière (↶)
+    /// qui doit rendre exactement l'état d'avant. Après chaque pas : mise en page contrôlée, projet fermé puis rouvert.
+    /// </summary>
+    public static int Scenario(string projectPath, string imagesDir, string outDir)
+    {
+        var project = JsonSerializer.Deserialize<InventoryProject>(File.ReadAllText(projectPath), ProjectStore.Json)!;
+        foreach (var p in project.Pages) PageAnalyzer.Upgrade(p);
+        var images = project.Pages.Select((p, k) => (p.Id, Img: Pgm.Read(Path.Combine(imagesDir, $"p{k + 1}.pgm")))).ToDictionary(x => x.Id, x => x.Img);
+        var baseH = project.Pages.ToDictionary(p => p.Id, PageLayout.BaseHeight);
+        _raw = new Dictionary<string, Raster>(images);
+        _baseH = baseH;
+        var problems = new List<string>();
+        int step = 0, undone = 0;
+        void Fail(int n, string what) { if (problems.Count < 200) problems.Add($"#{n} {what}"); }
+
+        Lots.SetTables(project, project.Pages.SelectMany(pg => Lots.LotTables(pg).Where(x => Lots.DefaultChoice(project, x.Table)).Select(x => x.Table)).ToHashSet());
+        Lots.CreateEmpty(project);
+        Lots.FillAutomatically(project);
+        After(project);
+        var sound = Integrity.Check(project);
+        var counts = new SortedDictionary<string, int>();
+
+        // Une manipulation, comme à l'écran : contrôles après, et un retour en arrière une fois sur quatre (puis refaite).
+        void Do(string op, int p, int ti, int o, int i, string args = "{}")
+        {
+            using var a = JsonDocument.Parse(args);
+            string before = JsonSerializer.Serialize(project, ProjectStore.Json);
+            for (int pass = 0; pass < 2; pass++)
+            {
+                step++;
+                counts[op] = counts.GetValueOrDefault(op) + 1;
+                try { Run(project, op, p, ti, o, i, a.RootElement); }
+                catch (Exception e) { Fail(step, $"{op} : ERREUR {e.GetType().Name} {e.Message}"); }
+                try
+                {
+                    var plan = After(project);
+                    Check(project, plan, _baseH, step, op, Fail);
+                    foreach (var x in Integrity.NewProblems(sound, Integrity.Check(project))) Fail(step, $"{op} : contrôle de l'application : {x}");
+                    if (Reopen(project) is { } diff) Fail(step, $"{op} : le projet change quand on le rouvre ({diff})");
+                }
+                catch (Exception e) { Fail(step, $"{op} (après) : ERREUR {e.GetType().Name} {e.Message}"); }
+                if (pass == 1 || step % 4 != 0) break;
+                // ↶ : l'état d'avant revient exactement (comme RestoreAsync), puis la manipulation est refaite.
+                project = JsonSerializer.Deserialize<InventoryProject>(before, ProjectStore.Json)!;
+                After(project);
+                undone++;
+                if (JsonSerializer.Serialize(project, ProjectStore.Json) != before) Fail(step, $"{op} : ↶ ne rend pas l'état d'avant");
+            }
+        }
+
+        List<(int Ti, int O, int I, PrintedLine Line)> Objects(int p) =>
+            project.Pages[p].Tables.SelectMany((t, ti) => !t.HasGrid || t.LotsOff || t.RowYs.Count < 2 ? [] :
+                Lots.RowOrder(t).SelectMany((r, o) => t.Rows[r].Lines.Select((l, i) => (Ti: ti, O: o, I: i, Line: l))))
+            .Where(x => Lots.HasCell(x.Line) && !x.Line.Deleted && x.Line.FirstText.Length > 0 && Rows.CanCopy(project.Pages[p], x.Line)).ToList();
+        // Les lignes sont suivies par l'identifiant de leur 1re case : après un ↶, le projet est un autre objet.
+        (int Ti, int O, int I)? Find(int p, PrintedLine? held)
+        {
+            string? key = held?.Cells.FirstOrDefault()?.Id;
+            if (string.IsNullOrEmpty(key)) return null;
+            var pg = project.Pages[p];
+            for (int ti = 0; ti < pg.Tables.Count; ti++)
+            {
+                var t = pg.Tables[ti];
+                var order = Lots.RowOrder(t);
+                for (int o = 0; o < order.Count; o++) { int i = t.Rows[order[o]].Lines.FindIndex(l => l.Cells.FirstOrDefault()?.Id == key); if (i >= 0) return (ti, o, i); }
+            }
+            return null;
+        }
+        string Lines(int n, string what) => "{\"lines\":[" + string.Join(",", Enumerable.Range(1, n).Select(k => $"\"{what} ligne {k} de description ajoutée\"")) + "]}";
+
+        int lot = 500;
+        for (int p = 0; p < project.Pages.Count; p++)
+        {
+            if (project.Pages[p].EndLots || Objects(p).Count == 0) continue;
+            string id = project.Pages[p].Id;
+            // 1) Six ou sept lignes de description sous un lot sur deux (au plus douze par page).
+            int n = 0;
+            foreach (var x in Objects(p).Where((_, k) => k % 2 == 0).Take(12).Select(x => x.Line).ToList())
+                if (Find(p, x) is { } at) Do("type", p, at.Ti, at.O, at.I, Lines(6 + n++ % 2, id));
+            // 2) Dix lignes vides sous le premier lot, remplies ; une sur trois agrandie à son tour.
+            if (Objects(p).FirstOrDefault().Line is { } first)
+                for (int k = 0; k < 10; k++)
+                {
+                    if (Find(p, first) is not { } at) break;
+                    Do("blank", p, at.Ti, at.O, at.I, $"{{\"above\":false,\"text\":\"{id} ligne ajoutée {k + 1}\"}}");
+                    if (k % 3 == 0 && Find(p, first) is { } again && again.O + 1 < Lots.RowOrder(project.Pages[p].Tables[again.Ti]).Count)
+                        Do("type", p, again.Ti, again.O + 1, 0, Lines(3, id + " suite"));
+                }
+            // 3) Texte tapé séparé en rangées (« Séparer ici » dans un texte de plusieurs lignes).
+            foreach (var x in Objects(p).Where(x => x.Line.Cells[0].Text.Split('\n').Length > 4).Take(3).Select(x => x.Line).ToList())
+                if (Find(p, x) is { } at) Do("typed", p, at.Ti, at.O, at.I, "{\"from\":3}");
+            // 4) Numéros tapés, « 12 bis », case de lot ajoutée sur une ligne de suite, lot 0, puis retour.
+            foreach (var x in Objects(p).Take(8).Select(x => x.Line).ToList())
+                if (Find(p, x) is { } at) Do("lot", p, at.Ti, at.O, at.I, $"{{\"v\":\"{(lot % 7 == 0 ? lot + " bis" : lot.ToString())}\"}}") ; else lot++;
+            lot += 10;
+            var suite = project.Pages[p].Tables.SelectMany(t => t.HasGrid && !t.LotsOff ? t.Rows.SelectMany(r => r.Lines.Skip(1)) : [])
+                .Where(l => !Lots.HasCell(l) && l.Kind == LineKind.Article && l.FirstText.Length > 0).Take(3).ToList();
+            foreach (var l in suite) if (Find(p, l) is { } at) { Do("addLot", p, at.Ti, at.O, at.I); Do("lot", p, at.Ti, at.O, at.I, $"{{\"v\":\"{lot++}\"}}"); }
+            var objs = Objects(p);
+            if (objs.Count > 3)
+            {
+                var z = objs[objs.Count / 2].Line;
+                if (Find(p, z) is { } at) Do("lot", p, at.Ti, at.O, at.I, "{\"v\":\"0\"}");
+                if (Find(p, z) is { } at2) Do("placeZero", p, at2.Ti, at2.O, at2.I, "{\"to\":1}");
+                if (Find(p, z) is { } at3) Do("lot", p, at3.Ti, at3.O, at3.I, $"{{\"v\":\"{lot++}\"}}");
+            }
+            // 5) Rangées et lignes déplacées (un lot monte, un autre descend ; une ligne sort de son bloc).
+            foreach (var (x, to) in Objects(p).Where((_, k) => k % 5 == 1).Take(4).Select((x, k) => (x.Line, k * 3 + 1)).ToList())
+                if (Find(p, x) is { } at) Do("moveRow", p, at.Ti, at.O, at.I, $"{{\"to\":{to}}}");
+            var inBlock = project.Pages[p].Tables.SelectMany(t => t.HasGrid ? t.Rows.Where(r => r.Lines.Count(l => l.FirstText.Length > 0) > 2).Select(r => r.Lines[1]) : [])
+                .Where(l => Rows.CanSplit(project.Pages[p], l)).Take(2).ToList();
+            foreach (var l in inBlock) if (Find(p, l) is { } at) Do("moveLine", p, at.Ti, at.O, at.I, "{\"to\":0}");
+            // 6) Synchroniser cette page, puis une ligne TOTAL.
+            if (Objects(p).FirstOrDefault().Line is { } any && Find(p, any) is { } s0) Do("sync", p, s0.Ti, s0.O, s0.I, $"{{\"page\":{p}}}");
+            if (Objects(p).LastOrDefault().Line is { } last && Find(p, last) is { } t0) Do("total", p, t0.Ti, t0.O, t0.I, "{\"mode\":\"page\",\"bold\":true}");
+        }
+
+        var final = After(project);
+        Directory.CreateDirectory(outDir);
+        File.WriteAllText(Path.Combine(outDir, "export.txt"), TxtExporter.Build(project).Text);
+        var drawn = project.Pages.Select(pg => pg.EndLots ? null : LotColumn.Draw(PageLayout.Stretch(ImageOf(images, pg), pg), pg)).ToList();
+        for (int k = 0; k < project.Pages.Count; k++)
+        {
+            var src = drawn[final.Pages[k].Template ?? k];
+            if (src is null) continue;
+            var crops = final.Pages[k].Pieces.Where(pc => pc.IsUnit).ToDictionary(pc => pc.Unit!, pc => (Arrangement.Crop?)Arrangement.UnitCrop(pc.Unit!, drawn[pc.Unit!.P]!));
+            var img = Arrangement.ComposePage(final, k, src, crops);
+            if (img.Height != final.Pages[k].Height) Fail(step, $"page {k + 1} : image {img.Height} ≠ plan {final.Pages[k].Height}");
+            Pgm.Write(Path.Combine(outDir, $"page{k + 1}.pgm"), img);
+        }
+        File.WriteAllText(Path.Combine(outDir, "project.json"), JsonSerializer.Serialize(project, ProjectStore.Json));
+        Console.WriteLine($"Scénario client : {step} manipulations ({string.Join(", ", counts.Select(c => $"{c.Key} {c.Value}"))}), {undone} retours en arrière, {project.Pages.Count} pages, {Lots.ObjectLines(project).Count()} objets.");
+        Console.WriteLine("Hauteurs des pages : " + string.Join(", ", project.Pages.Select((pg, k) => $"p{k + 1} {final.Pages[k].Height}")));
         Console.WriteLine(problems.Count == 0 ? "Aucun problème." : $"{problems.Count} problème(s) :\n" + string.Join("\n", problems.Take(30)));
         return problems.Count == 0 ? 0 : 1;
     }
@@ -323,6 +491,31 @@ public static class Stress
                             double cy = f.Box.Y + (f.Box.Height - l.Extra) / 2;
                             if (!(cy > t.RowYs[r] - 1 && cy < t.RowYs[r + 1] + 1)) fail(step, $"{op} : « {l.FirstText} » hors de sa rangée");
                         }
+            }
+        }
+        // Contrôles de plus : morceaux d'image cohérents, rangées jamais écrasées, texte agrandi qui ne recouvre rien, cases uniques.
+        var seen = new HashSet<string>();
+        foreach (var page in project.Pages)
+        {
+            foreach (var f in page.AllFields()) if (f.Id.Length > 0 && !seen.Add(f.Id)) fail(step, $"{op} : case {f.Id} en double");
+            if (page.EndLots) continue;
+            var seq = PageLayout.Pieces(page);
+            if (seq.Sum(x => x.N) != page.Height) fail(step, $"{op} : page {page.Id} morceaux {seq.Sum(x => x.N)} ≠ hauteur {page.Height}");
+            foreach (var x in seq) if (x.N <= 0 || x.Y0 < 0 || (!x.Extra && !x.Gap && x.Y0 + x.N > baseH[page.Id])) fail(step, $"{op} : page {page.Id} morceau hors de l'image ({x.Y0}+{x.N})");
+            foreach (var t in page.Tables)
+            {
+                if (!t.HasGrid || t.RowYs.Count < 2 || t.ColumnXs.Count < 2) continue;
+                for (int r = 0; r < t.Rows.Count && r + 1 < t.RowYs.Count; r++)
+                {
+                    if (t.RowYs[r + 1] - t.RowYs[r] < 4) fail(step, $"{op} : page {page.Id} rangée écrasée ({t.RowYs[r]}–{t.RowYs[r + 1]})");
+                    var lines = t.Rows[r].Lines;
+                    for (int i = 0; i < lines.Count; i++)
+                    {
+                        var l = lines[i];
+                        if (l.Extra <= 0) continue;
+                        if (t.RowYs[r + 1] < l.ExtraAt + l.Extra - 1) fail(step, $"{op} : « {l.FirstText} » agrandie hors de sa rangée");
+                    }
+                }
             }
         }
         foreach (var page in project.Pages.Where(pg => pg.Added != null))

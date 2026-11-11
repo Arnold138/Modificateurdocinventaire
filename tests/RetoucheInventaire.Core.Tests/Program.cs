@@ -116,7 +116,7 @@ if (args.Length > 0 && args[0] == "stress-fixtures")
 {
     // Projet de départ du banc d'essai fait des pages de test (pour la CI) : project.json + p1.pgm…
     var project = new InventoryProject();
-    foreach (var n in new[] { "page1", "page2", "page5" }) project.Pages.Add(Fixtures.Analyze(n));
+    foreach (var n in args.Length > 2 ? args.Skip(2).ToArray() : new[] { "page1", "page2", "page5" }) project.Pages.Add(Fixtures.Analyze(n));
     Directory.CreateDirectory(args[1]);
     File.WriteAllText(Path.Combine(args[1], "project.json"), System.Text.Json.JsonSerializer.Serialize(project, RetoucheInventaire.Core.Storage.ProjectStore.Json));
     for (int k = 0; k < project.Pages.Count; k++) Pgm.Write(Path.Combine(args[1], $"p{k + 1}.pgm"), Fixtures.Load(project.Pages[k].Id).Image);
@@ -156,6 +156,7 @@ if (args.Length > 0 && args[0] == "plan-dump")
     return 0;
 }
 if (args.Length > 0 && args[0] == "lotword") { foreach (var w in args.Skip(1)) Console.WriteLine(w + " -> " + (RetoucheInventaire.Core.Model.Lots.LotWord(w) ?? "null")); return 0; }
+if (args.Length > 0 && args[0] == "stress-scenario") return Stress.Scenario(args[1], args[2], args[3]);
 if (args.Length > 0 && args[0] == "stress-replay") return Stress.Replay(args[1], args[2], args[3], args[4]);
 if (args.Length > 0 && args[0] == "replay")
 {

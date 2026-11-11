@@ -47,6 +47,7 @@ public static class PageAnalyzer
         CleanReading(page);
         AssignIds(page);
         PageEdits.ApplyLocks(page);
+        page.Rev = CurrentRev;
     }
 
     /// <summary>Lecture corrigée : « I trémie » → « 1 trémie », « +1- 20 » → « +/- 20 » (le 1 et la barre / mal lus).</summary>
@@ -72,6 +73,14 @@ public static class PageAnalyzer
                     }
     }
 
+    /// <summary>Révision des pages lues par cette version (voir <see cref="Page.Rev"/>).</summary>
+    public const int CurrentRev = 1;
+
+    /// <summary>La mise en page a été retouchée (lignes ajoutées, séparées, agrandies, réduites, déplacées, supprimées).</summary>
+    private static bool LayoutTouched(Page page) =>
+        page.Inserts.Count > 0 || page.Tables.Any(t => t.RowOrder != null || t.Rows.Any(r => r.Inserted != null))
+        || page.AllLines().Any(l => l.Extra > 0 || l.Tall > 0 || l.Copy || l.Deleted);
+
     /// <summary>Recalcule les types de ligne (après une seconde lecture), sans toucher aux choix de l'utilisateur.</summary>
     public static void Reclassify(Page page)
     {
@@ -85,13 +94,22 @@ public static class PageAnalyzer
     /// </summary>
     public static void Upgrade(Page page)
     {
+        // Reprises d'une version précédente : une seule fois, et jamais sur une page dont la mise en page a été retouchée
+        // (des rangées agrandies changeaient la « rangée médiane » : à la réouverture, les autres étaient réunies ; une
+        // ligne vide ajoutée devenait un en-tête et perdait sa case de lot).
+        // Les autres reprises (lecture corrigée, lignes des pages ajoutées) aussi : une seule fois. Refaites à chaque
+        // ouverture, elles changeaient les cases de lot et le cadre des lignes d'une page ajoutée après coup.
+        bool old = page.Rev < CurrentRev;
+        bool migrate = old && !LayoutTouched(page);
+        page.Rev = CurrentRev;
+        var ids = page.AllFields().Select(f => f.Id).ToHashSet();
         int n = 0;
-        CleanReading(page);
+        if (old) CleanReading(page);
         // Page ajoutée d'une version précédente : « objet quand on y écrit » s'appelle maintenant AutoLot.
-        if (page.Added != null)
+        if (page.Added != null && old)
             foreach (var l in page.AllLines().Where(l => l.ForceLot && l.FirstText.Length == 0)) { l.ForceLot = false; l.AutoLot = true; }
         // Page ajoutée : une case n'y vient plus toute seule (seulement avec « + ») ; un numéro déjà tapé reste.
-        if (page.Added != null)
+        if (page.Added != null && old)
             foreach (var l in page.AllLines())
             {
                 if (l.Lot.Trim().Length > 0 && !l.ForceLot && !l.LotHere) { if (l.FirstText.Length > 0) l.ForceLot = true; else l.LotHere = true; }
@@ -102,7 +120,7 @@ public static class PageAnalyzer
             if (!t.HasGrid || t.ColumnXs.Count < 2 || t.RowYs.Count < 2) continue;
             var sizes = t.Rows.SelectMany(r => r.Lines).Select(l => l.Cells.FirstOrDefault()?.FontSize ?? 0).Where(v => v > 0).OrderBy(v => v).ToList();
             double em = sizes.Count > 0 ? sizes[sizes.Count / 2] : 12;
-            bool header = page.Added == null && MergeThinRowsOf(t); // page ajoutée : ses repères (Added) suivent ses filets
+            bool header = migrate && page.Added == null && MergeThinRowsOf(t); // page ajoutée : ses repères (Added) suivent ses filets
             for (int r = 0; r < t.Rows.Count && r + 1 < t.RowYs.Count; r++)
             {
                 var row = t.Rows[r];
@@ -113,15 +131,17 @@ public static class PageAnalyzer
                 for (int c = 0; c + 1 < t.ColumnXs.Count; c++)
                 {
                     var box = CellBox(t.ColumnXs[c], t.ColumnXs[c + 1], rowTop, rowBottom, top, bottom, RectD.Empty);
+                    string id;
+                    do id = $"{page.Id}-v{n++}"; while (!ids.Add(id)); // jamais deux cases avec le même identifiant
                     line.Cells.Add(new Field
                     {
-                        Id = $"{page.Id}-v{n++}", Column = c, Box = box, Align = c == 0 ? TextAlign.Left : TextAlign.Right, Indent = 4,
+                        Id = id, Column = c, Box = box, Align = c == 0 ? TextAlign.Left : TextAlign.Right, Indent = 4,
                         FontSize = Math.Min(em, Math.Max(6, box.Height / 1.05)),
                     });
                 }
                 row.Lines.Add(line);
             }
-            for (int r = 1; r < t.Rows.Count && page.Added == null; r++)
+            for (int r = 1; r < t.Rows.Count && page.Added == null && migrate; r++)
             {
                 var lines = t.Rows[r].Lines;
                 if (!LineClassifier.IsHeaderRow(lines)) continue;

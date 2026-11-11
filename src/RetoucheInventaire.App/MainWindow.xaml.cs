@@ -73,7 +73,12 @@ public sealed partial class MainWindow : Window
         }
         Root.KeyDown += Root_KeyDown;
         Root.Loaded += async (_, _) => await StartAsync();
-        Closed += (_, _) => Autosave();
+        Closed += (_, _) =>
+        {
+            Autosave();
+            SavePoint("fermeture de l'application");
+            try { _pointQueue.Wait(TimeSpan.FromSeconds(8)); } catch { /* sans importance */ }
+        };
     }
 
     private static readonly string LoupeFile = System.IO.Path.Combine(DataDir, "loupe.txt");
@@ -97,6 +102,8 @@ public sealed partial class MainWindow : Window
         else
             SetStatus("Prêt. Fonctionne sans Internet : aucun document ne quitte la tablette.");
 
+        _ = Task.Run(() => { try { RestorePoints.Prune(RestoreDir); } catch { /* sans importance */ } });
+        Journal("--- application lancée ---");
         // Fichier .inventaire donné au lancement (double-clic, « Ouvrir avec », essai automatique) : ouvert à la place du travail en cours.
         string? given = Environment.GetCommandLineArgs().Skip(1).FirstOrDefault(a => a.EndsWith(ProjectStore.Extension, StringComparison.OrdinalIgnoreCase) && File.Exists(a));
         if (given != null)
@@ -106,7 +113,7 @@ public sealed partial class MainWindow : Window
                 try
                 {
                     await OpenProjectAsync(given, rememberPath: true);
-                    SetStatus($"Projet ouvert : {System.IO.Path.GetFileName(given)} ({_project.Pages.Count} page(s)). Enregistrement continu dans ce fichier.");
+                    SetStatus($"Projet ouvert : {System.IO.Path.GetFileName(given)} ({_project.Pages.Count} page(s)). Enregistrement continu dans ce fichier." + SoundWarning());
                     ShowSaveState();
                 }
                 catch (Exception ex) { SetStatus($"Le projet {System.IO.Path.GetFileName(given)} n'a pas pu être ouvert : {ex.Message}"); }
@@ -123,12 +130,13 @@ public sealed partial class MainWindow : Window
                     await OpenProjectAsync(AutosavePath, rememberPath: false);
                     if (File.Exists(LastPathFile)) _projectPath = File.ReadAllText(LastPathFile).Trim() is { Length: > 0 } p ? p : null;
                     SetStatus($"Travail en cours rechargé ({_project.Pages.Count} page(s))."
-                              + (_projectPath is null ? "" : $" Enregistrement continu dans {System.IO.Path.GetFileName(_projectPath)}."));
+                              + (_projectPath is null ? "" : $" Enregistrement continu dans {System.IO.Path.GetFileName(_projectPath)}.") + SoundWarning());
                     ShowSaveState();
                 }
-                catch
+                catch (Exception ex)
                 {
-                    SetStatus("Le travail en cours n'a pas pu être rechargé.");
+                    LogError("rechargement du travail en cours", ex);
+                    SetStatus("Le travail en cours n'a pas pu être rechargé : Projet › Revenir à un état précédent… pour le retrouver.");
                 }
             });
         }
@@ -282,6 +290,7 @@ public sealed partial class MainWindow : Window
         // On revient sur la première page importée.
         if (_index != firstNew && firstNew < _project.Pages.Count) await ShowPageAsync(firstNew);
         Autosave();
+        Baseline($"import de {added} page(s)");
         UpdateCommands();
         SetStatus($"{added} page(s) ajoutée(s). Touchez une case pour la corriger ; ◀ ▶ en haut pour changer de page.");
     }
@@ -431,14 +440,20 @@ public sealed partial class MainWindow : Window
         var view = new PageView(Arrangement.ViewOf(_project, _plan, k), display, () => Lots.IsActive(_project),
             y => Arrangement.MapY(_plan.Pages[k], y), y => Arrangement.UnmapY(_plan.Pages[k], y));
         view.FieldFocused += (_, f) => { _currentField = f; _editSession = null; UpdateEditBar(); };
-        view.BeforeEdit += (_, f) => { if (_editSession != f) { PushUndo(); _editSession = f; } };
+        view.BeforeEdit += (_, f) => { if (_editSession != f) { string? outer = _guardLabel; _guardLabel ??= "saisie dans une case"; PushUndo(); _guardLabel = outer; _editSession = f; } };
         view.BeforeChange += _ => PushUndo();
         view.Edited += (v, f) =>
         {
-            if (v.LineOf(f) is { } line && Totals.IsComputedCell(line, f)) f.Manual = true; // total tapé : il ne bouge plus tout seul
-            AfterEdit(v, f);
-            UpdateEditBar();
-            ScheduleAutosave();
+            try
+            {
+                if (v.LineOf(f) is { } line && Totals.IsComputedCell(line, f)) f.Manual = true; // total tapé : il ne bouge plus tout seul
+                bool layout = AfterEdit(v, f);
+                // La rangée a grandi ou une case de lot est apparue : la mise en page est contrôlée, comme après une action.
+                if (layout && CheckLayout() is { Count: > 0 } broken) { _ = RollbackEditAsync(broken[0], null); return; }
+                UpdateEditBar();
+                ScheduleAutosave();
+            }
+            catch (Exception ex) { _ = RollbackEditAsync(ex.Message, ex); }
         };
         view.LocksChanged += _ => { ScheduleAutosave(); SetStatus("Zones verrouillées mises à jour."); };
         view.LotChanged += async (v, line, value) => await ApplyLotAsync(v, line, value);
@@ -551,7 +566,7 @@ public sealed partial class MainWindow : Window
                 ? "Touchez une case pour la corriger ; l'original s'affiche en loupe au-dessus."
                 : "Touchez une case pour la corriger.");
         if (keepScroll) DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () => PageScroller.ChangeView(scrollX, scrollY, scrollZoom, disableAnimation: true));
-        else if (fit) FitWidthSoon();
+        else if (fit) FitPageSoon();
         else PageScroller.ChangeView(null, 0, null, disableAnimation: true);
         if (focused != null && view.Shows(focused)) { _currentField = focused; view.Focus(focused); }
         UpdateCommands();
@@ -574,7 +589,7 @@ public sealed partial class MainWindow : Window
     /// Après une saisie : la rangée grandit si le texte passe sur plus de lignes (tout ce qui est en dessous descend),
     /// les totaux suivent, et si une ligne devient (ou cesse d'être) un objet, sa case de lot apparaît ou disparaît.
     /// </summary>
-    private void AfterEdit(PageView view, Field? field = null)
+    private bool AfterEdit(PageView view, Field? field = null)
     {
         var entry = field is null ? null : view.EntryOf(field);
         bool grew = entry != null && PageLayout.SetExtra(entry.Page, entry.Line, PageView.LineExtra(entry.Line));
@@ -588,8 +603,9 @@ public sealed partial class MainWindow : Window
             var after = _project.Pages.SelectMany(p => p.AllLines()).Where(Lots.HasCell).ToHashSet();
             lots = !before.SetEquals(after);
         }
-        if (grew || lots) _ = RedrawAsync(view);
+        if (grew || lots) Observe(RedrawAsync(view), "Redessiner la page");
         else if (changed.Count > 0) view.SyncFields(changed);
+        return grew || lots;
     }
 
     private Button? _syncButton;
@@ -689,7 +705,7 @@ public sealed partial class MainWindow : Window
         _project.SortLots = true;
         Replan();
         RecomputeTotals();
-        _ = RefreshViewAsync();
+        Observe(RefreshViewAsync(), "Réafficher la page");
         var objs = Lots.ObjectLines(_project).ToList();
         int filled = objs.Count(o => (before.GetValueOrDefault(o.Line) ?? "").Length == 0 && o.Line.Lot.Length > 0);
         int shifted = objs.Count(o => (before.GetValueOrDefault(o.Line) ?? "").Length > 0 && before[o.Line] != o.Line.Lot);
@@ -783,7 +799,7 @@ public sealed partial class MainWindow : Window
         PushUndo();
         _project.Pages.RemoveAt(i);
         Forget(page);
-        if (page.SourceEntry != null && _project.Pages.All(p => p.SourceEntry != page.SourceEntry)) _sources.Remove(page.SourceEntry);
+        if (page.SourceEntry != null && _project.Pages.All(p => p.SourceEntry != page.SourceEntry) && _sources.Remove(page.SourceEntry, out var gone)) _retired[page.SourceEntry] = gone;
         Lots.Resync(_project);
         _crops.Clear();
         RecomputeTotals();
@@ -1695,7 +1711,7 @@ public sealed partial class MainWindow : Window
         {
             _project.Pages.Remove(pg);
             Forget(pg);
-            if (pg.SourceEntry != null && _project.Pages.All(x => x.SourceEntry != pg.SourceEntry)) _sources.Remove(pg.SourceEntry);
+            if (pg.SourceEntry != null && _project.Pages.All(x => x.SourceEntry != pg.SourceEntry) && _sources.Remove(pg.SourceEntry, out var gone)) _retired[pg.SourceEntry] = gone;
         }
         if (_project.Pages.All(x => x.EndLots)) _project.Pages.Clear();
         Lots.Resync(_project);
@@ -1932,7 +1948,7 @@ public sealed partial class MainWindow : Window
         PushUndo();
         bool on = Strikes.SetColor(f, start, end, color);
         if (Strikes.TextColors.ContainsKey(color)) ColorBar.Fill = item.Icon is FontIcon icon ? icon.Foreground : ColorBar.Fill;
-        if (f.IsModified) _view.RefreshColors(); else _ = RedrawAsync(_view);
+        if (f.IsModified) _view.RefreshColors(); else Observe(RedrawAsync(_view), "Redessiner la page");
         string part = f.Text[start..end].Trim();
         SetStatus($"{(on ? $"En {item.Text.ToLowerInvariant()}" : "Couleur retirée")} : « {(part.Length > 40 ? part[..40] + "…" : part)} ».");
         _view.Focus(f);
@@ -2214,15 +2230,191 @@ public sealed partial class MainWindow : Window
 
     // ---------- Retour en arrière ----------
 
-    private readonly List<string> _undo = [];
+    private readonly List<byte[]> _undo = [];
     private Field? _editSession;
+    /// <summary>Nombre d'états gardés pour ↶ (compressés : une centaine tient en mémoire).</summary>
+    private const int UndoDepth = 100;
 
-    /// <summary>Mémorise l'état du projet avant une action (30 derniers états).</summary>
+    private string Snapshot() => System.Text.Json.JsonSerializer.Serialize(_project, ProjectStore.Json);
+
+    /// <summary>
+    /// Mémorise l'état du projet avant une action : dans la pile de ↶ (100 derniers états) et, sur le disque, dans un point
+    /// de restauration (Projet › Revenir à un état précédent…), qui reste après la fermeture de l'application.
+    /// </summary>
     private void PushUndo()
     {
-        _undo.Add(System.Text.Json.JsonSerializer.Serialize(_project, ProjectStore.Json));
-        if (_undo.Count > 30) _undo.RemoveAt(0);
+        string json = Snapshot();
+        _undo.Add(RestorePoints.Pack(json));
+        if (_undo.Count > UndoDepth) _undo.RemoveAt(0);
+        SavePoint("avant : " + (_guardLabel ?? "modification"), json);
         UpdateCommands();
+    }
+
+    // ---------- Sauvegarde d'urgence : points de restauration, contrôle de la mise en page, journal ----------
+
+    /// <summary>Points de restauration (états complets du projet, écrits avant chaque action).</summary>
+    private static readonly string RestoreDir = System.IO.Path.Combine(DataDir, "restauration");
+    /// <summary>États abîmés refusés par le contrôle (pour corriger l'application).</summary>
+    private static readonly string DiagnosticDir = System.IO.Path.Combine(DataDir, "diagnostic");
+    private static readonly string JournalFile = System.IO.Path.Combine(DataDir, "journal.log");
+
+    /// <summary>Action en cours (nom donné à son point de restauration).</summary>
+    private string? _guardLabel;
+    private int _guardDepth;
+    /// <summary>Problèmes de mise en page connus du projet (ceux d'avant ne bloquent pas : seuls les nouveaux comptent).</summary>
+    private Dictionary<string, string> _sound = [];
+    /// <summary>Sources des pages retirées pendant la session : ↶ les retrouve.</summary>
+    private readonly Dictionary<string, byte[]> _retired = [];
+    private Task _pointQueue = Task.CompletedTask;
+    private int _pointCount;
+
+    /// <summary>Écrit un point de restauration en arrière-plan (l'écran n'attend pas).</summary>
+    private void SavePoint(string label, string? json = null)
+    {
+        if (_project.Pages.Count == 0) return;
+        try
+        {
+            json ??= Snapshot();
+            var info = RestorePoints.Describe(_project, label, _sound.Count == 0);
+            var sources = new Dictionary<string, byte[]>(_sources);
+            var entries = _project.Pages.Select(p => p.SourceEntry).ToList();
+            bool prune = ++_pointCount % 150 == 0;
+            _pointQueue = _pointQueue.ContinueWith(_ =>
+            {
+                try
+                {
+                    RestorePoints.Save(RestoreDir, json, info, sources, entries);
+                    if (prune) RestorePoints.Prune(RestoreDir);
+                }
+                catch (Exception ex) { LogError("point de restauration", ex); }
+            }, TaskScheduler.Default);
+        }
+        catch (Exception ex) { LogError("point de restauration", ex); }
+    }
+
+    /// <summary>Journal des actions (journal.log) : ce qui a été fait, quand, et ce qui a été annulé.</summary>
+    private static void Journal(string text)
+    {
+        try
+        {
+            Directory.CreateDirectory(DataDir);
+            if (File.Exists(JournalFile) && new FileInfo(JournalFile).Length > 1_000_000)
+                File.Move(JournalFile, System.IO.Path.Combine(DataDir, "journal.1.log"), overwrite: true);
+            File.AppendAllText(JournalFile, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {text}\n");
+        }
+        catch { /* sans importance */ }
+    }
+
+    /// <summary>Garde l'état abîmé qu'une action allait laisser (dossier « diagnostic », 20 derniers) pour corriger l'application.</summary>
+    private void KeepBroken(string what, List<string> problems)
+    {
+        try
+        {
+            Directory.CreateDirectory(DiagnosticDir);
+            string name = System.IO.Path.Combine(DiagnosticDir, $"{DateTime.Now:yyyyMMdd-HHmmss}.json.gz");
+            File.WriteAllBytes(name, RestorePoints.Pack(Snapshot()));
+            File.WriteAllText(System.IO.Path.ChangeExtension(name, ".txt"), what + "\n" + string.Join("\n", problems));
+            foreach (var old in new DirectoryInfo(DiagnosticDir).GetFiles().OrderByDescending(f => f.Name).Skip(40)) old.Delete();
+        }
+        catch { /* sans importance */ }
+    }
+
+    /// <summary>Contrôle la mise en page après un changement ; renvoie les problèmes nouveaux (vide : tout va bien, état retenu comme sain).</summary>
+    private List<string> CheckLayout(Dictionary<string, string>? before = null)
+    {
+        var now = Integrity.Check(_project);
+        var broken = Integrity.NewProblems(before ?? _sound, now);
+        if (broken.Count == 0) _sound = now;
+        return broken;
+    }
+
+    /// <summary>Projet ouvert ou rechargé : son état devient la référence du contrôle, et un point de restauration est écrit.</summary>
+    private void Baseline(string label)
+    {
+        try { _sound = Integrity.Check(_project); } catch (Exception ex) { LogError("contrôle", ex); _sound = []; }
+        Journal($"{label} : « {_project.Name} », {_project.Pages.Count} page(s)" + (_sound.Count > 0 ? $", {_sound.Count} défaut(s) de mise en page déjà là : {string.Join(" ; ", _sound.Values.Take(5))}" : ""));
+        SavePoint(label);
+    }
+
+    private async void RestorePoint_Click(object sender, RoutedEventArgs e) => await RestorePointDialogAsync();
+
+    private void BackupFolder_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Directory.CreateDirectory(DataDir);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"\"{DataDir}\"") { UseShellExecute = true });
+        }
+        catch (Exception ex) { SetStatus($"Dossier de secours : {DataDir} ({ex.Message})"); }
+    }
+
+    private static string When(DateTime d) =>
+        d.Date == DateTime.Today ? $"aujourd'hui {d:HH:mm:ss}" : d.Date == DateTime.Today.AddDays(-1) ? $"hier {d:HH:mm:ss}" : $"{d:dd/MM/yyyy HH:mm:ss}";
+
+    /// <summary>
+    /// Projet › « Revenir à un état précédent… » : la liste des points de restauration (avant chaque action, même d'un autre
+    /// jour ou d'un autre projet). L'état actuel est d'abord gardé : revenir en arrière ne fait jamais rien perdre.
+    /// </summary>
+    private async Task RestorePointDialogAsync()
+    {
+        if (_busy) return;
+        Autosave();
+        try { await _pointQueue; } catch { /* déjà noté */ }
+        var points = await Task.Run(() => RestorePoints.List(RestoreDir));
+        if (points.Count == 0)
+        {
+            await ShowMessageAsync("Aucun état précédent", "Aucun point de restauration pour l'instant : il s'en crée un avant chaque action, dès maintenant.");
+            return;
+        }
+        var list = new StackPanel { Spacing = 2 };
+        var boxes = new List<(RadioButton Box, RestorePoints.Info Info)>();
+        foreach (var pt in points.Take(300))
+        {
+            string detail = $"« {pt.Name} » · {pt.Pages} page(s), {pt.Lots} lot(s), {pt.Edits} case(s) modifiée(s)" + (pt.Sound ? "" : " · ⚠ mise en page déjà abîmée");
+            var box = Choice("points", $"{When(pt.When)} · {pt.Label}", detail, boxes.Count == 0);
+            boxes.Add((box, pt));
+            list.Children.Add(box);
+        }
+        var panel = new StackPanel { Spacing = 10 };
+        panel.Children.Add(new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap, Opacity = 0.8,
+            Text = "Chaque ligne est l'état complet du document à ce moment-là (texte, lots, lignes ajoutées, pages). Le plus récent est en haut. L'état actuel est gardé lui aussi : vous pourrez y revenir par cette même liste.",
+        });
+        panel.Children.Add(new ScrollViewer { Content = list, MaxHeight = 460 });
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot, Title = $"Revenir à un état précédent ({points.Count})", Content = panel,
+            PrimaryButtonText = "Revenir à cet état", CloseButtonText = "Annuler", DefaultButton = ContentDialogButton.Close,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        var chosen = boxes.Where(b => b.Box.IsChecked == true).Select(b => b.Info).FirstOrDefault();
+        if (chosen is null) return;
+        await RunBusyAsync(async () =>
+        {
+            // L'état actuel d'abord : sur le disque (point) et dans ↶.
+            if (_project.Pages.Count > 0)
+            {
+                string now = Snapshot();
+                _undo.Add(RestorePoints.Pack(now));
+                if (_undo.Count > UndoDepth) _undo.RemoveAt(0);
+                SavePoint("avant de revenir à un état précédent", now);
+                foreach (var (k, v) in _sources) _retired[k] = v;
+            }
+            var (project, sources) = await Task.Run(() => RestorePoints.Load(RestoreDir, chosen));
+            ClearAll();
+            _project = project;
+            foreach (var pg in _project.Pages) RetoucheInventaire.Core.Analysis.PageAnalyzer.Upgrade(pg);
+            Lots.Resync(_project);
+            _crops.Clear();
+            foreach (var (k, v) in sources) _sources[k] = v;
+            await ShowPageAsync(0);
+            int missing = _project.Pages.Count(pg => pg.SourceEntry != null && !_sources.ContainsKey(pg.SourceEntry));
+            Baseline($"retour à l'état du {chosen.When:dd/MM/yyyy HH:mm:ss} ({chosen.Label})");
+            SetStatus($"Document revenu à l'état du {When(chosen.When)} ({chosen.Label}). ↶ revient à l'état d'avant."
+                      + (missing > 0 ? $" Attention : l'image de {missing} page(s) n'a pas été retrouvée." : ""));
+            ScheduleAutosave();
+        });
     }
 
     /// <summary>Action refusée juste après PushUndo : l'état mémorisé est retiré.</summary>
@@ -2249,12 +2441,16 @@ public sealed partial class MainWindow : Window
     private async Task UndoAsync()
     {
         if (_busy || _undo.Count == 0) return;
-        string snap = _undo[^1];
+        string snap = RestorePoints.Unpack(_undo[^1]);
         _undo.RemoveAt(_undo.Count - 1);
+        SavePoint("avant : annuler (↶)"); // l'état annulé reste retrouvable (Projet › Revenir à un état précédent…)
         await RunBusyAsync(async () =>
         {
             await RestoreAsync(snap);
-            SetStatus("Dernière action annulée.");
+            try { _sound = Integrity.Check(_project); } catch { _sound = []; }
+            Journal("↶ annuler");
+            SetStatus($"Dernière action annulée ({_undo.Count} retour(s) encore possible(s))."
+                      + (_sound.Count > 0 ? " La mise en page était déjà abîmée à ce moment-là : ↶ encore, ou Projet › Revenir à un état précédent…" : ""));
             ScheduleAutosave();
         });
     }
@@ -2266,6 +2462,9 @@ public sealed partial class MainWindow : Window
         var flats = _flats.ToDictionary(kv => kv.Key.Id, kv => (Key: ImageKey(kv.Key), Image: kv.Value));
         var oriented = _oriented.ToDictionary(kv => kv.Key.Id, kv => (Key: kv.Key.QuarterTurns + "|" + kv.Key.SourceEntry, Image: kv.Value));
         _project = System.Text.Json.JsonSerializer.Deserialize<InventoryProject>(snap, ProjectStore.Json) ?? _project;
+        // Page retirée puis remise : sa source revient avec elle (sinon la page n'avait plus d'image).
+        foreach (var entry in _project.Pages.Select(p => p.SourceEntry).Where(x => x != null).Distinct())
+            if (!_sources.ContainsKey(entry!) && _retired.TryGetValue(entry!, out var bytes)) _sources[entry!] = bytes;
         _flats.Clear(); _oriented.Clear(); _recent.Clear();
         foreach (var p in _project.Pages)
         {
@@ -2292,23 +2491,79 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private async Task GuardAsync(string what, Func<Task> work)
     {
-        string snap = System.Text.Json.JsonSerializer.Serialize(_project, ProjectStore.Json);
+        string snap = Snapshot();
         int undo = _undo.Count;
-        try { await work(); }
+        string? outer = _guardLabel;
+        Dictionary<string, string> before;
+        try { before = Integrity.Check(_project); } catch { before = _sound; }
+        _sound = before;
+        Exception? failure = null;
+        List<string> broken = [];
+        _guardLabel = what;
+        _guardDepth++;
+        try
+        {
+            await work();
+            // L'action s'est faite : la mise en page est contrôlée. Un seul problème nouveau et tout est annulé.
+            broken = CheckLayout(before);
+        }
+        catch (Exception ex) { failure = ex; }
+        finally { _guardLabel = outer; _guardDepth--; }
+        if (failure is null && broken.Count == 0)
+        {
+            if (_undo.Count > undo) Journal(what);
+            return;
+        }
+        if (failure != null) LogError(what, failure);
+        else
+        {
+            LogError(what, new InvalidOperationException("Mise en page abîmée, action annulée : " + string.Join(" ; ", broken.Take(12))));
+            KeepBroken(what, broken);
+        }
+        Journal($"{what} : ANNULÉE ({(failure != null ? failure.Message : string.Join(" ; ", broken.Take(3)))})");
+        try
+        {
+            while (_undo.Count > undo) _undo.RemoveAt(_undo.Count - 1);
+            _busy = false;
+            await RestoreAsync(snap);
+            _sound = before;
+        }
+        catch (Exception again) { LogError(what + " (remise en état)", again); }
+        _busy = false;
+        Progress.Visibility = Visibility.Collapsed;
+        UpdateCommands();
+        ScheduleAutosave();
+        SetStatus(failure != null
+            ? $"« {what} » n'a pas pu se faire : rien n'a changé, vous pouvez continuer. (Détail noté dans erreurs.log : {failure.Message})"
+            : $"« {what} » aurait abîmé la mise en page ({broken[0]}) : l'action a été annulée, rien n'a changé. Vous pouvez continuer.");
+    }
+
+    /// <summary>
+    /// Saisie dans une case qui casse la mise en page ou échoue : retour à l'état d'avant cette case (celui mémorisé quand on
+    /// y est entré), comme pour les autres actions.
+    /// </summary>
+    private async Task RollbackEditAsync(string why, Exception? ex)
+    {
+        LogError("Saisie", ex ?? new InvalidOperationException("Mise en page abîmée, saisie annulée : " + why));
+        Journal($"Saisie : ANNULÉE ({why})");
+        if (_undo.Count == 0) return;
+        string snap = RestorePoints.Unpack(_undo[^1]);
+        _undo.RemoveAt(_undo.Count - 1);
+        try { await RestoreAsync(snap); _sound = Integrity.Check(_project); }
+        catch (Exception again) { LogError("Saisie (remise en état)", again); }
+        UpdateCommands();
+        ScheduleAutosave();
+        SetStatus($"Cette saisie aurait abîmé la mise en page ({why}) : la case est revenue à son état d'avant. Vous pouvez continuer.");
+    }
+
+    /// <summary>Tâche lancée sans l'attendre (redessiner) : une erreur est notée et l'écran réaffiché, jamais perdue.</summary>
+    private async void Observe(Task task, string what)
+    {
+        try { await task; }
         catch (Exception ex)
         {
             LogError(what, ex);
-            try
-            {
-                while (_undo.Count > undo) _undo.RemoveAt(_undo.Count - 1);
-                _busy = false;
-                await RestoreAsync(snap);
-            }
-            catch (Exception again) { LogError(what + " (remise en état)", again); }
-            _busy = false;
-            Progress.Visibility = Visibility.Collapsed;
-            UpdateCommands();
-            SetStatus($"« {what} » n'a pas pu se faire : rien n'a changé, vous pouvez continuer. (Détail noté dans erreurs.log : {ex.Message})");
+            try { await RefreshViewAsync(); } catch (Exception again) { LogError(what + " (réaffichage)", again); }
         }
     }
 
@@ -2316,9 +2571,17 @@ public sealed partial class MainWindow : Window
     public void OnUnexpectedError(Exception ex)
     {
         LogError("erreur imprévue", ex);
+        Journal($"erreur imprévue : {ex.Message}");
         _busy = false;
-        try { Progress.Visibility = Visibility.Collapsed; UpdateCommands(); _ = RefreshViewAsync(); } catch { /* sans importance */ }
-        SetStatus($"Une erreur est survenue ({ex.Message}). Vous pouvez continuer ; ↶ revient à l'état d'avant si besoin.");
+        // Si l'erreur a laissé la mise en page abîmée : retour immédiat au dernier état mémorisé.
+        try
+        {
+            var broken = CheckLayout();
+            if (broken.Count > 0 && _undo.Count > 0 && _guardDepth == 0) { _ = RollbackEditAsync(broken[0], ex); return; }
+        }
+        catch { /* le réaffichage ci-dessous suffit */ }
+        try { Progress.Visibility = Visibility.Collapsed; UpdateCommands(); Observe(RefreshViewAsync(), "réaffichage"); } catch { /* sans importance */ }
+        SetStatus($"Une erreur est survenue ({ex.Message}). Vous pouvez continuer ; ↶ revient à l'état d'avant, et Projet › Revenir à un état précédent… à n'importe quel moment.");
     }
 
     // ---------- Exports ----------
@@ -2361,6 +2624,20 @@ public sealed partial class MainWindow : Window
                 string.Join("\n", result.Warnings.Take(8)) + (result.Warnings.Count > 8 ? $"\n… et {result.Warnings.Count - 8} autre(s)." : ""));
     }
 
+    // « Enregistrer sous » (à droite d'Exporter) : le document tel qu'à l'écran, dans le dossier et sous le nom choisis.
+
+    private void SaveAsMenu_Opening(object sender, object e)
+    {
+        int images = _project.Pages.Count(p => p.Source == PageSource.Image);
+        SaveAsPdfItem.IsEnabled = images > 0;
+        SaveAsPdfItem.Text = images > 1 ? $"PDF ({images} pages)…" : "PDF…";
+    }
+
+    private async void SaveAsPdf_Click(object sender, RoutedEventArgs e) =>
+        await ExportJpegAsync(_project.Pages.Where(p => p.Source == PageSource.Image).ToList(), pdf: true, suffix: "");
+
+    private void SaveAsTxt_Click(object sender, RoutedEventArgs e) => ExportTxt_Click(sender, e);
+
     private async void ExportJpeg_Click(object sender, RoutedEventArgs e) =>
         await ExportJpegAsync(_project.Pages.Where(p => p.Source == PageSource.Image).ToList());
 
@@ -2374,7 +2651,7 @@ public sealed partial class MainWindow : Window
     /// Export des pages (photos et PDF), totaux recalculés avant : chaque page telle qu'à l'écran (corrections, lots, lots 0,
     /// pages « lots de fin », lignes ajoutées). <paramref name="pdf"/> : un seul fichier PDF (une page par page), sinon un JPEG par page.
     /// </summary>
-    private async Task ExportJpegAsync(List<ModelPage> targets, bool pdf = false)
+    private async Task ExportJpegAsync(List<ModelPage> targets, bool pdf = false, string suffix = " - modifié")
     {
         if (targets.Count == 0) { SetStatus("Pas de photo ni de PDF à exporter (les TXT, CSV et XLSX s'exportent en .txt)."); return; }
         StorageFolder? folder = null;
@@ -2384,7 +2661,7 @@ public sealed partial class MainWindow : Window
             var save = new FileSavePicker
             {
                 SuggestedStartLocation = PickerLocationId.DocumentsLibrary,
-                SuggestedFileName = _project.Name + (targets.Count == 1 && _project.Pages.Count(p => p.Source == PageSource.Image) > 1 ? $" - page {_project.Pages.IndexOf(targets[0]) + 1}" : "") + " - modifié",
+                SuggestedFileName = _project.Name + (targets.Count == 1 && _project.Pages.Count(p => p.Source == PageSource.Image) > 1 ? $" - page {_project.Pages.IndexOf(targets[0]) + 1}" : "") + suffix,
             };
             save.FileTypeChoices.Add("Document PDF", new List<string> { ".pdf" });
             InitPicker(save);
@@ -2457,7 +2734,7 @@ public sealed partial class MainWindow : Window
             }
             int skipped = pdf && targets.Count > 1 ? _project.Pages.Count(p => p.Source != PageSource.Image) : 0;
             SetStatus((pdf
-                          ? $"PDF exporté : « {pdfFile!.Name} », {done} page(s), chacune telle qu'à l'écran (totaux recalculés)."
+                          ? $"PDF enregistré : « {pdfFile!.Name} », {done} page(s), chacune telle qu'à l'écran (totaux recalculés)."
                             + (skipped > 0 ? $" {skipped} page(s) TXT/CSV/XLSX non comprise(s) (elles s'exportent en .txt)." : "")
                           : $"{done} image(s) JPEG exportée(s) dans « {folder!.Name} » (nom d'origine + « - modifié »).")
                       + (plan.Moving.Any(u => u.Kind == "zero") && plan.Dest != null
@@ -2517,7 +2794,7 @@ public sealed partial class MainWindow : Window
         {
             await OpenProjectAsync(file.Path, rememberPath: true);
             RememberProjectPath();
-            SetStatus($"Projet ouvert : {file.Name} ({_project.Pages.Count} page(s)). Les modifications y sont enregistrées automatiquement.");
+            SetStatus($"Projet ouvert : {file.Name} ({_project.Pages.Count} page(s)). Les modifications y sont enregistrées automatiquement." + SoundWarning());
             ScheduleAutosave();
         });
     }
@@ -2548,12 +2825,22 @@ public sealed partial class MainWindow : Window
         _crops.Clear();
         foreach (var (k, v) in sources) _sources[k] = v;
         _projectPath = rememberPath ? path : null;
+        _undo.Clear();
         await ShowPageAsync(0);
+        Baseline("ouverture");
     }
+
+    /// <summary>Document dont la mise en page est déjà abîmée à l'ouverture : dit, avec le moyen de revenir avant.</summary>
+    private string SoundWarning() => _sound.Count == 0 ? ""
+        : $" Attention : sa mise en page a {_sound.Count} défaut(s) ({_sound.Values.First()}). Projet › Revenir à un état précédent… permet de revenir avant.";
 
     private async void New_Click(object sender, RoutedEventArgs e)
     {
-        if (_project.Pages.Count > 0 && !await ConfirmAsync("Nouveau projet ?", "Les pages actuelles seront fermées. Pensez à enregistrer ou exporter avant.")) return;
+        if (_project.Pages.Count > 0 && !await ConfirmAsync("Nouveau projet ?", "Les pages actuelles seront fermées. Pensez à enregistrer ou exporter avant. (Elles restent retrouvables : Projet › Revenir à un état précédent…)")) return;
+        SavePoint("avant : Nouveau projet");
+        Journal("Nouveau projet");
+        _undo.Clear();
+        _sound = [];
         ClearAll();
         _project = new InventoryProject();
         _projectPath = null;
@@ -2591,6 +2878,7 @@ public sealed partial class MainWindow : Window
     {
         _autosaveTimer.Stop();
         if (_project.Pages.Count == 0) return;
+        if (_guardDepth > 0) { _autosaveTimer.Start(); return; } // une action est en cours : on n'enregistre pas un état à moitié fait
         try
         {
             Directory.CreateDirectory(DataDir);
@@ -2788,11 +3076,12 @@ public sealed partial class MainWindow : Window
         CropButton.IsEnabled = !_busy && page?.Source == PageSource.Image && !page.EndLots && page.Added == null;
         LockToggle.IsEnabled = !_busy && page != null && !page.EndLots;
         MoveToggle.IsEnabled = !_busy && page != null && !page.EndLots;
-        LotsButton.IsEnabled = ExportButton.IsEnabled = EditButton.IsEnabled = !_busy && n > 0;
+        LotsButton.IsEnabled = ExportButton.IsEnabled = SaveAsButton.IsEnabled = EditButton.IsEnabled = !_busy && n > 0;
         SyncItem.IsEnabled = Lots.IsActive(_project);
         RemovePageItem.IsEnabled = page != null;
         UndoButton.IsEnabled = !_busy && _undo.Count > 0;
         SaveItem.IsEnabled = RenameItem.IsEnabled = n > 0;
+        RestoreItem.IsEnabled = !_busy;
         Pager.Visibility = n > 0 ? Visibility.Visible : Visibility.Collapsed;
         PageLabel.Content = n > 0 ? $"{_index + 1} / {n}" : "";
         PagePrev.IsEnabled = !_busy && _index > 0;
@@ -2832,12 +3121,37 @@ public sealed partial class MainWindow : Window
 
     // ---------- Zoom ----------
 
-    /// <summary>Ajuste le zoom pour que la page (et sa colonne de lots) tienne en largeur.</summary>
+    /// <summary>Vrai : la page est montrée en entier (vue d'ensemble) ; faux : en pleine largeur (bouton ⟷).</summary>
+    private bool _wholePage = true;
+
+    /// <summary>
+    /// Vue d'ensemble : la page entière (avec sa colonne de lots et ses boutons) tient dans la fenêtre, en largeur et en
+    /// hauteur. C'est le zoom de chaque page qu'on ouvre (import, ◀ ▶, liste des pages) : jamais d'agrandissement tout seul.
+    /// </summary>
+    private void FitPageSoon() => DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
+    {
+        if (CurrentPage is not { } page || PageScroller.ViewportWidth <= 0 || PageScroller.ViewportHeight <= 0) return;
+        PagesPanel.UpdateLayout();
+        // Taille du contenu sans zoom : la page, sa marge de gauche (lots, poignées) et la ligne de boutons au-dessus.
+        double width = Math.Max(page.Width + PageView.GutterWidth + 36, PagesPanel.ActualWidth);
+        double height = Math.Max(_view?.Host.ActualHeight ?? 0, PagesPanel.ActualHeight);
+        if (height <= 0) height = page.Height + 100;
+        // Page devenue très longue (beaucoup de lignes ajoutées) : la vue d'ensemble montre l'équivalent d'une feuille,
+        // le reste se fait défiler (sinon le texte deviendrait illisible).
+        height = Math.Min(height, page.Width * 1.45 + 80);
+        double fit = Math.Min(PageScroller.ViewportWidth / width, PageScroller.ViewportHeight / height);
+        float zoom = (float)Math.Clamp(fit, PageScroller.MinZoomFactor, 1.0);
+        _wholePage = true;
+        PageScroller.ChangeView(0, 0, zoom, disableAnimation: true);
+    });
+
+    /// <summary>Pleine largeur : la page (et sa colonne de lots) tient en largeur, on fait défiler vers le bas.</summary>
     private void FitWidthSoon() => DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
     {
         if (CurrentPage is not { } page || PageScroller.ViewportWidth <= 0) return;
         double width = page.Width + PageView.GutterWidth + 36;
         float zoom = (float)Math.Clamp(PageScroller.ViewportWidth / width, PageScroller.MinZoomFactor, 1.5);
+        _wholePage = false;
         PageScroller.ChangeView(0, 0, zoom, disableAnimation: true);
     });
 
@@ -2846,7 +3160,11 @@ public sealed partial class MainWindow : Window
 
     private void ZoomIn_Click(object sender, RoutedEventArgs e) => Zoom(1.25);
     private void ZoomOut_Click(object sender, RoutedEventArgs e) => Zoom(1 / 1.25);
-    private void ZoomFit_Click(object sender, RoutedEventArgs e) => FitWidthSoon();
+    /// <summary>Bouton ⟷ : passe de la vue d'ensemble à la pleine largeur, et inversement.</summary>
+    private void ZoomFit_Click(object sender, RoutedEventArgs e)
+    {
+        if (_wholePage) FitWidthSoon(); else FitPageSoon();
+    }
 
     private async Task ShowMessageAsync(string title, string message)
     {

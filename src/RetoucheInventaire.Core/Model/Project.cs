@@ -278,6 +278,11 @@ public sealed class Page
     public bool EndLots { get; set; }
     /// <summary>Page ajoutée (« Ajouter une page ») : vierge sur le modèle d'une autre, voir <see cref="AddedPage"/> ; null pour une page importée.</summary>
     public AddedInfo? Added { get; set; }
+    /// <summary>
+    /// Reprises d'une version précédente déjà faites (<see cref="Analysis.PageAnalyzer.Upgrade"/>) : 1 pour une page lue par cette
+    /// version ou déjà reprise. Elles ne sont faites qu'une fois : rouvrir un projet ne change jamais sa mise en page.
+    /// </summary>
+    public int Rev { get; set; }
 
     public IEnumerable<PrintedLine> AllLines() =>
         Tables.SelectMany(t => t.Rows).SelectMany(r => r.Lines).Concat(LooseLines);

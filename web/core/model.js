@@ -57,6 +57,7 @@ export function analyze(page, image, rawWords, grids = null) {
   cleanReading(page);
   assignIds(page);
   applyLocks(page);
+  page.Rev = CURRENT_REV;
 }
 
 /** Lecture corrigée : « I trémie » → « 1 trémie », « +1- 20 » → « +/- 20 » (le 1 et la barre / mal lus). */
@@ -80,6 +81,14 @@ export function cleanReading(page, align = true) {
         }
 }
 
+/** Révision des pages lues par cette version : les reprises d'une version précédente ne sont faites qu'une fois. */
+export const CURRENT_REV = 1;
+
+/** La mise en page a été retouchée (lignes ajoutées, séparées, agrandies, réduites, déplacées, supprimées). */
+const layoutTouched = (page) => (page.Inserts ?? []).length > 0
+  || page.Tables.some((t) => t.RowOrder || t.Rows.some((r) => r.Inserted))
+  || [...allLines(page)].some((l) => (l.Extra ?? 0) > 0 || (l.Tall ?? 0) > 0 || l.Copy || l.Deleted);
+
 export function reclassify(page) { for (const t of page.Tables) classify(t); }
 
 /**
@@ -87,12 +96,19 @@ export function reclassify(page) { for (const t of page.Tables) classify(t); }
  * rangée de libellés sans désignation (« exploitation réalisation » d'un récapitulatif) → en-tête. Rien d'autre ne change.
  */
 export function upgradePage(page) {
+  // Reprises d'une version précédente : une seule fois, et jamais sur une page dont la mise en page a été retouchée
+  // (rouvrir un projet ne doit jamais changer sa mise en page).
+  // Les autres reprises (lecture corrigée, lignes des pages ajoutées) aussi : une seule fois.
+  const old = (page.Rev ?? 0) < CURRENT_REV;
+  const migrate = old && !layoutTouched(page);
+  page.Rev = CURRENT_REV;
+  const ids = new Set([...allFields(page)].map((f) => f.Id));
   let n = 0;
-  cleanReading(page);
+  if (old) cleanReading(page);
   // Page ajoutée d'une version précédente : « objet quand on y écrit » s'appelle maintenant AutoLot.
-  if (page.Added) for (const l of allLines(page)) if (l.ForceLot && !firstText(l)) { l.ForceLot = false; l.AutoLot = true; }
+  if (page.Added && old) for (const l of allLines(page)) if (l.ForceLot && !firstText(l)) { l.ForceLot = false; l.AutoLot = true; }
   // Page ajoutée : une case n'y vient plus toute seule (seulement avec « + ») ; un numéro déjà tapé reste.
-  if (page.Added) for (const l of allLines(page)) {
+  if (page.Added && old) for (const l of allLines(page)) {
     if ((l.Lot ?? '').trim() && !l.ForceLot && !l.LotHere) { if (firstText(l)) l.ForceLot = true; else l.LotHere = true; }
     l.AutoLot = true; // ligne de page ajoutée (même ajoutée avant cette version)
   }
@@ -100,7 +116,7 @@ export function upgradePage(page) {
     if (t.HasGrid === false || !(t.ColumnXs?.length >= 2) || !(t.RowYs?.length >= 2)) continue;
     const sizes = t.Rows.flatMap((r) => r.Lines).map((l) => l.Cells[0]?.FontSize ?? 0).filter((v) => v > 0).sort((a, b) => a - b);
     const em = sizes.length > 0 ? sizes[Math.trunc(sizes.length / 2)] : 12;
-    const header = page.Added ? false : mergeThinRowsOf(t); // page ajoutée : ses repères (Added) suivent ses filets
+    const header = !migrate || page.Added ? false : mergeThinRowsOf(t); // page ajoutée : ses repères (Added) suivent ses filets
     t.Rows.forEach((row, r) => {
       if (row.Lines.length > 0 || r + 1 >= t.RowYs.length) return;
       const rowTop = t.RowYs[r], rowBottom = t.RowYs[r + 1];
@@ -108,12 +124,15 @@ export function upgradePage(page) {
       const line = { Kind: r === 0 && header ? 'EnTete' : 'Article', KindChosenByUser: false, OutsideTable: false, Cells: [], Lot: '', LotManual: false, NoLot: false, ForceLot: false, Extra: 0, ExtraAt: 0 };
       for (let c = 0; c + 1 < t.ColumnXs.length; c++) {
         const box = cellBox(t.ColumnXs[c], t.ColumnXs[c + 1], rowTop, rowBottom, top, bottom, Rect.empty());
-        line.Cells.push(newField({ Id: `${page.Id}-v${n++}`, Column: c, Box: box, Align: c === 0 ? 'Left' : 'Right', Indent: 4, FontSize: Math.min(em, Math.max(6, box.Height / 1.05)) }));
+        let id;
+        do id = `${page.Id}-v${n++}`; while (ids.has(id)); // jamais deux cases avec le même identifiant
+        ids.add(id);
+        line.Cells.push(newField({ Id: id, Column: c, Box: box, Align: c === 0 ? 'Left' : 'Right', Indent: 4, FontSize: Math.min(em, Math.max(6, box.Height / 1.05)) }));
       }
       row.Lines.push(line);
     });
     t.Rows.forEach((row, r) => {
-      if (page.Added || r === 0 || !isHeaderRow(row.Lines)) return;
+      if (!migrate || page.Added || r === 0 || !isHeaderRow(row.Lines)) return;
       if (!row.Lines.every((l) => blank(l.Cells[0]?.Text ?? '') || isRomanHeading(l.Cells[0].Text))) return;
       for (const l of row.Lines) if (!l.KindChosenByUser && !l.OutsideTable) l.Kind = 'EnTete';
     });

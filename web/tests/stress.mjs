@@ -325,7 +325,35 @@ function chooseApp() {
   const x = pick(all.filter((y) => y.line.MoveTo)); return x && ['unmoveLot', x, {}];
 }
 
+/**
+ * Profil « client » (PROFIL=client) : ce qui est fait sur un vrai inventaire. Beaucoup de texte ajouté sous les objets
+ * (5 à 8 lignes de description), des numéros de lot tapés, des lots et des lignes déplacés, des lots 0.
+ */
+function chooseClient() {
+  const r = random();
+  const all = targets(hasText);
+  if (!all.length) return null;
+  const objs = targets((x) => hasText(x) && hasLotCell(x.line) && !x.table.LotsOff);
+  const lines = (n) => Array.from({ length: n }, () => `${word()} description ajoutée à la main sur cet objet`);
+  if (r < 0.30) { const x = pick((objs.length ? objs : all).filter((y) => canCopyLine(y.page, y.line))); return x && ['type', x, { lines: lines(5 + Math.floor(random() * 4)) }]; }
+  if (r < 0.36) { const x = pick(all.filter((y) => canCopyLine(y.page, y.line))); return x && ['type', x, { lines: lines(1 + Math.floor(random() * 3)) }]; }
+  if (r < 0.48) { const x = pick(objs); return x && ['lot', x, { v: chance(0.2) ? '0' : chance(0.1) ? '' : chance(0.1) ? `${1 + Math.floor(random() * 60)} bis` : String(1 + Math.floor(random() * 300)) }]; }
+  if (r < 0.54) { const x = pick(all.filter((y) => !hasLotCell(y.line) && !y.table.LotsOff && y.line.Kind === 'Article')); return x && ['addLot', x, {}]; }
+  if (r < 0.59) return ['sync', all[0], { page: chance(0.5) ? all[Math.floor(random() * all.length)].p : null }];
+  if (r < 0.69) { const x = pick(all); return x && ['moveRow', x, { to: Math.floor(random() * rowOrder(x.table).length) }]; }
+  if (r < 0.76) { const x = pick(all.filter((y) => y.row.Lines.filter((l) => firstText(l)).length > 1)); return x && ['moveLine', x, { to: Math.floor(random() * rowOrder(x.table).length) }]; }
+  if (r < 0.81) { const x = pick(objs.filter((y) => isZeroLot(y.line))); return x && ['placeZero', x, { to: Math.floor(random() * rowOrder(x.table).length) }]; }
+  if (r < 0.86) { const x = pick(all.filter((y) => y.line.Cells[0].Text.includes('\n') && canCopyLine(y.page, y.line))); return x && ['typed', x, { from: 1 + Math.floor(random() * (x.line.Cells[0].Text.split('\n').length - 1)) }]; }
+  if (r < 0.90) {
+    const xs = all.filter((y) => /mot\d+/.test(y.line.Cells[0].Text));
+    const x = pick(xs);
+    return x && ['removeWord', x, { w: pick(x.line.Cells[0].Text.match(/mot\d+/g)) }];
+  }
+  return null;
+}
+
 function choose() {
+  if (process.env.PROFIL === 'client' && random() < 0.6) { const c = chooseClient(); if (c) return c; }
   if (process.env.APP && chance(0.4)) return chooseApp();
   if (!process.env.NOADDED && random() < Number(process.env.ADDED ?? 0.25)) return chooseAdded();
   const r = random();

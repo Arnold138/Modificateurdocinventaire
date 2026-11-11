@@ -15,6 +15,8 @@ public static class Fixtures
     {
         get
         {
+            // Autre jeu de pages (document d'un client, gardé hors du dépôt) : variable RETOUCHE_FIXTURES.
+            if (Environment.GetEnvironmentVariable("RETOUCHE_FIXTURES") is { Length: > 0 } other) return other;
             var d = AppContext.BaseDirectory;
             while (d != null && !Directory.Exists(Path.Combine(d, "tests", "fixtures"))) d = Path.GetDirectoryName(d);
             return d is null ? throw new DirectoryNotFoundException("tests/fixtures introuvable") : Path.Combine(d, "tests", "fixtures");

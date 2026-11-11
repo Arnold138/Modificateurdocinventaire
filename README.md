@@ -91,6 +91,10 @@ Ensuite, plus besoin d'Internet. Pour une nouvelle version : refaire les étapes
 
 Au premier **Enregistrer**, choisir où ranger le projet (`.inventaire`). Ensuite **chaque modification est enregistrée automatiquement** dans ce fichier, une seconde après la frappe et à la fermeture ; l'heure du dernier enregistrement s'affiche en haut à droite. Avant ce premier choix, le travail est déjà gardé dans une copie de secours, rechargée au lancement suivant.
 
+**Enregistrer sous** (à droite d'Exporter, sur Windows) : le document en **PDF**, en **texte (.txt)** ou le **projet**, dans le dossier et sous le nom de votre choix.
+
+**Si quelque chose se passe mal** (Windows) : **↶** annule les 100 dernières actions. **Projet › Revenir à un état précédent…** donne la liste des états du document, un avant chaque action, même après avoir fermé l'application : choisir l'heure voulue, puis « Revenir à cet état ». **Projet › Dossier de secours** ouvre le dossier à envoyer (journal.log, erreurs.log) en cas de problème.
+
 ## Compiler
 
 **Sans Visual Studio** : pousser ce dossier dans un dépôt GitHub. Le workflow `.github/workflows/build.yml` lance les tests puis compile l'exe sur un Windows de GitHub (onglet *Actions* → *Artifacts*) :

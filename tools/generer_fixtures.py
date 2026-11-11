@@ -13,7 +13,7 @@ import csv, glob, gzip, io, os, subprocess, sys, tempfile
 from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FIX = os.path.join(ROOT, "tests", "fixtures")
+FIX = os.environ.get("RETOUCHE_FIXTURES") or os.path.join(ROOT, "tests", "fixtures")
 EXE = os.path.join(ROOT, "tests", "RetoucheInventaire.Core.Tests", "bin", "Release", "net10.0", "RetoucheInventaire.Core.Tests")
 
 

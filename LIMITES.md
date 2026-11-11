@@ -59,7 +59,7 @@
 - **Tableau sans filets** : les lots 0 n'y bougent pas (seul le .txt les place après le dernier lot).
 - **Page « Lots de fin »** : composée sur la dernière page à lots qui la précède (marge du haut, rangées refaites à son tableau, filet du bas, même hauteur) ; l'en-tête du tableau n'y est pas recopié. Elle se remplit jusqu'à la hauteur du tableau modèle, puis une autre page s'ajoute juste après. Créée et retirée automatiquement : on ne la recadre pas, on n'y verrouille rien, on n'y retire rien (retaper un numéro y suffit). Dans le .txt, ses lignes sont à sa place dans l'ordre des pages.
 - **Supprimer cette ligne** emporte ses lignes de suite (texte sans montant) jusqu'au prochain objet ; une ligne supprimée seule dans sa rangée retire toute la rangée. Les numéros des autres lots ne changent pas (« Synchroniser » pour renuméroter). ↶ ou **Retirer… › Remettre les lignes supprimées** (page affichée) la remet.
-- **Retour en arrière** : 30 actions, pendant la session (pas après avoir fermé l'app). Le texte tapé dans une case compte pour une seule action jusqu'à ce qu'on change de case.
+- **Retour en arrière (↶)** sur Windows : 100 actions pendant la session ; le texte tapé dans une case compte pour une seule action jusqu'à ce qu'on change de case. Après avoir fermé l'app, ou pour revenir plus loin : **Projet › Revenir à un état précédent…** (voir « Sauvegarde d'urgence »). Sur iPhone/iPad : 30 actions, pendant la session.
 - **Orthographe** : correcteur de l'appareil (iPhone/iPad, Windows), en français si le clavier est en français. Il n'est actif que dans la désignation.
 
 ## Lignes ajoutées (Ligne vide, Dupliquer, Séparer ici)
@@ -152,3 +152,19 @@
 - **Dossier sur iPhone/iPad** : « Un dossier entier » dépend de la version d'iOS ; sinon, compresser le dossier dans Fichiers (appui long → Compresser) et importer le .zip, ou sélectionner toutes les photos du dossier.
 - **Photos très grandes** : lues à 4000 px maximum, pages redressées à 2400 px maximum.
 - **OCR français** : doit être présent dans Windows (c'est le cas sur un Windows en français ; sinon voir le README).
+
+## Sauvegarde d'urgence (Windows)
+
+- **Points de restauration** : avant chaque action (et à l'ouverture, après un import, avant ↶, avant « Nouveau projet », à la fermeture), l'état complet du document est écrit sur le disque. **Projet › Revenir à un état précédent…** en donne la liste (date, heure, action qui allait être faite, nombre de pages, de lots et de cases modifiées). L'état actuel est gardé lui aussi avant de revenir en arrière : on ne perd rien en essayant.
+- Les 400 derniers points sont tous gardés ; avant, un toutes les dix minutes, pendant 60 jours. Les images des pages sont gardées une seule fois (une page retirée ou un projet remplacé par un nouveau se retrouvent).
+- Ils sont sur l'ordinateur, dans le dossier de l'application (**Projet › Dossier de secours**), pas dans le fichier `.inventaire` : ils ne suivent pas le projet sur un autre ordinateur.
+- **Contrôle de la mise en page** après chaque action et chaque saisie qui agrandit une rangée : si l'action a abîmé quelque chose (rangée écrasée, traits dans le désordre, ligne sortie de sa rangée, case de lot perdue, image incohérente), elle est annulée toute seule et un message le dit. L'état refusé est gardé dans `diagnostic` (20 derniers) pour corriger l'application. Un défaut qui était déjà dans le document avant l'action ne bloque pas.
+- Un document déjà abîmé par une version précédente n'est pas réparé tout seul : l'application le signale à l'ouverture. Il n'a pas de point de restauration d'avant cette version.
+- **Journal** (`journal.log`, même dossier) : chaque action avec son heure, celles qui ont été annulées et pourquoi ; `erreurs.log` garde le détail technique.
+- **Rouvrir un document ne change plus rien** : les reprises d'une version précédente (rangées fines réunies, en-têtes, lignes des pages ajoutées, lecture corrigée) ne sont faites qu'une fois, et jamais sur une page dont la mise en page a été retouchée.
+
+## Zoom et « Enregistrer sous » (Windows)
+
+- **Chaque page s'ouvre en vue d'ensemble** (page entière dans la fenêtre), à l'import comme en passant d'une page à l'autre ; plus d'agrandissement à 150 %. Le bouton ⟷ passe à la pleine largeur, et inversement. Une page devenue très longue (beaucoup de lignes ajoutées) s'ouvre à l'échelle d'une feuille : le reste se fait défiler.
+- **Enregistrer sous** (à droite d'Exporter) : PDF, texte (.txt) ou projet (.inventaire), dans le dossier et sous le nom choisis. Le PDF est le même que celui d'Exporter (une image par page, texte non sélectionnable).
+- Une page où l'on ajoute beaucoup de lignes **s'allonge** ; elle n'est pas encore coupée toute seule en plusieurs pages de la taille d'une feuille (dans le PDF, une page longue est une page plus haute).

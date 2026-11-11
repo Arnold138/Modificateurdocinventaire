@@ -1271,6 +1271,131 @@ public static class Tests
         Check(a.Height <= Math.Max(H, PageLayout.BaseHeight(a)) || !AddedPage.CanBeModel(a), "la page ne grandit pas");
     }
 
+    /// <summary>Tableau d'un seul gros bloc (pages « location longue durée ») : en-tête dont l'écriture déborde, bloc de quatre lignes.</summary>
+    private static Page BlockPage()
+    {
+        static Field F(string id, int col, string text, double x, double y, double w, double h, double inkY, double inkH) =>
+            new() { Id = id, Column = col, Text = text, OriginalText = text, Box = new RectD(x, y, w, h), Ink = new RectD(x + 4, inkY, w / 2, inkH), FontSize = 24 };
+        static PrintedLine L(LineKind kind, string id, string text, double y, double inkY, double inkH) =>
+            new() { Kind = kind, Cells = [F(id + "a", 0, text, 60, y, 1000, 34, inkY, inkH), new Field { Id = id + "b", Column = 1, Box = new RectD(1070, y, 190, 34), FontSize = 24 }] };
+        var table = new Table
+        {
+            Bounds = new RectD(60, 100, 1200, 400), HasGrid = true, ColumnXs = [60, 1065, 1260], RowYs = [100, 140, 500],
+            Rows =
+            [
+                new Row { Lines = [L(LineKind.EnTete, "h", "V - VEHICULE EN LOCATION", 103, 86, 66)] },   // encre lue plus haute que la rangée
+                new Row { Lines = [L(LineKind.Article, "w", "VASP RENAULT CLIO", 190, 194, 26), L(LineKind.Article, "x", "EN LOCATION CHEZ DIAC", 230, 234, 26), L(LineKind.Article, "y", "N° contrat : F0206246", 270, 274, 26), L(LineKind.Article, "z", "Durée : 36 mois", 310, 314, 26)] },
+            ],
+        };
+        return new Page { Id = "bloc", Source = PageSource.Image, Width = 1300, Height = 600, Tables = [table], Rev = PageAnalyzer.CurrentRev };
+    }
+
+    public static void T_Reduire_ne_coupe_jamais_dans_le_texte()
+    {
+        // Avant : les marges « habituelles » venaient de l'en-tête (négatives) ; séparer ou déplacer une ligne du bloc
+        // réduisait sa rangée de plus que sa hauteur (filets dans le désordre, lignes sorties de leur rangée).
+        var page = BlockPage();
+        var p = new InventoryProject { Pages = [page] };
+        var before = Integrity.Check(p);
+        var t = page.Tables[0];
+        var y = t.Rows[1].Lines[2];
+        Check(Rows.Split(page, y), "séparer");
+        Check(Rows.SplitBelow(page, y), "séparer en dessous");
+        foreach (var l in t.Rows.SelectMany(r => r.Lines).ToList()) Rows.TrimRow(page, l);
+        if (Environment.GetEnvironmentVariable("DBG") != null) Console.WriteLine(string.Join(" ", t.RowYs) + " | " + string.Join(" ", page.Inserts.Select(b => $"{b.Kind}@{b.At}{b.Height:+0;-0}")) + " | " + string.Join(" ", t.Rows.SelectMany(r => r.Lines).Select(l => $"{l.Cells[0].Ink.Top}-{l.Cells[0].Ink.Bottom}")));
+        Equal("", string.Join(" ; ", Integrity.NewProblems(before, Integrity.Check(p))), "mise en page saine après séparer + réduire");
+        for (int r = 0; r + 1 < t.RowYs.Count; r++)
+            foreach (var f in t.Rows[r].Lines.SelectMany(l => l.Cells).Where(f => !f.Ink.IsEmpty && r > 0))
+                Check(f.Ink.Top >= t.RowYs[r] && f.Ink.Bottom <= t.RowYs[r + 1], $"écriture de « {f.Text} » dans sa rangée");
+        foreach (var l in t.Rows.SelectMany(r => r.Lines).ToList()) Rows.UntrimRow(page, l);
+        Rows.RemoveAdded(page, t.Rows[3].Lines[0]);
+        Rows.RemoveAdded(page, y);
+        Equal(600, page.Height, "tout défait : hauteur d'origine");
+        Equal(3, t.RowYs.Count, "tout défait : filets d'origine");
+    }
+
+    public static void T_Rouvrir_un_projet_ne_change_rien()
+    {
+        // Avant : à chaque ouverture, les rangées « fines » étaient réunies. Après avoir agrandi la moitié des rangées
+        // (description tapée sur 6 lignes), les autres devenaient « fines » : réunies, lots perdus, sans retour possible.
+        var p = new InventoryProject();
+        p.Pages.Add(Fixtures.Analyze("page1"));
+        var page = p.Pages[0];
+        Lots.CreateEmpty(p);
+        Lots.FillAutomatically(p);
+        var t = page.Tables.First(x => x.HasGrid && x.Rows.Count > 8);
+        int rows = t.Rows.Count, n = 0;
+        foreach (var row in t.Rows.ToList())
+        {
+            var l = row.Lines[0];
+            if (!Rows.CanCopy(page, l) || n++ % 5 >= 3) continue; // deux rangées sur cinq restent à leur hauteur, côte à côte
+            l.Cells[0].Text += "\nligne 2\nligne 3\nligne 4\nligne 5\nligne 6\nligne 7";
+            PageLayout.SetExtra(page, l, PageLayout.ExtraFor(l, l.Cells[0], 7, l.Cells[0].FontSize));
+        }
+        Lots.Resync(p);
+        int lots = Lots.ObjectLines(p).Count();
+        Equal(null, Stress.Reopen(p), "projet identique après réouverture");
+        page.Rev = 0; // projet enregistré par une version précédente
+        string json = System.Text.Json.JsonSerializer.Serialize(p, RetoucheInventaire.Core.Storage.ProjectStore.Json);
+        var again = System.Text.Json.JsonSerializer.Deserialize<InventoryProject>(json, RetoucheInventaire.Core.Storage.ProjectStore.Json)!;
+        foreach (var pg in again.Pages) PageAnalyzer.Upgrade(pg);
+        Lots.Resync(again);
+        Equal(rows, again.Pages[0].Tables.First(x => x.HasGrid && x.Rows.Count > 8).Rows.Count, "rangées gardées (projet d'une version précédente)");
+        Equal(lots, Lots.ObjectLines(again).Count(), "lots gardés");
+        Equal(0, Integrity.Check(again).Count, "mise en page saine");
+    }
+
+    public static void T_Controle_de_la_mise_en_page()
+    {
+        var p = new InventoryProject();
+        foreach (var n in new[] { "page1", "page2", "page5" }) p.Pages.Add(Fixtures.Analyze(n));
+        Lots.CreateEmpty(p);
+        Lots.FillAutomatically(p);
+        var sound = Integrity.Check(p);
+        var t = p.Pages[0].Tables.First(x => x.HasGrid && x.Rows.Count > 4);
+        t.RowYs[3] = t.RowYs[2] - 5;
+        Check(Integrity.NewProblems(sound, Integrity.Check(p)).Count > 0, "filets dans le désordre : vu");
+        t.RowYs[3] = t.RowYs[2] + 30;
+        var f = t.Rows[1].Lines[0].Cells[0];
+        f.Box = f.Box with { Y = f.Box.Y + 900 };
+        Check(Integrity.NewProblems(sound, Integrity.Check(p)).Any(x => x.Contains("sortie de sa rangée")), "case sortie de sa rangée : vue");
+    }
+
+    public static void T_Points_de_restauration()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "retouche-points-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var p = new InventoryProject { Name = "Essai" };
+            p.Pages.Add(Fixtures.Analyze("page5"));
+            p.Pages[0].SourceEntry = "sources/page5.jpg";
+            var sources = new Dictionary<string, byte[]> { ["sources/page5.jpg"] = File.ReadAllBytes(Path.Combine(Fixtures.Dir, "page5.jpg")) };
+            string Json() => System.Text.Json.JsonSerializer.Serialize(p, RetoucheInventaire.Core.Storage.ProjectStore.Json);
+            Check(RetoucheInventaire.Core.Storage.RestorePoints.Save(dir, Json(), RetoucheInventaire.Core.Storage.RestorePoints.Describe(p, "import", true), sources, p.Pages.Select(x => x.SourceEntry)) != null, "1er point écrit");
+            Check(RetoucheInventaire.Core.Storage.RestorePoints.Save(dir, Json(), RetoucheInventaire.Core.Storage.RestorePoints.Describe(p, "rien", true), sources, p.Pages.Select(x => x.SourceEntry)) == null, "projet identique : pas de point en double");
+            var field = p.Pages[0].Tables[0].Rows[1].Lines[0].Cells[0];
+            string original = field.Text;
+            field.Text = "corrigé";
+            RetoucheInventaire.Core.Storage.RestorePoints.Save(dir, Json(), RetoucheInventaire.Core.Storage.RestorePoints.Describe(p, "avant : Retirer la page", true), sources, p.Pages.Select(x => x.SourceEntry));
+            // La page est retirée, sa source aussi, puis un nouveau projet est commencé : le point suffit à tout retrouver.
+            p.Pages.Clear();
+            sources.Clear();
+            var list = RetoucheInventaire.Core.Storage.RestorePoints.List(dir);
+            Equal(2, list.Count, "deux points");
+            Equal("avant : Retirer la page", list[0].Label, "le plus récent d'abord");
+            Equal(1, list[0].Edits, "une case modifiée");
+            var (back, src) = RetoucheInventaire.Core.Storage.RestorePoints.Load(dir, list[0]);
+            Equal("corrigé", back.Pages[0].Tables[0].Rows[1].Lines[0].Cells[0].Text, "texte retrouvé");
+            Check(src.TryGetValue("sources/page5.jpg", out var img) && img.Length > 1000, "image source retrouvée");
+            var (first, _) = RetoucheInventaire.Core.Storage.RestorePoints.Load(dir, list[1]);
+            Equal(original, first.Pages[0].Tables[0].Rows[1].Lines[0].Cells[0].Text, "état d'avant retrouvé");
+            RetoucheInventaire.Core.Storage.RestorePoints.Prune(dir);
+            Equal(2, RetoucheInventaire.Core.Storage.RestorePoints.List(dir).Count, "ménage : points récents gardés");
+            Equal(1, Directory.GetFiles(Path.Combine(dir, "sources")).Length, "source gardée une seule fois");
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
     public static void T_Reduire_la_rangee()
     {
         var p = new InventoryProject();

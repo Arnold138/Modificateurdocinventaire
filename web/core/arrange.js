@@ -549,7 +549,7 @@ export function syncEndPages(project) {
     }
     const model = tpl ?? project.Pages.find((pg) => !pg.EndLots && pg.Tables.length) ?? project.Pages[0];
     project.Pages.splice(at, 0, {
-      Id: `fin-${Date.now().toString(36)}-${endCounter++}`, EndLots: true, Source: 'Image', SourceName: 'Lots de fin', SourceEntry: null,
+      Id: `fin-${Date.now().toString(36)}-${endCounter++}`, EndLots: true, Rev: 1, Source: 'Image', SourceName: 'Lots de fin', SourceEntry: null,
       Width: model?.Width ?? 1000, Height: model?.Height ?? 1400, QuarterTurns: 0, Crop: null, Skew: 0, Tables: [], LooseLines: [], LockZones: [],
     });
   }

@@ -357,7 +357,7 @@ public static class Arrangement
             var model = ends.Count > 0 ? ends[0] : project.Pages.FirstOrDefault(pg => !pg.EndLots && pg.Tables.Count > 0) ?? project.Pages.FirstOrDefault();
             project.Pages.Insert(at, new Page
             {
-                Id = "fin-" + Guid.NewGuid().ToString("N")[..8], EndLots = true, Source = PageSource.Image,
+                Id = "fin-" + Guid.NewGuid().ToString("N")[..8], EndLots = true, Rev = Analysis.PageAnalyzer.CurrentRev, Source = PageSource.Image,
                 SourceName = ends.Count == 0 ? "Lots de fin" : $"Lots de fin {ends.Count + 1}",
                 Width = model?.Width ?? 1000, Height = model?.Height ?? 1400,
             });

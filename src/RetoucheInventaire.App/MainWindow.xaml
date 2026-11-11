@@ -46,6 +46,14 @@
                             <MenuFlyoutItem x:Name="RenameItem" Text="Renommer" Click="Rename_Click">
                                 <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8AC;" /></MenuFlyoutItem.Icon>
                             </MenuFlyoutItem>
+                            <MenuFlyoutSeparator />
+                            <!-- Sauvegarde d'urgence : l'état complet du document avant chaque action, gardé sur le disque. -->
+                            <MenuFlyoutItem x:Name="RestoreItem" Text="Revenir à un état précédent…" Click="RestorePoint_Click">
+                                <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE81C;" /></MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
+                            <MenuFlyoutItem Text="Dossier de secours (journal, points de restauration)" Click="BackupFolder_Click">
+                                <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE838;" /></MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
                         </MenuFlyout>
                     </Button.Flyout>
                 </Button>
@@ -69,7 +77,7 @@
                 <Button Style="{StaticResource RoundButton}" Click="ZoomOut_Click" ToolTipService.ToolTip="Dézoomer">
                     <FontIcon Glyph="&#xE71F;" FontSize="15" />
                 </Button>
-                <Button Style="{StaticResource RoundButton}" Click="ZoomFit_Click" ToolTipService.ToolTip="Ajuster à la largeur">
+                <Button Style="{StaticResource RoundButton}" Click="ZoomFit_Click" ToolTipService.ToolTip="Vue d'ensemble (page entière) ⟷ pleine largeur">
                     <FontIcon Glyph="&#xE9A6;" FontSize="15" />
                 </Button>
                 <Button Style="{StaticResource RoundButton}" Click="ZoomIn_Click" ToolTipService.ToolTip="Zoomer">
@@ -90,6 +98,7 @@
                 <ColumnDefinition Width="*" MaxWidth="170" />
                 <ColumnDefinition Width="*" MaxWidth="170" />
                 <ColumnDefinition Width="*" MaxWidth="170" />
+                <ColumnDefinition Width="*" MaxWidth="190" />
             </Grid.ColumnDefinitions>
             <Button x:Name="PhotoButton" Grid.Column="0" Style="{StaticResource AccentTabButton}" Click="Photo_Click"
                     ToolTipService.ToolTip="Photographier un inventaire avec la caméra de la tablette">
@@ -192,6 +201,27 @@
                         </MenuFlyoutItem>
                         <MenuFlyoutItem x:Name="ExportTxtItem" Text="Fichier texte (.txt)" Click="ExportTxt_Click">
                             <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                    </MenuFlyout>
+                </Button.Flyout>
+            </Button>
+            <!-- Enregistrer sous : le document tel qu'à l'écran, en PDF ou en texte, dans le dossier et sous le nom choisis. -->
+            <Button x:Name="SaveAsButton" Grid.Column="8" Style="{StaticResource TabButton}"
+                    ToolTipService.ToolTip="Enregistrer le document en PDF ou en texte (.txt), dans le dossier et sous le nom de votre choix">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon Glyph="&#xE792;" FontSize="20" />
+                    <TextBlock Text="Enregistrer sous" VerticalAlignment="Center" />
+                </StackPanel>
+                <Button.Flyout>
+                    <MenuFlyout Placement="BottomEdgeAlignedRight" Opening="SaveAsMenu_Opening">
+                        <MenuFlyoutItem x:Name="SaveAsPdfItem" Text="PDF…" Click="SaveAsPdf_Click">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEA90;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem x:Name="SaveAsTxtItem" Text="Texte (.txt)…" Click="SaveAsTxt_Click">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem Text="Projet (.inventaire)…" Click="Save_Click">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE74E;" /></MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
                     </MenuFlyout>
                 </Button.Flyout>

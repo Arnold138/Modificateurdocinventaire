@@ -890,6 +890,60 @@ test('Ajouter des lignes : page blanche, 60 lignes, la suite sur une page blanch
   eq(p.Pages.indexOf(blank) + 1, p.Pages.indexOf(res.pages[0]), 'page suivante juste après');
 });
 
+test('Réduire ne coupe jamais dans le texte (gros bloc, en-tête dont l\'écriture déborde)', () => {
+  // Même page que T_Reduire_ne_coupe_jamais_dans_le_texte (Windows) : séparer une ligne du bloc écrasait sa rangée.
+  const F = (id, col, text, x, y, w, h, inkY, inkH) => ({ Id: id, Column: col, Text: text, OriginalText: text, Box: { X: x, Y: y, Width: w, Height: h },
+    Ink: text ? { X: x + 4, Y: inkY, Width: w / 2, Height: inkH } : Rect.empty(), FontSize: 24, Align: 'Left', Indent: 0, Locked: false, Strikes: [], Colors: [], Manual: false });
+  const L = (kind, id, text, y, inkY, inkH) => ({ Kind: kind, KindChosenByUser: false, OutsideTable: false, Lot: '', LotManual: false, NoLot: false, ForceLot: false, Extra: 0, ExtraAt: 0,
+    Cells: [F(id + 'a', 0, text, 60, y, 1000, 34, inkY, inkH), F(id + 'b', 1, '', 1070, y, 190, 34, 0, 0)] });
+  const table = { Bounds: { X: 60, Y: 100, Width: 1200, Height: 400 }, HasGrid: true, ColumnXs: [60, 1065, 1260], RowYs: [100, 140, 500], Rows: [
+    { Bounds: Rect.empty(), Lines: [L('EnTete', 'h', 'V - VEHICULE EN LOCATION', 103, 86, 66)] },
+    { Bounds: Rect.empty(), Lines: [L('Article', 'w', 'VASP RENAULT CLIO', 190, 194, 26), L('Article', 'x', 'EN LOCATION CHEZ DIAC', 230, 234, 26), L('Article', 'y', 'N° contrat : F0206246', 270, 274, 26), L('Article', 'z', 'Durée : 36 mois', 310, 314, 26)] },
+  ] };
+  const page = { Id: 'bloc', Source: 'Image', Width: 1300, Height: 600, Tables: [table], LooseLines: [], LockZones: [], Inserts: [], Rev: 1 };
+  const y = table.Rows[1].Lines[2];
+  check(splitAt(page, y), 'séparer');
+  check(splitBelow(page, y), 'séparer en dessous');
+  for (const l of table.Rows.flatMap((r) => r.Lines)) trimRow(page, l);
+  for (let r = 0; r + 1 < table.RowYs.length; r++) {
+    check(table.RowYs[r + 1] - table.RowYs[r] >= 20, `rangée ${r} pas écrasée (${table.RowYs[r]}–${table.RowYs[r + 1]})`);
+    if (r > 0) for (const f of table.Rows[r].Lines.flatMap((l) => l.Cells)) if (!Rect.isEmpty(f.Ink))
+      check(f.Ink.Y >= table.RowYs[r] && Rect.bottom(f.Ink) <= table.RowYs[r + 1], `écriture de « ${f.Text} » dans sa rangée`);
+  }
+  for (const l of table.Rows.flatMap((r) => r.Lines)) untrimRow(page, l);
+  removeAddedRow(page, table.Rows[3].Lines[0]);
+  removeAddedRow(page, y);
+  eq(600, page.Height, 'tout défait : hauteur d\'origine');
+  eq(3, table.RowYs.length, 'tout défait : filets d\'origine');
+});
+
+test('Rouvrir un projet ne change rien (rangées agrandies : les autres ne sont plus réunies)', () => {
+  const p = fromPages(['page1']);
+  const page = p.Pages[0];
+  createEmptyLots(p); fillLotsAutomatically(p);
+  const t = page.Tables.find((x) => x.HasGrid !== false && x.Rows.length > 8);
+  const rows = t.Rows.length;
+  let n = 0;
+  for (const row of [...t.Rows]) {
+    const l = row.Lines[0];
+    if (!canCopyLine(page, l) || n++ % 5 >= 3) continue; // deux rangées sur cinq restent à leur hauteur, côte à côte
+    l.Cells[0].Text += '\nligne 2\nligne 3\nligne 4\nligne 5\nligne 6\nligne 7';
+    setExtra(page, l, extraFor(l, l.Cells[0], 7, l.Cells[0].FontSize));
+  }
+  resyncLots(p);
+  const lots = [...objectLines(p)].length;
+  for (const rev of [1, 0]) { // 0 : projet enregistré par une version précédente
+    page.Rev = rev;
+    const again = JSON.parse(JSON.stringify(p));
+    for (const pg of again.Pages) upgradePage(pg);
+    resyncLots(again);
+    eq(rows, again.Pages[0].Tables.find((x) => x.HasGrid !== false && x.Rows.length > 8).Rows.length, 'rangées gardées');
+    eq(lots, [...objectLines(again)].length, 'lots gardés');
+    page.Rev = 1;
+    if (rev === 1) eq(JSON.stringify(p), JSON.stringify(again), 'projet identique après réouverture');
+  }
+});
+
 test('Réduire la rangée : l\'espace vide imprimé part, la rangée prend la hauteur des autres ; et revient', () => {
   const p = fromPages(['page1']);
   const a = p.Pages[0], t = a.Tables[0];
