@@ -20,7 +20,14 @@ public static class ProjectStore
         Converters = { new JsonStringEnumConverter() },
     };
 
-    public static void Save(string path, InventoryProject project, IReadOnlyDictionary<string, byte[]> sources)
+    public static void Save(string path, InventoryProject project, IReadOnlyDictionary<string, byte[]> sources) =>
+        Save(path, JsonSerializer.Serialize(project, Json), project.Pages.Select(p => p.SourceEntry), sources);
+
+    /// <summary>
+    /// Même fichier, à partir du projet déjà sérialisé (<paramref name="json"/>) : l'application relève l'état sur l'écran, puis
+    /// écrit le fichier en arrière-plan (un gros projet fait plusieurs dizaines de Mo : l'écran ne doit pas attendre).
+    /// </summary>
+    public static void Save(string path, string json, IEnumerable<string?> entries, IReadOnlyDictionary<string, byte[]> sources)
     {
         var dir = Path.GetDirectoryName(Path.GetFullPath(path));
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
@@ -28,15 +35,13 @@ public static class ProjectStore
         using (var fs = File.Create(tmp))
         using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
         {
-            var json = zip.CreateEntry(JsonEntry, CompressionLevel.Optimal);
-            using (var s = json.Open()) JsonSerializer.Serialize(s, project, Json);
-
+            var je = zip.CreateEntry(JsonEntry, CompressionLevel.Fastest);
+            using (var s = new StreamWriter(je.Open(), new System.Text.UTF8Encoding(false))) s.Write(json);
             var written = new HashSet<string>();
-            foreach (var page in project.Pages)
+            foreach (var entry in entries)
             {
-                if (page.SourceEntry is null || !sources.TryGetValue(page.SourceEntry, out var bytes)) continue;
-                if (!written.Add(page.SourceEntry)) continue; // plusieurs pages pointant vers la même source
-                var e = zip.CreateEntry(page.SourceEntry, CompressionLevel.NoCompression);
+                if (entry is null || !sources.TryGetValue(entry, out var bytes) || !written.Add(entry)) continue;
+                var e = zip.CreateEntry(entry, CompressionLevel.NoCompression);
                 using var s = e.Open();
                 s.Write(bytes);
             }

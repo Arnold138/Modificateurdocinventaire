@@ -17,8 +17,17 @@ public partial class App : Application
         };
     }
 
+    /// <summary>
+    /// Une seule fenêtre à la fois : deux fenêtres ouvertes écrivaient chacune leur version dans la même copie de secours
+    /// (le travail de l'une écrasait celui de l'autre). La 2e fenêtre le dit et se ferme sans rien enregistrer.
+    /// </summary>
+    private static System.Threading.Mutex? _single;
+    public static bool AlreadyRunning { get; private set; }
+
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        _single = new System.Threading.Mutex(true, "RetoucheInventaire-une-seule-fenetre", out bool first);
+        AlreadyRunning = !first;
         _window = new MainWindow();
         _window.Activate();
     }

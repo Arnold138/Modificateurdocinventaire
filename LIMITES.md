@@ -182,3 +182,9 @@
 - Chaque ligne ajoutée est une ligne complète du tableau : désignation, prix, et sa **case de lot qui apparaît dès qu'on écrit** dans la ligne (ou tout de suite avec le « + » de gauche). Les lignes restées vides n'ont pas de numéro (« Synchroniser » ne numérote pas des lignes vides).
 - **Toutes les lignes arrivent là où on a cliqué, sur cette page** (jamais sur une autre page). S'il reste du blanc en bas, la page garde sa taille ; sinon elle s'allonge. ↶ annule l'ajout en entier.
 
+## Rapidité et une seule fenêtre (Windows)
+
+- L'enregistrement continu relève l'état du projet tout de suite, puis **écrit le fichier en arrière-plan**, et seulement s'il a changé. Avant, le fichier entier (plus de 40 Mo avec les photos) était réécrit deux fois sur l'écran une seconde après chaque saisie et à chaque changement de page : l'application se figeait.
+- **Une seule fenêtre à la fois** : si l'application est lancée une 2e fois, la nouvelle fenêtre le dit et se ferme sans rien enregistrer (deux fenêtres écrasaient la copie de secours l'une de l'autre).
+- Texte très long dans une désignation : la rangée grandit avec une petite marge, la dernière ligne ne dépasse plus sur la rangée suivante.
+

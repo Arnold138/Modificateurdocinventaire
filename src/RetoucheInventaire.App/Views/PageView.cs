@@ -1120,7 +1120,13 @@ public sealed class PageView
         foreach (var f in line.Cells.Where(c => TextWrap.IsMultiline(c) && !c.Locked))
         {
             var t = TextLayout(line, f, f.Text);
-            extra = Math.Max(extra, PageLayout.ExtraFor(line, f, t.Lines.Count, t.Size));
+            // La zone de saisie de Windows coupe les lignes un peu plus tôt que la mesure (bords, marges) et ses lignes sont un
+            // peu plus hautes : sur un long texte, la dernière ligne dépassait sur la rangée suivante. Mesure sur une largeur un
+            // peu plus étroite, et une ligne de marge par tranche de 20 lignes.
+            bool bold = TextPlacement.IsBold(line);
+            int n = Math.Max(t.Lines.Count, TextWrap.Wrap(f.Text, Math.Max(4, f.Box.Width - f.Indent - 3 - 8), s => Measure(s, t.Size, bold)).Count);
+            if (n > 1) n += (n + 9) / 20;
+            extra = Math.Max(extra, PageLayout.ExtraFor(line, f, n, t.Size));
         }
         return Math.Max(extra, PageLayout.TallExtra(line)); // « Ligne plus haute » (page ajoutée)
     }

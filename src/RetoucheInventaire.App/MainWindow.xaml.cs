@@ -77,6 +77,7 @@ public sealed partial class MainWindow : Window
         {
             Autosave();
             SavePoint("fermeture de l'application");
+            try { _saveQueue.Wait(TimeSpan.FromSeconds(20)); } catch { /* sans importance */ }
             try { _pointQueue.Wait(TimeSpan.FromSeconds(8)); } catch { /* sans importance */ }
         };
     }
@@ -93,6 +94,13 @@ public sealed partial class MainWindow : Window
 
     private async Task StartAsync()
     {
+        if (App.AlreadyRunning)
+        {
+            await ShowMessageAsync("Retouche d'inventaire est déjà ouverte",
+                "L'application est déjà ouverte dans une autre fenêtre (regardez la barre des tâches). Continuez dans celle-ci : deux fenêtres en même temps écraseraient le travail l'une de l'autre. Cette fenêtre va se fermer.");
+            Close();
+            return;
+        }
         try { PageView.LoupeEnabled = !(File.Exists(LoupeFile) && File.ReadAllText(LoupeFile).Trim() == "non"); } catch { /* réglage par défaut */ }
         LoupeItem.IsChecked = PageView.LoupeEnabled;
         if (!_ocr.IsAvailable)
@@ -2842,6 +2850,9 @@ public sealed partial class MainWindow : Window
         ClearAll();
         _project = new InventoryProject();
         _projectPath = null;
+        _autosaveTimer.Stop();
+        try { await _saveQueue; } catch { /* déjà noté */ }
+        _lastSaved = null;
         try { File.Delete(AutosavePath); File.Delete(LastPathFile); } catch { /* sans importance */ }
         SaveState.Text = "";
         UpdateCommands();
@@ -2872,23 +2883,50 @@ public sealed partial class MainWindow : Window
     /// Enregistrement en continu, une seconde après chaque modification, après chaque page importée et à la fermeture :
     /// dans le fichier projet choisi (dès le premier « Enregistrer ») et dans une copie de secours.
     /// </summary>
+    /// <summary>Écritures du fichier projet, l'une après l'autre, en arrière-plan.</summary>
+    private Task _saveQueue = Task.CompletedTask;
+    private string? _lastSaved;
+
+    /// <summary>
+    /// L'état du projet est relevé tout de suite (sérialisé sur l'écran, quelques centièmes de seconde) ; le fichier (souvent
+    /// plusieurs dizaines de Mo avec les images) est écrit en arrière-plan, et seulement s'il a changé. Avant, les deux fichiers
+    /// étaient réécrits en entier sur l'écran une seconde après chaque saisie et à chaque changement de page : l'application
+    /// se figeait.
+    /// </summary>
     private void Autosave()
     {
         _autosaveTimer.Stop();
         if (_project.Pages.Count == 0) return;
         if (_guardDepth > 0) { _autosaveTimer.Start(); return; } // une action est en cours : on n'enregistre pas un état à moitié fait
-        try
+        string json;
+        try { json = Snapshot(); }
+        catch (Exception ex) { LogError("enregistrement", ex); return; }
+        string key = json + "|" + _projectPath;
+        if (key == _lastSaved) { ShowSaveState(); return; }
+        _lastSaved = key;
+        var entries = _project.Pages.Select(p => p.SourceEntry).ToList();
+        var sources = new Dictionary<string, byte[]>(_sources);
+        string? projectPath = _projectPath;
+        _saveQueue = _saveQueue.ContinueWith(_ =>
         {
-            Directory.CreateDirectory(DataDir);
-            ProjectStore.Save(AutosavePath, _project, _sources);
-            if (_projectPath != null) ProjectStore.Save(_projectPath, _project, _sources);
-            ShowSaveState();
-        }
-        catch (Exception ex)
-        {
-            SaveState.Text = "⚠ Non enregistré";
-            SetStatus($"Enregistrement automatique impossible : {ex.Message}");
-        }
+            try
+            {
+                Directory.CreateDirectory(DataDir);
+                ProjectStore.Save(AutosavePath, json, entries, sources);
+                if (projectPath != null) ProjectStore.Save(projectPath, json, entries, sources);
+                DispatcherQueue.TryEnqueue(ShowSaveState);
+            }
+            catch (Exception ex)
+            {
+                LogError("enregistrement automatique", ex);
+                _lastSaved = null;
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    SaveState.Text = "⚠ Non enregistré";
+                    SetStatus($"Enregistrement automatique impossible : {ex.Message}");
+                });
+            }
+        }, TaskScheduler.Default);
     }
 
     private void ShowSaveState() =>
