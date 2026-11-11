@@ -172,7 +172,43 @@ public static class Stress
         string Lines(int n, string what) => "{\"lines\":[" + string.Join(",", Enumerable.Range(1, n).Select(k => $"\"{what} ligne {k} de description ajoutée\"")) + "]}";
 
         int lot = 500;
-        for (int p = 0; p < project.Pages.Count; p++)
+        // Vidéo 3 du client : « une centaine de lignes à taper » : Ajouter des lignes (100, 50, 10, 1) sous le dernier objet de
+        // chaque page, puis écrire dans ces lignes (désignation, prix, numéro de lot), Synchroniser, une ligne au-dessus.
+        if (Environment.GetEnvironmentVariable("LIGNES") is { Length: > 0 })
+        {
+            int[] sizes = [100, 50, 10, 1, 15, 5];
+            int nPage = 0, written = 0;
+            var lotPages = project.Pages.Where(pg => !pg.EndLots && pg.Added == null).Select(pg => pg.Id).ToList();
+            (int P, int Ti, int O, int I)? FindAny(PrintedLine held)
+            {
+                for (int q = 0; q < project.Pages.Count; q++) if (Find(q, held) is { } at) return (q, at.Ti, at.O, at.I);
+                return null;
+            }
+            foreach (var id in lotPages)
+            {
+                int p = project.Pages.FindIndex(pg => pg.Id == id);
+                if (p < 0 || Objects(p).Count == 0) continue;
+                var obj = Objects(p)[^1].Line;
+                int n = sizes[nPage++ % sizes.Length];
+                if (Find(p, obj) is { } at) Do("addRows", p, at.Ti, at.O, at.I, $"{{\"n\":{n},\"above\":false,\"id\":\"cent{p}\"}}");
+                // Lignes vides ajoutées (sur la page et les pages blanches qui suivent) : on écrit dans 25 d'entre elles.
+                var empty = project.Pages.SelectMany(pg => pg.Tables.SelectMany(t => t.Rows.Where(r => r.Inserted != null || pg.Added != null).SelectMany(r => r.Lines)))
+                    .Where(l => l.FirstText.Length == 0 && !l.Deleted && l.Kind == LineKind.Article && l.Cells.Count > 1).Take(25).ToList();
+                foreach (var l in empty)
+                {
+                    if (FindAny(l) is not { } w) continue;
+                    Do("value", w.P, w.Ti, w.O, w.I, $"{{\"c\":0,\"v\":\"{1 + written % 4} objet tapé {written}\"}}");
+                    if (FindAny(l) is { } w2) Do("value", w2.P, w2.Ti, w2.O, w2.I, $"{{\"c\":{l.Cells.Count - 1},\"v\":\"{10 * (1 + written % 9)}\"}}");
+                    if (written % 3 == 0 && FindAny(l) is { } w3) Do("addLot", w3.P, w3.Ti, w3.O, w3.I);
+                    if (written % 3 == 0 && FindAny(l) is { } w4) Do("lot", w4.P, w4.Ti, w4.O, w4.I, $"{{\"v\":\"{lot++}\"}}");
+                    if (written % 7 == 0 && FindAny(l) is { } w5) Do("type", w5.P, w5.Ti, w5.O, w5.I, "{\"lines\":[\"suite de la description\",\"encore une ligne\"]}");
+                    written++;
+                }
+                if (Find(p, obj) is { } b0) Do("blank", p, b0.Ti, b0.O, b0.I, "{\"above\":true,\"text\":\"au-dessus du dernier objet\"}");
+                if (FindAny(obj) is { } s0) Do("sync", s0.P, s0.Ti, s0.O, s0.I, $"{{\"page\":{s0.P}}}");
+            }
+        }
+        for (int p = 0; p < project.Pages.Count && Environment.GetEnvironmentVariable("LIGNES") is not { Length: > 0 }; p++)
         {
             if (project.Pages[p].EndLots || Objects(p).Count == 0) continue;
             string id = project.Pages[p].Id;

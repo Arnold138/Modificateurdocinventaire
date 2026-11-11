@@ -175,3 +175,10 @@
 - La ligne touchée garde avec elle les lignes qui la suivent de près (un fournisseur écrit sur deux lignes reste entier). Sur la 1re ligne du bloc (l'objet et sa description), c'est toute la rangée, comme avant.
 - Une ligne vide a la **hauteur d'une ligne**, plus celle de l'espace imprimé autour (sur la 1re ligne d'un gros bloc, elle était énorme).
 - Pour donner à chaque fournisseur d'un bloc son propre numéro et ses propres prix sans ajouter de ligne : **clic droit › Séparer ici** sur sa 1re ligne.
+
+## Beaucoup de lignes d'un coup (Windows)
+
+- Un petit **« + » à droite de chaque rangée** (pages importées comme pages ajoutées) ouvre le menu de la ligne : ligne vide au-dessus ou en dessous, **« Ajouter des lignes… »** avec 1, 5, 10, 20, 50, 100 ou un nombre au choix (jusqu'à 200), séparer, case de lot. Le clic droit sur une case donne le même menu.
+- Chaque ligne ajoutée est une ligne complète du tableau : désignation, prix, et sa **case de lot qui apparaît dès qu'on écrit** dans la ligne (ou tout de suite avec le « + » de gauche). Les lignes restées vides n'ont pas de numéro (« Synchroniser » ne numérote pas des lignes vides).
+- La page garde sa taille : quand elle est pleine, la suite part sur des **pages blanches ajoutées juste après** (même tableau, mêmes colonnes). ↶ annule l'ajout en entier.
+

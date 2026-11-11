@@ -324,7 +324,6 @@ public sealed class PageView
         _addedLayer.Children.Clear();
         // Plus de « + » / corbeille dans la colonne : un seul « + » (marge) ; tracer ou non la colonne : clic droit sur la ligne.
         var A = _view.Page.Added;
-        if (A is null) return;
         Button Make(string glyph, string tip, double cx, double cy, bool danger, Action<Button> click)
         {
             var b = new Button
@@ -343,6 +342,28 @@ public sealed class PageView
             b.Click += (_, _) => click(b);
             _addedLayer.Children.Add(b);
             return b;
+        }
+        if (A is null)
+        {
+            // Page importée : un petit « + » à droite de chaque rangée (sauf l'en-tête), qui ouvre le menu de la ligne :
+            // ligne vide au-dessus ou en dessous, « Ajouter des lignes… (1, 5, 10, 50, 100…) », séparer, case de lot…
+            if (MoveMode) return;
+            foreach (var vt in _view.Tables)
+            {
+                if (vt.Strips.Count == 0 || vt.ColumnXs.Count < 2) continue;
+                var t = vt.Table;
+                double right = vt.ColumnXs[^1];
+                double cx = right + 24 <= _view.Width - 4 ? right + 22 : _view.Width - 18;
+                foreach (var st in vt.Strips)
+                {
+                    if (st.R < 0 || st.R >= t.Rows.Count) continue;
+                    var line = t.Rows[st.R].Lines.FirstOrDefault(l => !l.Deleted && l.Cells.Count > 0 && l.Kind != LineKind.EnTete);
+                    if (line is null || st.Bottom - st.Top < 12) continue;
+                    var plus = Make("\uE710", "Ajouter des lignes ici (une ou plusieurs), séparer, case de lot…", cx, (st.Top + st.Bottom) / 2, false, btn => ShowLineCommands(line.Cells[0], btn));
+                    plus.Opacity = 0.55;
+                }
+            }
+            return;
         }
         for (int ti = 0; ti < _view.Tables.Count; ti++)
         {

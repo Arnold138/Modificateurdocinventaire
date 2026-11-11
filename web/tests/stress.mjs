@@ -344,6 +344,12 @@ function chooseClient() {
   if (r < 0.76) { const x = pick(all.filter((y) => y.row.Lines.filter((l) => firstText(l)).length > 1)); return x && ['moveLine', x, { to: Math.floor(random() * rowOrder(x.table).length) }]; }
   if (r < 0.81) { const x = pick(objs.filter((y) => isZeroLot(y.line))); return x && ['placeZero', x, { to: Math.floor(random() * rowOrder(x.table).length) }]; }
   if (r < 0.80) { const x = pick(all.filter((y) => y.i > 0 && canCopyLine(y.page, y.line))); return x && ['blank', x, { above: chance(0.4), text: chance(0.8) ? `ajout ${word()}` : '' }]; }
+  // Vidéo 3 : beaucoup de lignes d'un coup (1 à 100), puis on écrit dedans.
+  if (r < 0.815 && process.env.CENT) { const x = pick(all.filter((y) => canCopyLine(y.page, y.line))); return x && ['addRows', x, { n: pick([1, 5, 10, 50, 100]), above: chance(0.15) && x.o > 0, id: `cent${++pageN}` }]; }
+  if (r < 0.84 && process.env.CENT) {
+    const x = pick(targets((y) => !firstText(y.line) && !y.line.Deleted && y.line.Kind === 'Article' && y.line.Cells.length > 1 && (y.row.Inserted || y.page.Added)));
+    return x && ['fill', x, { w: word(), v: Array.from({ length: x.line.Cells.length - 1 }, () => pick(['10', '250', '1 500', ''])) }];
+  }
   if (r < 0.82) { const x = pick(all.filter((y) => canSplit(y.page, y.line))); return x && ['split', x, {}]; }
   if (r < 0.86) { const x = pick(all.filter((y) => y.line.Cells[0].Text.includes('\n') && canCopyLine(y.page, y.line))); return x && ['typed', x, { from: 1 + Math.floor(random() * (x.line.Cells[0].Text.split('\n').length - 1)) }]; }
   if (r < 0.90) {

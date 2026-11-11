@@ -871,7 +871,7 @@ public sealed partial class MainWindow : Window
             if (Rows.CanAddAbove(page, line))
                 list.Add(new("Ajouter une ligne vide au-dessus", "Ligne complète (case de lot, désignation, prix) juste au-dessus de cette ligne, même au milieu d'un bloc.", "\uE710",
                     () => _ = canCopy ? LineActionAsync("blankAbove", 0, f) : AddRowsNowGuardedAsync(page, line, 1, true)));
-            list.Add(new("Ajouter des lignes… (1, 5, 10, 15)", "Plusieurs lignes vides d'un coup, mêmes colonnes et même hauteur que les lignes du tableau.", "\uE8FD",
+            list.Add(new("Ajouter des lignes… (1, 5, 10, 50, 100…)", "Plusieurs lignes vides d'un coup, mêmes colonnes et même hauteur que les lignes du tableau.", "\uE8FD",
                 () => _ = AddRowsDialogAsync(page, line)));
             if (canCopy)
                 list.Add(new("Dupliquer la ligne", "Copie juste en dessous (texte et prix), à corriger. La suite descend.", "\uE8C8",
@@ -1253,8 +1253,8 @@ public sealed partial class MainWindow : Window
     {
         if (_busy) return;
         var number = new NumberBox { Value = 10, Minimum = 1, Maximum = 200, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline, Header = "Autre nombre", MinWidth = 160 };
-        var quick = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        foreach (int k in new[] { 1, 5, 10, 15 })
+        var quick = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        foreach (int k in new[] { 1, 5, 10, 20, 50, 100 })
         {
             var b = new Button { Content = k.ToString(), MinWidth = 56, MinHeight = 44, FontSize = 17 };
             b.Click += (_, _) => number.Value = k;
