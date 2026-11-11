@@ -167,7 +167,7 @@ const ACTIONS = {
     const H0 = page.Height, base = baseHeight(page);
     const res = addRows(project, page, line, a.n, { above: a.above, img: raw.get(page.Id), id: a.id });
     for (const pg of res.pages) { raw.set(pg.Id, raw.get(page.Id)); baseH.set(pg.Id, baseHeight(pg)); }
-    lastRows = { want: a.n, res, grew: page.Height > Math.max(H0, base) && canBeModel(page) };
+    lastRows = { want: a.n, res, grew: res.pages.length > 0 }; // jamais sur une autre page (la page peut s'allonger)
     return res;
   },
   removePage(t) { if (pages()[t.p]?.Added) pages().splice(t.p, 1); },
@@ -335,7 +335,7 @@ function chooseClient() {
   if (!all.length) return null;
   const objs = targets((x) => hasText(x) && hasLotCell(x.line) && !x.table.LotsOff);
   const lines = (n) => Array.from({ length: n }, () => `${word()} description ajoutée à la main sur cet objet`);
-  if (r < 0.30) { const x = pick((objs.length ? objs : all).filter((y) => canCopyLine(y.page, y.line))); return x && ['type', x, { lines: lines(5 + Math.floor(random() * 4)) }]; }
+  if (r < 0.30) { const x = pick((objs.length ? objs : all).filter((y) => canCopyLine(y.page, y.line))); return x && ['type', x, { lines: lines(process.env.ENORME ? 20 + Math.floor(random() * 40) : 5 + Math.floor(random() * 4)) }]; }
   if (r < 0.36) { const x = pick(all.filter((y) => canCopyLine(y.page, y.line))); return x && ['type', x, { lines: lines(1 + Math.floor(random() * 3)) }]; }
   if (r < 0.48) { const x = pick(objs); return x && ['lot', x, { v: chance(0.2) ? '0' : chance(0.1) ? '' : chance(0.1) ? `${1 + Math.floor(random() * 60)} bis` : String(1 + Math.floor(random() * 300)) }]; }
   if (r < 0.54) { const x = pick(all.filter((y) => !hasLotCell(y.line) && !y.table.LotsOff && y.line.Kind === 'Article')); return x && ['addLot', x, {}]; }
@@ -480,7 +480,7 @@ function check(step, op, beforeLots, plan) {
   // Ajouter des lignes : toutes ajoutées, et la page n'a pas grandi (la place est prise en bas, sinon page suivante).
   if (op === 'addRows' && lastRows) {
     if (lastRows.res.added !== lastRows.want) fail(step, `addRows : ${lastRows.res.added} lignes ajoutées sur ${lastRows.want}`);
-    if (lastRows.grew) fail(step, 'addRows : la page a grandi');
+    if (lastRows.grew) fail(step, 'addRows : lignes parties sur une autre page');
     lastRows = null;
   }
   // « + » ici : la ligne a sa case.

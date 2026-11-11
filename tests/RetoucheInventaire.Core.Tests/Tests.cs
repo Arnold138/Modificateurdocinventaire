@@ -1256,10 +1256,11 @@ public static class Tests
         double h = t.RowYs[^1] - t.RowYs[^2];
         var res = AddedPage.AddRows(p, blank, t.Rows[^1].Lines[0], 60, id: "suite");
         Equal(60, res.Added, "60 lignes ajoutées");
-        Check(res.Pages.Count >= 1, "page pleine : la suite sur une page blanche");
-        Equal(PageLayout.BaseHeight(blank), blank.Height, "la page garde sa taille");
+        Equal(0, res.Pages.Count, "jamais sur une autre page : toutes les lignes là où on a demandé");
+        Equal(head + 61, t.Rows.Count, "les 60 lignes dans le tableau de la page");
+        Check(blank.Height > PageLayout.BaseHeight(blank), "page pleine : elle s'allonge");
+        Equal(2, p.Pages.Count, "aucune page ajoutée");
         Check(t.Rows.Skip(head).All(r => Math.Abs(r.Bounds.Height - h) < 1.5), "toutes les lignes ont la hauteur de la ligne modèle");
-        Check(p.Pages.IndexOf(res.Pages[0]) == p.Pages.IndexOf(blank) + 1, "page suivante juste après");
         // Sur une page de l'inventaire : 3 lignes sous une ligne, la page garde sa taille.
         var a = p.Pages[0];
         var ta = a.Tables.First(x => x.Rows.Count > 5 && x.ColumnXs.Count >= 4);
@@ -1267,8 +1268,8 @@ public static class Tests
         var line = ta.Rows[3].Lines[0];
         var r2 = AddedPage.AddRows(p, a, line, 3, img: img, id: "n");
         Equal(3, r2.Added, "3 lignes");
-        Check(ta.Rows.Count > n0 || r2.Pages.Count > 0, "lignes ajoutées dans le tableau ou sur la page suivante");
-        Check(a.Height <= Math.Max(H, PageLayout.BaseHeight(a)) || !AddedPage.CanBeModel(a), "la page ne grandit pas");
+        Equal(n0 + 3, ta.Rows.Count, "lignes ajoutées dans le tableau, à l'endroit touché");
+        Equal(0, r2.Pages.Count, "pas d'autre page");
     }
 
     /// <summary>Tableau d'un seul gros bloc (pages « location longue durée ») : en-tête dont l'écriture déborde, bloc de quatre lignes.</summary>

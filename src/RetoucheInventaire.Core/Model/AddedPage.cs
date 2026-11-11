@@ -341,52 +341,37 @@ public static partial class AddedPage
         int added = 0;
         var pages = new List<Page>();
         PrintedLine? last = null;
-        if (page.Added is null && Rows.Locate(page, line) is { } at0)
+        // Toutes les lignes arrivent à l'endroit touché, sur cette page (au milieu d'un bloc : un trait est tracé là). Il y a du
+        // blanc en bas : la page garde sa taille ; sinon elle s'allonge. Jamais sur une autre page (avant, quand la page était
+        // pleine, la suite partait sur une page blanche ajoutée : on ne retrouvait plus ses lignes).
+        int H = PageLayout.BaseHeight(page), margin = Math.Max(40, (int)Math.Round(H * 0.025, MidpointRounding.AwayFromZero));
+        void KeepSize(int before)
         {
-            // Au milieu d'un bloc : les lignes arrivent à l'endroit touché (trait tracé là), s'il y a la place sur la page
-            // (sinon elles partent sur une page blanche, comme avant). La page garde sa taille.
-            int H1 = PageLayout.BaseHeight(page);
-            int? r1 = ReferenceRow(at0.Table, HeadOf(page, at0.Table));
-            double refH = r1 is int q ? at0.Table.RowYs[q + 1] - at0.Table.RowYs[q] : 60;
-            bool room = ContentBottom(page) + 2 * 5 + refH <= H1 - Math.Max(40, (int)Math.Round(H1 * 0.025, MidpointRounding.AwayFromZero));
-            int h0 = page.Height;
-            if (room) Rows.OpenAt(page, line, above);
-            int H0 = PageLayout.BaseHeight(page), k0 = Math.Min(page.Height - h0, page.Height - H0);
-            if (k0 > 0 && ContentBottom(page) <= H0 - Math.Max(40, (int)Math.Round(H0 * 0.025, MidpointRounding.AwayFromZero))) PageLayout.CutBand(page, page.Height - k0, k0, null);
+            if (ContentBottom(page) > H - margin) return;
+            int k = Math.Min(page.Height - before, page.Height - H);
+            if (k > 0) PageLayout.CutBand(page, page.Height - k, k, null);
         }
-        var cur = page;
+        if (page.Added is null && Rows.Locate(page, line) != null)
+        {
+            int h0 = page.Height;
+            Rows.OpenAt(page, line, above);
+            KeepSize(h0);
+        }
         var dest = line;
         bool first = above;
         for (int guard = 0; added < n && guard < 4 * n + 10; guard++)
         {
-            var at = Rows.Locate(cur, dest);
+            var at = Rows.Locate(page, dest);
             if (at is null) break;
             var t = at.Table;
-            int? r0 = ReferenceRow(t, HeadOf(cur, t));
+            int? r0 = ReferenceRow(t, HeadOf(page, t));
             var reference = r0 is int rr ? t.Rows[rr].Lines[0] : dest;
-            int H = PageLayout.BaseHeight(cur), margin = Math.Max(40, (int)Math.Round(H * 0.025, MidpointRounding.AwayFromZero));
-            int before = cur.Height;
-            var made = Rows.Copy(cur, dest, blank: true, above: first, from: reference, force: true); // aussi sous une ligne encore vide
+            int before = page.Height;
+            var made = Rows.Copy(page, dest, blank: true, above: first, from: reference, force: true); // aussi sous une ligne encore vide
             if (made is null) break;
             made.Copy = false; // case de lot quand on écrit dans la ligne (pas de numéros sur des lignes vides)
-            bool fits = ContentBottom(cur) <= H - margin;
-            // Page pleine mais pas de page suivante possible (tableau trop modifié pour servir de modèle) : la page s'allonge.
-            if (fits || !CanBeModel(cur) || pages.Count > 20)
-            {
-                // La page garde sa taille : autant de blanc retiré en bas qu'il a été ajouté.
-                int k = fits ? Math.Min(cur.Height - before, cur.Height - H) : 0;
-                if (k > 0) PageLayout.CutBand(cur, cur.Height - k, k, null);
-                added++; last = made; dest = made; first = false;
-                continue;
-            }
-            Rows.RemoveAdded(cur, made); // plus de place : cette ligne part sur la page suivante
-            var next = AddBlankPage(project, cur, project.Pages.IndexOf(cur) + 1, cur.Added != null ? null : img, id != null ? $"{id}-{pages.Count + 1}" : null, true);
-            if (next is null) break;
-            pages.Add(next);
-            cur = next;
-            var t0 = next.Tables[next.Added!.Tables.FindIndex(x => x != null)];
-            dest = t0.Rows[^1].Lines[0];
-            added++; last = dest; first = false; // la page blanche porte déjà une ligne
+            KeepSize(before);
+            added++; last = made; dest = made; first = false;
         }
         return new RowsResult(added, pages, last);
     }

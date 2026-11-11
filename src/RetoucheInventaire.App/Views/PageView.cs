@@ -1286,6 +1286,11 @@ public sealed class PageView
     {
         if (_bitmap is null || !LoupeEnabled) return;
         var box = _place[f].Cell.Box;
+        // Rien d'imprimé à montrer (ligne ajoutée, page ajoutée, case vide à l'origine) ou case très haute (texte long) :
+        // pas de loupe. Sinon elle couvrait le tableau d'un grand rectangle blanc.
+        var entry = _place[f].Entry;
+        bool added = _view.Page.Added != null || entry.Line.Copy || entry.Table.Rows.Any(r => r.Inserted != null && r.Lines.Contains(entry.Line));
+        if (added || string.IsNullOrWhiteSpace(f.OriginalText) || f.Ink.IsEmpty || box.Height > 160) { _loupe.Visibility = Visibility.Collapsed; return; }
         var b = RectD.FromEdges(Math.Max(0, box.Left - 4), Math.Max(0, box.Top - 2), Math.Min(_view.Width, box.Right + 4), Math.Min(_view.Height, box.Bottom + 2));
         var holder = new Canvas { Width = b.Width, Height = b.Height, Clip = new RectangleGeometry { Rect = new Rect(0, 0, b.Width, b.Height) } };
         var img = new Image { Source = _bitmap, Width = _view.Width, Height = _view.Height, Stretch = Stretch.Fill };

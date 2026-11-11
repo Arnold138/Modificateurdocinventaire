@@ -1268,7 +1268,7 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(aboveBox);
         panel.Children.Add(new TextBlock
         {
-            Text = "Mêmes colonnes, même hauteur et mêmes traits que les lignes du tableau ; la case de lot apparaît quand on écrit (page ajoutée : avec le « + » à gauche). La page garde sa taille : si elle est pleine, la suite part sur une page blanche juste après.",
+            Text = "Mêmes colonnes, même hauteur et mêmes traits que les lignes du tableau ; la case de lot apparaît quand on écrit (page ajoutée : avec le « + » à gauche). Toutes les lignes arrivent là où vous avez cliqué, sur cette page : s'il n'y a plus de blanc en bas, la page s'allonge.",
             FontSize = 13, Opacity = 0.7, TextWrapping = TextWrapping.Wrap,
         });
         var dialog = new ContentDialog
@@ -1433,9 +1433,7 @@ public sealed partial class MainWindow : Window
         RecomputeTotals();
         await RefreshViewAsync();
         if (res.Last != null && CurrentPage == page) _view?.FlashLine(res.Last);
-        string more = res.Pages.Count == 0 ? "" :
-            $" La page était pleine : la suite est sur {(res.Pages.Count > 1 ? "les pages " + string.Join(", ", res.Pages.Select(p => _project.Pages.IndexOf(p) + 1)) : $"la page {_project.Pages.IndexOf(res.Pages[0]) + 1}")} (page blanche ajoutée).";
-        SetStatus($"{res.Added} ligne(s) ajoutée(s).{more} ↶ pour annuler.");
+        SetStatus($"{res.Added} ligne(s) ajoutée(s) à cet endroit (case de lot dès que vous écrivez dans la ligne). ↶ pour annuler.");
         ScheduleAutosave();
     }
 

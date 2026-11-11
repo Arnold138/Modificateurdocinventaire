@@ -180,5 +180,5 @@
 
 - Un petit **« + » dans la marge de gauche, sur chaque rangée** ouvre le menu de la ligne : ligne vide au-dessus ou en dessous, **« Ajouter des lignes… »** avec 1, 5, 10, 20, 50, 100 ou un nombre au choix (jusqu'à 200), séparer, case de lot. Le clic droit sur une case donne le même menu.
 - Chaque ligne ajoutée est une ligne complète du tableau : désignation, prix, et sa **case de lot qui apparaît dès qu'on écrit** dans la ligne (ou tout de suite avec le « + » de gauche). Les lignes restées vides n'ont pas de numéro (« Synchroniser » ne numérote pas des lignes vides).
-- La page garde sa taille : quand elle est pleine, la suite part sur des **pages blanches ajoutées juste après** (même tableau, mêmes colonnes). ↶ annule l'ajout en entier.
+- **Toutes les lignes arrivent là où on a cliqué, sur cette page** (jamais sur une autre page). S'il reste du blanc en bas, la page garde sa taille ; sinon elle s'allonge. ↶ annule l'ajout en entier.
 

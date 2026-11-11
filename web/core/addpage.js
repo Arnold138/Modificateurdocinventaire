@@ -280,47 +280,28 @@ function contentBottom(page) {
  */
 export function addRows(project, page, line, n, { above = false, img = null, id = null } = {}) {
   const out = { added: 0, pages: [], last: null };
-  const at0 = page.Added ? null : locate(page, line);
-  if (at0) {
-    // Au milieu d'un bloc : les lignes arrivent à l'endroit touché (trait tracé là), s'il y a la place sur la page
-    // (sinon elles partent sur une page blanche, comme avant). La page garde sa taille.
-    const H1 = baseHeight(page), r1 = referenceRow(at0.table, headOf(page, at0.table));
-    const refH = r1 !== null ? at0.table.RowYs[r1 + 1] - at0.table.RowYs[r1] : 60;
-    const room = contentBottom(page) + 2 * 5 + refH <= H1 - Math.max(40, Math.floor(H1 * 0.025 + 0.5));
-    const h0 = page.Height;
-    if (room) openAt(page, line, above);
-    const H = baseHeight(page), k = Math.min(page.Height - h0, page.Height - H);
-    if (k > 0 && contentBottom(page) <= H - Math.max(40, Math.floor(H * 0.025 + 0.5))) cutBand(page, page.Height - k, k, null);
-  }
-  let cur = page, dest = line, first = above;
+  // Toutes les lignes arrivent à l'endroit touché, sur cette page (au milieu d'un bloc : un trait est tracé là). Il y a du
+  // blanc en bas : la page garde sa taille ; sinon elle s'allonge. Jamais sur une autre page.
+  const H = baseHeight(page), margin = Math.max(40, Math.floor(H * 0.025 + 0.5));
+  const keepSize = (before) => {
+    if (contentBottom(page) > H - margin) return;
+    const k = Math.min(page.Height - before, page.Height - H);
+    if (k > 0) cutBand(page, page.Height - k, k, null);
+  };
+  if (!page.Added && locate(page, line)) { const h0 = page.Height; openAt(page, line, above); keepSize(h0); }
+  let dest = line, first = above;
   for (let guard = 0; out.added < n && guard < 4 * n + 10; guard++) {
-    const at = locate(cur, dest);
+    const at = locate(page, dest);
     if (!at) break;
     const t = at.table;
-    const r0 = referenceRow(t, headOf(cur, t));
+    const r0 = referenceRow(t, headOf(page, t));
     const ref = r0 !== null ? t.Rows[r0].Lines[0] : dest;
-    const H = baseHeight(cur), margin = Math.max(40, Math.floor(H * 0.025 + 0.5));
-    const before = cur.Height;
-    const made = copyLine(cur, dest, true, first, ref, true); // « Ajouter des lignes » : aussi sous une ligne encore vide
+    const before = page.Height;
+    const made = copyLine(page, dest, true, first, ref, true); // « Ajouter des lignes » : aussi sous une ligne encore vide
     if (!made) break;
     made.Copy = false; // case de lot quand on écrit dans la ligne (pas de numéros sur des lignes vides)
-    const fits = contentBottom(cur) <= H - margin;
-    // Page pleine mais pas de page suivante possible (tableau trop modifié pour servir de modèle) : la page s'allonge.
-    if (fits || !canBeModel(cur) || out.pages.length > 20) {
-      // La page garde sa taille : autant de blanc retiré en bas qu'il a été ajouté.
-      const k = fits ? Math.min(cur.Height - before, cur.Height - H) : 0;
-      if (k > 0) cutBand(cur, cur.Height - k, k, null);
-      out.added++; out.last = made; dest = made; first = false;
-      continue;
-    }
-    removeAddedRow(cur, made); // plus de place : cette ligne part sur la page suivante
-    const next = addBlankPage(project, cur, project.Pages.indexOf(cur) + 1, cur.Added ? null : img, id ? `${id}-${out.pages.length + 1}` : null, true);
-    if (!next) break;
-    out.pages.push(next);
-    cur = next;
-    const t0 = next.Tables[next.Added.Tables.findIndex(Boolean)];
-    dest = t0.Rows[t0.Rows.length - 1].Lines[0];
-    out.added++; out.last = dest; first = false; // la page blanche porte déjà une ligne
+    keepSize(before);
+    out.added++; out.last = made; dest = made; first = false;
   }
   return out;
 }

@@ -875,7 +875,7 @@ test('Page ajoutée : vierge sur le modèle, colonnes, ligne plus haute', () => 
   eq(JSON.stringify(info.Orig), JSON.stringify(b.Added.Tables[ti].Orig), 'mêmes repères');
 });
 
-test('Ajouter des lignes : page blanche, 60 lignes, la suite sur une page blanche, même hauteur', () => {
+test('Ajouter des lignes : page blanche, 60 lignes, toutes sur la page (elle s\'allonge), même hauteur', () => {
   const p = fromPages(['page1']);
   const img = load('page1').n.image;
   const blank = addBlankPage(p, p.Pages[0], 1, img, 'bl', true);
@@ -884,10 +884,11 @@ test('Ajouter des lignes : page blanche, 60 lignes, la suite sur une page blanch
   const h = t.RowYs[t.RowYs.length - 1] - t.RowYs[t.RowYs.length - 2];
   const res = addRows(p, blank, t.Rows[t.Rows.length - 1].Lines[0], 60, { id: 'suite' });
   eq(60, res.added, '60 lignes');
-  check(res.pages.length >= 1, 'suite sur une page blanche');
-  eq(baseHeight(blank), blank.Height, 'la page garde sa taille');
+  eq(0, res.pages.length, 'jamais sur une autre page');
+  eq(head + 61, t.Rows.length, 'les 60 lignes dans le tableau de la page');
+  check(blank.Height > baseHeight(blank), 'page pleine : elle s\'allonge');
+  eq(2, p.Pages.length, 'aucune page ajoutée');
   check(t.Rows.slice(head).every((r) => Math.abs(r.Bounds.Height - h) < 1.5), 'même hauteur que la ligne modèle');
-  eq(p.Pages.indexOf(blank) + 1, p.Pages.indexOf(res.pages[0]), 'page suivante juste après');
 });
 
 test('Réduire ne coupe jamais dans le texte (gros bloc, en-tête dont l\'écriture déborde)', () => {
