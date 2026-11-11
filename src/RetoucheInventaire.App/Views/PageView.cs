@@ -343,28 +343,7 @@ public sealed class PageView
             _addedLayer.Children.Add(b);
             return b;
         }
-        if (A is null)
-        {
-            // Page importée : un petit « + » à droite de chaque rangée (sauf l'en-tête), qui ouvre le menu de la ligne :
-            // ligne vide au-dessus ou en dessous, « Ajouter des lignes… (1, 5, 10, 50, 100…) », séparer, case de lot…
-            if (MoveMode) return;
-            foreach (var vt in _view.Tables)
-            {
-                if (vt.Strips.Count == 0 || vt.ColumnXs.Count < 2) continue;
-                var t = vt.Table;
-                double right = vt.ColumnXs[^1];
-                double cx = right + 24 <= _view.Width - 4 ? right + 22 : _view.Width - 18;
-                foreach (var st in vt.Strips)
-                {
-                    if (st.R < 0 || st.R >= t.Rows.Count) continue;
-                    var line = t.Rows[st.R].Lines.FirstOrDefault(l => !l.Deleted && l.Cells.Count > 0 && l.Kind != LineKind.EnTete);
-                    if (line is null || st.Bottom - st.Top < 12) continue;
-                    var plus = Make("\uE710", "Ajouter des lignes ici (une ou plusieurs), séparer, case de lot…", cx, (st.Top + st.Bottom) / 2, false, btn => ShowLineCommands(line.Cells[0], btn));
-                    plus.Opacity = 0.55;
-                }
-            }
-            return;
-        }
+        if (A is null) return;
         for (int ti = 0; ti < _view.Tables.Count; ti++)
         {
             var vt = _view.Tables[ti];
@@ -725,6 +704,7 @@ public sealed class PageView
             if (line.OutsideTable || entry.CarriedOnly || line.Cells.Count == 0) continue;
             if (LineBand(entry) is not RectD b) continue;
             AddBadge(line, b.CenterY);
+            AddLinesButton(entry, b);
             if (!active || (entry.Table.LotsOff && !Lots.ItemTable(entry.Table))) continue; // tableau d'objets sans lots : « + » quand même
             bool has = Lots.HasCell(line);
             var row = entry.Table.Rows.FirstOrDefault(r => r.Lines.Contains(line));
@@ -762,6 +742,29 @@ public sealed class PageView
             }
         }
         DrawGrips();
+    }
+
+    /// <summary>
+    /// Petit « + » dans la marge de gauche, sur la 1re ligne de chaque rangée (pas l'en-tête) : le menu de la ligne, avec
+    /// « Ajouter une ligne vide en dessous / au-dessus » et « Ajouter des lignes… (1, 5, 10, 50, 100…) ».
+    /// </summary>
+    private void AddLinesButton(Arrangement.ViewLine entry, RectD b)
+    {
+        if (MoveMode || entry.Line.Kind == LineKind.EnTete || entry.Line.Deleted) return;
+        var row = entry.Table.Rows.FirstOrDefault(r => r.Lines.Contains(entry.Line));
+        if (row is null || row.Lines.FirstOrDefault(l => !l.Deleted && l.Cells.Count > 0) != entry.Line) return;
+        var plus = new Button
+        {
+            Width = 26, Height = 26, Padding = new Thickness(0), MinWidth = 0, MinHeight = 0, CornerRadius = new CornerRadius(13),
+            Background = Clear, BorderBrush = Accent, BorderThickness = new Thickness(1), Opacity = 0.7,
+            Content = new FontIcon { Glyph = "\uE710", FontSize = 12, Foreground = Accent },
+        };
+        ToolTipService.SetToolTip(plus, "Ajouter des lignes ici (une, ou 5, 10, 50, 100…), séparer, case de lot…");
+        Canvas.SetLeft(plus, 32);
+        Canvas.SetTop(plus, b.CenterY - 13);
+        var f = entry.Line.Cells[0];
+        plus.Click += (_, _) => ShowLineCommands(f, plus);
+        _gutter.Children.Add(plus);
     }
 
     private void AddBadge(PrintedLine line, double centerY)
