@@ -61,7 +61,9 @@ function splitOk(at) {
   const { row, i } = at;
   const y = gapMid(row.Lines[i - 1], row.Lines[i]) + CUT;
   const cy = (l, f) => { const b = baseBox(l, f); return b.Y + b.Height / 2; };
-  return row.Lines.every((l, k) => l.Cells.every((f) => (k < i ? cy(l, f) < y : cy(l, f) > y)));
+  // Une ligne agrandie (texte tapé sur plusieurs lignes) au-dessus du trait doit finir avant lui.
+  return row.Lines.every((l, k) => l.Cells.every((f) => (k < i ? cy(l, f) < y : cy(l, f) > y))
+    && (k >= i || !((l.Extra ?? 0) > 0) || l.ExtraAt + l.Extra <= y));
 }
 export function canSplit(page, line) {
   const at = line && !line.OutsideTable ? locate(page, line) : null;

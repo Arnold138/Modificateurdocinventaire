@@ -63,7 +63,9 @@ public static class Rows
         if (i <= 0 || i >= row.Lines.Count) return false;
         double y = Arrangement.GapMid(row.Lines[i - 1], row.Lines[i]) + Arrangement.Cut;
         static double Cy(PrintedLine l, Field f) { var b = PageLayout.BaseBox(l, f); return b.Y + b.Height / 2; }
-        return row.Lines.Select((l, k) => (l, k)).All(x => x.l.Cells.All(f => x.k < i ? Cy(x.l, f) < y : Cy(x.l, f) > y));
+        // Une ligne agrandie (texte tapé sur plusieurs lignes) au-dessus du trait doit finir avant lui.
+        return row.Lines.Select((l, k) => (l, k)).All(x => x.l.Cells.All(f => x.k < i ? Cy(x.l, f) < y : Cy(x.l, f) > y)
+                                                         && (x.k >= i || x.l.Extra <= 0 || x.l.ExtraAt + x.l.Extra <= y));
     }
 
     /// <summary>« Séparer ici » : la ligne n'est pas la première de sa rangée, et le trait passe bien entre les lignes.</summary>
