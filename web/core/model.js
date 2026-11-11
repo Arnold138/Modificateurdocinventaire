@@ -43,7 +43,7 @@ export function analyze(page, image, rawWords, grids = null) {
   const words = rawWords.map(clean).filter(Boolean);
   const used = new Array(words.length).fill(false);
 
-  for (const grid of grids ?? detectGrids(image)) page.Tables.push(buildGridTable(grid, words, used));
+  for (const grid of grids ?? detectGrids(image)) page.Tables.push(buildGridTable(withoutRulesThroughText(grid, words), words, used));
 
   const rest = words.filter((_, i) => !used[i]);
   if (page.Tables.length === 0) {
@@ -178,6 +178,28 @@ function clean(w) {
 function indexOf(edges, v) {
   for (let i = 0; i < edges.length - 2; i++) if (v < edges[i + 1]) return i;
   return edges.length - 2;
+}
+
+/**
+ * Un vrai filet ne traverse jamais une ligne de texte : un « filet » coupé par au moins trois mots (trame grisée d'un en-tête
+ * lue comme un trait au milieu du titre) est retiré, les deux rangées n'en font qu'une. Même règle que la version Windows.
+ */
+export function withoutRulesThroughText(grid, words) {
+  if (grid.RowYs.length < 3) return grid;
+  const left = grid.ColumnXs[0], right = grid.ColumnXs[grid.ColumnXs.length - 1];
+  const inside = words.filter((w) => Rect.cx(w.Box) > left && Rect.cx(w.Box) < right && Rect.cy(w.Box) > grid.RowYs[0] && Rect.cy(w.Box) < grid.RowYs[grid.RowYs.length - 1]);
+  if (!inside.length) return grid;
+  const heights = inside.map((w) => w.Box.Height).sort((a, b) => a - b);
+  const med = heights[Math.trunc(heights.length / 2)];
+  // Mots d'une hauteur normale (une lecture qui englobe deux lignes ne compte pas), coupés près de leur milieu.
+  const normal = inside.filter((w) => w.Box.Height <= 1.6 * med);
+  const keep = [grid.RowYs[0]];
+  for (let k = 1; k + 1 < grid.RowYs.length; k++) {
+    const y = grid.RowYs[k];
+    if (normal.filter((w) => w.Box.Y < y - 4 && Rect.bottom(w.Box) > y + 4 && Math.abs(Rect.cy(w.Box) - y) <= 0.3 * w.Box.Height).length < 3) keep.push(y);
+  }
+  keep.push(grid.RowYs[grid.RowYs.length - 1]);
+  return keep.length === grid.RowYs.length ? grid : { ...grid, RowYs: keep };
 }
 
 function buildGridTable(grid, words, used) {

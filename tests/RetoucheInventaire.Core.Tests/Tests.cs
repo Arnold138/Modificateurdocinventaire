@@ -1314,6 +1314,30 @@ public static class Tests
         Equal(3, t.RowYs.Count, "tout défait : filets d'origine");
     }
 
+    public static void T_Ligne_vide_au_milieu_d_un_bloc()
+    {
+        // Vidéo 2 du client (« STOCKS FOURNISSEURS NON PAYES ») : une ligne ajoutée sous une ligne du milieu d'un bloc partait
+        // sous tout le bloc, et au-dessus de la 1re ligne d'un bloc elle prenait toute la hauteur imprimée (case énorme).
+        var page = BlockPage();
+        var p = new InventoryProject { Pages = [page] };
+        var t = page.Tables[0];
+        var x = t.Rows[1].Lines[1];   // « EN LOCATION CHEZ DIAC », 2e ligne du bloc
+        var sound = Integrity.Check(p);
+        var below = Rows.AddBlank(page, x)!;
+        Check(below != null, "ligne ajoutée");
+        int rx = t.Rows.FindIndex(r => r.Lines.Contains(x)), rb = t.Rows.FindIndex(r => r.Lines.Contains(below));
+        Equal(rx + 1, rb, "juste sous la ligne touchée");
+        Check(t.Rows[rb + 1].Lines[0].FirstText.StartsWith("N° contrat"), "la suite du bloc vient après");
+        Check(t.RowYs[rb + 1] - t.RowYs[rb] <= 70, $"une ligne de haut ({t.RowYs[rb + 1] - t.RowYs[rb]})");
+        Equal(x.Cells.Count, below.Cells.Count, "mêmes cases (désignation et prix)");
+        var z = t.Rows.SelectMany(r => r.Lines).First(l => l.FirstText.StartsWith("Durée"));
+        var above = Rows.AddBlank(page, z, above: true)!;
+        int rz = t.Rows.FindIndex(r => r.Lines.Contains(z)), ra = t.Rows.FindIndex(r => r.Lines.Contains(above));
+        Equal(rz - 1, ra, "juste au-dessus de la ligne touchée");
+        Equal("", string.Join(" ; ", Integrity.NewProblems(sound, Integrity.Check(p))), "mise en page saine");
+        Equal(LineKind.EnTete, t.Rows[0].Lines[0].Kind, "en-tête intact");
+    }
+
     public static void T_Vieux_projet_un_lu_l_le_plus_revient()
     {
         // Vidéo du client : bloc « BUREAU 4 » + deux caissons ; la version d'avant lisait « l caisson » (1 lu comme l) :

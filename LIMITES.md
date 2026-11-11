@@ -168,3 +168,10 @@
 - **Chaque page s'ouvre en vue d'ensemble** (page entière dans la fenêtre), à l'import comme en passant d'une page à l'autre ; plus d'agrandissement à 150 %. Le bouton ⟷ passe à la pleine largeur, et inversement. Une page devenue très longue (beaucoup de lignes ajoutées) s'ouvre à l'échelle d'une feuille : le reste se fait défiler.
 - **Enregistrer sous** (à droite d'Exporter) : PDF, texte (.txt) ou projet (.inventaire), dans le dossier et sous le nom choisis. Le PDF est le même que celui d'Exporter (une image par page, texte non sélectionnable).
 - Une page où l'on ajoute beaucoup de lignes **s'allonge** ; elle n'est pas encore coupée toute seule en plusieurs pages de la taille d'une feuille (dans le PDF, une page longue est une page plus haute).
+
+## Lignes ajoutées au milieu d'un bloc (Windows et iPad)
+
+- Dans un bloc (plusieurs objets dans une seule rangée imprimée, ex. « STOCKS FOURNISSEURS NON PAYES » et ses fournisseurs), **« Ajouter une ligne vide en dessous / au-dessus »** et **« Ajouter des lignes… »** posent la ligne **juste à côté de la ligne touchée** : un trait est tracé à cet endroit, et la ligne ajoutée a sa case de lot, sa désignation et ses prix. Avant, elle partait sous (ou au-dessus de) tout le bloc.
+- La ligne touchée garde avec elle les lignes qui la suivent de près (un fournisseur écrit sur deux lignes reste entier). Sur la 1re ligne du bloc (l'objet et sa description), c'est toute la rangée, comme avant.
+- Une ligne vide a la **hauteur d'une ligne**, plus celle de l'espace imprimé autour (sur la 1re ligne d'un gros bloc, elle était énorme).
+- Pour donner à chaque fournisseur d'un bloc son propre numéro et ses propres prix sans ajouter de ligne : **clic droit › Séparer ici** sur sa 1re ligne.

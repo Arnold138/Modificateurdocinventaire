@@ -168,13 +168,20 @@ export function copyLine(page, line, blank = false, above = false, src = line, f
   const inkTop = lineTop(src), inkBottom = inkBottomOf(src);
   const spaceAbove = inkTop - top, below = bodyH - (inkBottom - top);
   const pad = Math.min(40, Math.max(0, Math.ceil(spaceAbove - below)));
-  if (pad > 0 && longest && src === line) parts.push({ Src: longest.Src, Height: pad, Gap: true, Span: span, Cols: cols, X0: x0, X1: x1 });
+  // Ligne vide : la hauteur d'une ligne, pas celle de l'espace imprimé autour (1re ligne d'un gros bloc : rangée énorme).
+  const boxTop = Math.floor(Math.min(...src.Cells.map((f) => baseBox(src, f).Y)));
+  const boxH = Math.ceil(Math.max(...src.Cells.map((f) => Rect.bottom(baseBox(src, f))))) - boxTop;
+  const padV = Math.max(6, Math.trunc(boxH / 4)), want = boxH + 2 * padV;
+  const capped = blank && longest && src === line && bodyH + Math.max(0, pad) > want;
+  if (capped) parts[parts.length - 1].Height = want;
+  else if (pad > 0 && longest && src === line) parts.push({ Src: longest.Src, Height: pad, Gap: true, Span: span, Cols: cols, X0: x0, X1: x1 });
   const y = cutY(t.RowYs[above ? r : r + 1]);
   // Cases de la ligne, relevées avant que la bande ne décale la page.
   const cells = src.Cells.map((f) => ({ f, b: baseBox(src, f), ink: f.Ink }));
   const band = insertBand(page, y, parts, 'Copy');
-  // Ligne recopiée : mêmes cases, posées dans la nouvelle rangée (même place par rapport à leur rangée).
-  const dy = y + FILET - top;
+  // Ligne recopiée : mêmes cases, posées dans la nouvelle rangée (même place par rapport à leur rangée ; ligne vide réduite :
+  // au milieu de sa rangée).
+  const dy = capped ? y + FILET + padV - boxTop : y + FILET - top;
   const copy = {
     Kind: blank ? 'Article' : src.Kind, KindChosenByUser: !blank && !!src.KindChosenByUser, OutsideTable: false,
     Lot: '', LotManual: false, LotSlot: false, NoLot: false, ForceLot: false, Extra: 0, ExtraAt: 0, Copy: true,
@@ -196,8 +203,45 @@ export function copyLine(page, line, blank = false, above = false, src = line, f
   return copy;
 }
 
-/** « Ajouter une ligne vide » au-dessus ou en dessous de la rangée de la ligne. */
-export const addBlankLine = (page, line, above = false) => copyLine(page, line, true, above);
+/**
+ * Paragraphe de la ligne dans sa rangée : lignes qui se suivent sans grand interligne et dont la suivante ne commence pas un
+ * nouvel objet (« 1 caisson… »). Ex. « WAGO : … pour » + « 2570 € non réglé » dans le bloc « STOCKS FOURNISSEURS ».
+ */
+function paragraphOf(row, i) {
+  const h = (l) => inkBottomOf(l) - lineTop(l);
+  const brk = (a, b) => lineTop(b) - inkBottomOf(a) >= Math.max(6, Math.min(h(a), h(b)) / 2) || ITEM_START_ROW.test(firstText(b));
+  let s = i, e = i;
+  while (s > 0 && !brk(row.Lines[s - 1], row.Lines[s])) s--;
+  while (e + 1 < row.Lines.length && !brk(row.Lines[e], row.Lines[e + 1])) e++;
+  return { s, e };
+}
+const ITEM_START_ROW = /^\s*(\+\/-\s*)?\d{1,3}\s+\p{L}/u;
+
+/**
+ * Place pour une ligne ajoutée au milieu d'un bloc (plusieurs objets dans une seule rangée imprimée) : un trait est tracé
+ * juste au-dessus (ou en dessous) du paragraphe de la ligne, et les deux morceaux sont réduits à la hauteur des autres.
+ * La ligne ajoutée arrive donc à l'endroit touché, et pas au-dessus ou en dessous de tout le bloc. Le 1er paragraphe de la
+ * rangée (l'objet et sa description, ex. « PRODUITS FINIS » + « valorisés à… ») garde la règle d'avant : toute la rangée.
+ */
+export function openAt(page, line, above) {
+  const at = locate(page, line);
+  if (!at) return;
+  const { s, e } = paragraphOf(at.row, at.i);
+  if (above && s > 0) {
+    const first = at.row.Lines[s], prev = at.row.Lines[s - 1];
+    if (splitAt(page, first)) { trimRow(page, prev); trimRow(page, first); }
+  } else if (!above && s > 0 && e + 1 < at.row.Lines.length) {
+    const last = at.row.Lines[e], next = at.row.Lines[e + 1];
+    if (splitAt(page, next)) { trimRow(page, last); trimRow(page, next); }
+  }
+}
+
+/** « Ajouter une ligne vide » au-dessus ou en dessous de la ligne (dans un bloc : juste à côté de son paragraphe). */
+export function addBlankLine(page, line, above = false) {
+  if (!canCopyLine(page, line) || (above && !canAddAbove(page, line))) return null;
+  openAt(page, line, above);
+  return copyLine(page, line, true, above);
+}
 
 /** « Séparer ici » : la ligne et ce qui la suit dans sa rangée forment une rangée à part (filet tracé au-dessus). */
 export function splitAt(page, line) {

@@ -7,7 +7,7 @@
 import { Rect } from './geometry.js';
 import { allLines, assignIds, firstText } from './model.js';
 import { setExtra, removeBand, insertsOf, cleanRow, paperOf, baseHeight } from './layout.js';
-import { removeAddedRow, copyLine, locate } from './rows.js';
+import { removeAddedRow, copyLine, locate, openAt } from './rows.js';
 import { cutBand } from './layout.js';
 
 const R = (v) => Math.floor(v + 0.5);
@@ -280,6 +280,18 @@ function contentBottom(page) {
  */
 export function addRows(project, page, line, n, { above = false, img = null, id = null } = {}) {
   const out = { added: 0, pages: [], last: null };
+  const at0 = page.Added ? null : locate(page, line);
+  if (at0) {
+    // Au milieu d'un bloc : les lignes arrivent à l'endroit touché (trait tracé là), s'il y a la place sur la page
+    // (sinon elles partent sur une page blanche, comme avant). La page garde sa taille.
+    const H1 = baseHeight(page), r1 = referenceRow(at0.table, headOf(page, at0.table));
+    const refH = r1 !== null ? at0.table.RowYs[r1 + 1] - at0.table.RowYs[r1] : 60;
+    const room = contentBottom(page) + 2 * 5 + refH <= H1 - Math.max(40, Math.floor(H1 * 0.025 + 0.5));
+    const h0 = page.Height;
+    if (room) openAt(page, line, above);
+    const H = baseHeight(page), k = Math.min(page.Height - h0, page.Height - H);
+    if (k > 0 && contentBottom(page) <= H - Math.max(40, Math.floor(H * 0.025 + 0.5))) cutBand(page, page.Height - k, k, null);
+  }
   let cur = page, dest = line, first = above;
   for (let guard = 0; out.added < n && guard < 4 * n + 10; guard++) {
     const at = locate(cur, dest);

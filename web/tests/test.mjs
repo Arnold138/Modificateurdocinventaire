@@ -917,6 +917,29 @@ test('Réduire ne coupe jamais dans le texte (gros bloc, en-tête dont l\'écrit
   eq(3, table.RowYs.length, 'tout défait : filets d\'origine');
 });
 
+test('Ligne vide au milieu d\'un bloc : à l\'endroit touché, une ligne de haut (vidéo 2 du client)', () => {
+  const F = (id, col, text, y, inkY) => ({ Id: id, Column: col, Text: text, OriginalText: text, Box: { X: col ? 1070 : 60, Y: y, Width: col ? 190 : 1000, Height: 34 },
+    Ink: text ? { X: 64, Y: inkY, Width: 300, Height: 26 } : Rect.empty(), FontSize: 24, Align: 'Left', Indent: 0, Locked: false, Strikes: [], Colors: [], Manual: false });
+  const L = (kind, id, text, y, inkY) => ({ Kind: kind, KindChosenByUser: false, OutsideTable: false, Lot: '', LotManual: false, NoLot: false, ForceLot: false, Extra: 0, ExtraAt: 0,
+    Cells: [F(id + 'a', 0, text, y, inkY), F(id + 'b', 1, '', y, 0)] });
+  const t = { Bounds: { X: 60, Y: 100, Width: 1200, Height: 400 }, HasGrid: true, ColumnXs: [60, 1065, 1260], RowYs: [100, 140, 500], Rows: [
+    { Bounds: Rect.empty(), Lines: [L('EnTete', 'h', 'V - VEHICULE EN LOCATION', 103, 106)] },
+    { Bounds: Rect.empty(), Lines: [L('Article', 'w', 'VASP RENAULT CLIO', 190, 194), L('Article', 'x', 'EN LOCATION CHEZ DIAC', 230, 234), L('Article', 'y', 'N° contrat : F0206246', 270, 274), L('Article', 'z', 'Durée : 36 mois', 310, 314)] },
+  ] };
+  const page = { Id: 'bloc', Source: 'Image', Width: 1300, Height: 600, Tables: [t], LooseLines: [], LockZones: [], Inserts: [], Rev: 1 };
+  const x = t.Rows[1].Lines[1];
+  const below = addBlankLine(page, x);
+  const rx = t.Rows.findIndex((r) => r.Lines.includes(x)), rb = t.Rows.findIndex((r) => r.Lines.includes(below));
+  eq(rx + 1, rb, 'juste sous la ligne touchée');
+  check(t.Rows[rb + 1].Lines[0].Cells[0].Text.startsWith('N° contrat'), 'la suite du bloc vient après');
+  check(t.RowYs[rb + 1] - t.RowYs[rb] <= 70, `une ligne de haut (${t.RowYs[rb + 1] - t.RowYs[rb]})`);
+  const z = t.Rows.flatMap((r) => r.Lines).find((l) => l.Cells[0].Text.startsWith('Durée'));
+  const above = addBlankLine(page, z, true);
+  eq(t.Rows.findIndex((r) => r.Lines.includes(z)) - 1, t.Rows.findIndex((r) => r.Lines.includes(above)), 'juste au-dessus de la ligne touchée');
+  for (let k = 1; k < t.RowYs.length; k++) check(t.RowYs[k] > t.RowYs[k - 1], 'filets dans l\'ordre');
+  eq('EnTete', t.Rows[0].Lines[0].Kind, 'en-tête intact');
+});
+
 test('Vieux projet où le 1 était lu « l » : le « + » revient sur les lignes du bloc (vidéo du client)', () => {
   const page = { Id: 'v', Source: 'Image', Width: 1300, Height: 600, LooseLines: [], LockZones: [], Inserts: [], Rev: 0, Tables: [{
     HasGrid: true, ColumnXs: [60, 1065, 1260], RowYs: [100, 400], Bounds: { X: 60, Y: 100, Width: 1200, Height: 300 },

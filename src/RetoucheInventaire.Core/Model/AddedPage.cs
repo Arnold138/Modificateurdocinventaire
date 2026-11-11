@@ -341,6 +341,19 @@ public static partial class AddedPage
         int added = 0;
         var pages = new List<Page>();
         PrintedLine? last = null;
+        if (page.Added is null && Rows.Locate(page, line) is { } at0)
+        {
+            // Au milieu d'un bloc : les lignes arrivent à l'endroit touché (trait tracé là), s'il y a la place sur la page
+            // (sinon elles partent sur une page blanche, comme avant). La page garde sa taille.
+            int H1 = PageLayout.BaseHeight(page);
+            int? r1 = ReferenceRow(at0.Table, HeadOf(page, at0.Table));
+            double refH = r1 is int q ? at0.Table.RowYs[q + 1] - at0.Table.RowYs[q] : 60;
+            bool room = ContentBottom(page) + 2 * 5 + refH <= H1 - Math.Max(40, (int)Math.Round(H1 * 0.025, MidpointRounding.AwayFromZero));
+            int h0 = page.Height;
+            if (room) Rows.OpenAt(page, line, above);
+            int H0 = PageLayout.BaseHeight(page), k0 = Math.Min(page.Height - h0, page.Height - H0);
+            if (k0 > 0 && ContentBottom(page) <= H0 - Math.Max(40, (int)Math.Round(H0 * 0.025, MidpointRounding.AwayFromZero))) PageLayout.CutBand(page, page.Height - k0, k0, null);
+        }
         var cur = page;
         var dest = line;
         bool first = above;

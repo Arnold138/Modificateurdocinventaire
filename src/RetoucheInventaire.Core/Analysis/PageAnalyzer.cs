@@ -25,7 +25,7 @@ public static class PageAnalyzer
         var used = new bool[words.Count];
 
         foreach (var grid in grids ?? RuleDetector.Detect(image))
-            page.Tables.Add(BuildGridTable(grid, words, used));
+            page.Tables.Add(BuildGridTable(WithoutRulesThroughText(grid, words), words, used));
 
         var rest = words.Where((w, i) => !used[i]).ToList();
         if (page.Tables.Count == 0)
@@ -180,6 +180,31 @@ public static class PageAnalyzer
         t.Rows = rows.Select(x => x.Row).ToList();
         t.RowYs = keep;
         return header;
+    }
+
+    /// <summary>
+    /// Un vrai filet ne traverse jamais une ligne de texte : un « filet » coupé par au moins trois mots (trame grisée d'un en-tête
+    /// lue comme un trait au milieu de « III - STOCK SOUS RÉSERVE… ») est retiré, les deux rangées n'en font qu'une. Sinon on
+    /// pouvait poser une ligne ou déplacer une rangée au milieu de l'en-tête, et une ligne ajoutée recopiait une moitié d'en-tête.
+    /// </summary>
+    internal static TableGrid WithoutRulesThroughText(TableGrid grid, List<OcrWord> words)
+    {
+        if (grid.RowYs.Count < 3) return grid;
+        double left = grid.ColumnXs[0], right = grid.ColumnXs[^1];
+        var inside = words.Where(w => w.Box.CenterX > left && w.Box.CenterX < right && w.Box.CenterY > grid.RowYs[0] && w.Box.CenterY < grid.RowYs[^1]).ToList();
+        if (inside.Count == 0) return grid;
+        var heights = inside.Select(w => w.Box.Height).OrderBy(h => h).ToList();
+        double med = heights[heights.Count / 2];
+        // Mots d'une hauteur normale (une lecture qui englobe deux lignes ne compte pas), coupés près de leur milieu.
+        var normal = inside.Where(w => w.Box.Height <= 1.6 * med).ToList();
+        var keep = new List<double> { grid.RowYs[0] };
+        for (int k = 1; k + 1 < grid.RowYs.Count; k++)
+        {
+            double y = grid.RowYs[k];
+            if (normal.Count(w => w.Box.Top < y - 4 && w.Box.Bottom > y + 4 && Math.Abs(w.Box.CenterY - y) <= 0.3 * w.Box.Height) < 3) keep.Add(y);
+        }
+        keep.Add(grid.RowYs[^1]);
+        return keep.Count == grid.RowYs.Count ? grid : grid with { RowYs = keep };
     }
 
     public static void AssignIds(Page page)

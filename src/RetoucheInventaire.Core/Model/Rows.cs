@@ -188,14 +188,21 @@ public static class Rows
         double inkTop = Arrangement.LineTop(src0), inkBottom = InkBottom(src0);
         double spaceAbove = inkTop - top, below = bodyH - (inkBottom - top);
         int pad = Math.Min(40, Math.Max(0, (int)Math.Ceiling(spaceAbove - below)));
-        if (pad > 0 && longest is not null && src0 == line) // rangée modèle : exactement sa hauteur
+        // Ligne vide : la hauteur d'une ligne, pas celle de l'espace imprimé autour (1re ligne d'un gros bloc : rangée énorme).
+        int boxTop = (int)Math.Floor(src0.Cells.Min(f => PageLayout.BaseBox(src0, f).Y));
+        int boxH = (int)Math.Ceiling(src0.Cells.Max(f => PageLayout.BaseBox(src0, f).Bottom)) - boxTop;
+        int padV = Math.Max(6, boxH / 4), want = boxH + 2 * padV;
+        bool capped = blank && longest is not null && src0 == line && bodyH + Math.Max(0, pad) > want;
+        if (capped) parts[^1].Height = want;
+        else if (pad > 0 && longest is not null && src0 == line) // rangée modèle : exactement sa hauteur
             parts.Add(new BandPart { Src = longest.Src, Height = pad, Gap = true, Span = span, Cols = cols, X0 = x0, X1 = x1 });
         int y = Arrangement.CutY(t.RowYs[above ? r : r + 1]);
         // Cases de la ligne, relevées avant que la bande ne décale la page.
         var src = src0.Cells.Select(f => (F: f, B: PageLayout.BaseBox(src0, f), Ink: f.Ink)).ToList();
         var band = PageLayout.InsertBand(page, y, parts, "Copy");
-        // Ligne recopiée : mêmes cases, posées dans la nouvelle rangée (même place par rapport à leur rangée).
-        int dy = y + Arrangement.Filet - top;
+        // Ligne recopiée : mêmes cases, posées dans la nouvelle rangée (même place par rapport à leur rangée ; ligne vide
+        // réduite : au milieu de sa rangée).
+        int dy = capped ? y + Arrangement.Filet + padV - boxTop : y + Arrangement.Filet - top;
         var copy = new PrintedLine
         {
             Kind = blank ? LineKind.Article : src0.Kind, KindChosenByUser = !blank && src0.KindChosenByUser, Copy = true,
@@ -219,8 +226,50 @@ public static class Rows
         return copy;
     }
 
-    /// <summary>« Ajouter une ligne vide » au-dessus ou en dessous de la rangée de la ligne.</summary>
-    public static PrintedLine? AddBlank(Page page, PrintedLine line, bool above = false) => Copy(page, line, blank: true, above: above);
+    /// <summary>
+    /// Paragraphe de la ligne dans sa rangée : lignes qui se suivent sans grand interligne et dont la suivante ne commence pas un
+    /// nouvel objet (« 1 caisson… »). Ex. « WAGO : … pour » + « 2570 € non réglé » dans le bloc « STOCKS FOURNISSEURS ».
+    /// </summary>
+    private static (int S, int E) ParagraphOf(Row row, int i)
+    {
+        static double H(PrintedLine l) => InkBottom(l) - Arrangement.LineTop(l);
+        static bool Break(PrintedLine a, PrintedLine b) =>
+            Arrangement.LineTop(b) - InkBottom(a) >= Math.Max(6, Math.Min(H(a), H(b)) / 2) || Analysis.LineClassifier.LooksLikeItem(b.FirstText);
+        int s = i, e = i;
+        while (s > 0 && !Break(row.Lines[s - 1], row.Lines[s])) s--;
+        while (e + 1 < row.Lines.Count && !Break(row.Lines[e], row.Lines[e + 1])) e++;
+        return (s, e);
+    }
+
+    /// <summary>
+    /// Place pour une ligne ajoutée au milieu d'un bloc (plusieurs objets dans une seule rangée imprimée) : un trait est tracé
+    /// juste au-dessus (ou en dessous) du paragraphe de la ligne, et les deux morceaux sont réduits à la hauteur des autres.
+    /// La ligne ajoutée arrive donc à l'endroit touché, et pas au-dessus ou en dessous de tout le bloc. Le 1er paragraphe de la
+    /// rangée (l'objet et sa description, ex. « PRODUITS FINIS » + « valorisés à… ») garde la règle d'avant : toute la rangée.
+    /// </summary>
+    public static void OpenAt(Page page, PrintedLine line, bool above)
+    {
+        if (Locate(page, line) is not { } at) return;
+        var (s, e) = ParagraphOf(at.Row, at.I);
+        if (above && s > 0)
+        {
+            PrintedLine first = at.Row.Lines[s], prev = at.Row.Lines[s - 1];
+            if (Split(page, first)) { TrimRow(page, prev); TrimRow(page, first); }
+        }
+        else if (!above && s > 0 && e + 1 < at.Row.Lines.Count)
+        {
+            PrintedLine last = at.Row.Lines[e], next = at.Row.Lines[e + 1];
+            if (Split(page, next)) { TrimRow(page, last); TrimRow(page, next); }
+        }
+    }
+
+    /// <summary>« Ajouter une ligne vide » au-dessus ou en dessous de la ligne (dans un bloc : juste à côté de son paragraphe).</summary>
+    public static PrintedLine? AddBlank(Page page, PrintedLine line, bool above = false)
+    {
+        if (!CanCopy(page, line) || (above && !CanAddAbove(page, line))) return null;
+        OpenAt(page, line, above);
+        return Copy(page, line, blank: true, above: above);
+    }
 
     /// <summary>« Séparer ici » : la ligne et ce qui la suit dans sa rangée forment une rangée à part (filet tracé au-dessus).</summary>
     public static bool Split(Page page, PrintedLine line)

@@ -213,6 +213,18 @@ public static class Stress
             var inBlock = project.Pages[p].Tables.SelectMany(t => t.HasGrid ? t.Rows.Where(r => r.Lines.Count(l => l.FirstText.Length > 0) > 2).Select(r => r.Lines[1]) : [])
                 .Where(l => Rows.CanSplit(project.Pages[p], l)).Take(2).ToList();
             foreach (var l in inBlock) if (Find(p, l) is { } at) Do("moveLine", p, at.Ti, at.O, at.I, "{\"to\":0}");
+            // 7) Vidéo 2 : lignes vides ajoutées au milieu des blocs (au-dessus et en dessous de lignes intérieures), remplies,
+            //    puis « Séparer ici » sur d'autres lignes du bloc ; et une rangée de 5 lignes au milieu d'un bloc.
+            var pgx = project.Pages[p];
+            var inner = pgx.Tables.SelectMany(t => t.HasGrid && t.RowYs.Count >= 2 ? t.Rows.Where(r => r.Lines.Count >= 3).SelectMany(r => r.Lines.Skip(1)) : [])
+                .Where(l => Rows.CanCopy(pgx, l) && !l.Deleted).Take(8).ToList();
+            for (int k = 0; k < inner.Count; k++)
+            {
+                if (Find(p, inner[k]) is not { } at) continue;
+                if (k % 3 == 2) Do("split", p, at.Ti, at.O, at.I);
+                else Do("blank", p, at.Ti, at.O, at.I, $"{{\"above\":{(k % 3 == 1 ? "true" : "false")},\"text\":\"{id} ajout dans le bloc {k}\"}}");
+            }
+            if (inner.Count > 0 && Find(p, inner[^1]) is { } ar) Do("addRows", p, ar.Ti, ar.O, ar.I, "{\"n\":5,\"above\":false,\"id\":\"lr" + p + "\"}");
             // 6) Synchroniser cette page, puis une ligne TOTAL.
             if (Objects(p).FirstOrDefault().Line is { } any && Find(p, any) is { } s0) Do("sync", p, s0.Ti, s0.O, s0.I, $"{{\"page\":{p}}}");
             if (Objects(p).LastOrDefault().Line is { } last && Find(p, last) is { } t0) Do("total", p, t0.Ti, t0.O, t0.I, "{\"mode\":\"page\",\"bold\":true}");

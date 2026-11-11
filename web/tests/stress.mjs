@@ -343,6 +343,8 @@ function chooseClient() {
   if (r < 0.69) { const x = pick(all); return x && ['moveRow', x, { to: Math.floor(random() * rowOrder(x.table).length) }]; }
   if (r < 0.76) { const x = pick(all.filter((y) => y.row.Lines.filter((l) => firstText(l)).length > 1)); return x && ['moveLine', x, { to: Math.floor(random() * rowOrder(x.table).length) }]; }
   if (r < 0.81) { const x = pick(objs.filter((y) => isZeroLot(y.line))); return x && ['placeZero', x, { to: Math.floor(random() * rowOrder(x.table).length) }]; }
+  if (r < 0.80) { const x = pick(all.filter((y) => y.i > 0 && canCopyLine(y.page, y.line))); return x && ['blank', x, { above: chance(0.4), text: chance(0.8) ? `ajout ${word()}` : '' }]; }
+  if (r < 0.82) { const x = pick(all.filter((y) => canSplit(y.page, y.line))); return x && ['split', x, {}]; }
   if (r < 0.86) { const x = pick(all.filter((y) => y.line.Cells[0].Text.includes('\n') && canCopyLine(y.page, y.line))); return x && ['typed', x, { from: 1 + Math.floor(random() * (x.line.Cells[0].Text.split('\n').length - 1)) }]; }
   if (r < 0.90) {
     const xs = all.filter((y) => /mot\d+/.test(y.line.Cells[0].Text));

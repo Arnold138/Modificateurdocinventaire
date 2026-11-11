@@ -916,6 +916,9 @@ public sealed class PageView
             Canvas.SetTop(_ghost, y - (strip.Bottom - strip.Top) / 2);
             // Point d'insertion : avant la première rangée dont le milieu est sous le doigt.
             int i = vt.Strips.FindIndex(s => y < (s.Top + s.Bottom) / 2);
+            // Jamais au-dessus de l'en-tête du tableau (« Exploitation / Réalisation »).
+            int first = vt.Strips.FindIndex(s => !(s.R < vt.Table.Rows.Count && vt.Table.Rows[s.R].Lines.Count > 0 && vt.Table.Rows[s.R].Lines.All(l => l.Kind == LineKind.EnTete)));
+            if (i >= 0 && first > 0 && i < first) i = first;
             before = i < 0 ? null : vt.Strips[i].R;
             double at = i < 0 ? vt.Strips[^1].Bottom : vt.Strips[i].Top;
             Canvas.SetTop(_dropLine, at - 2);

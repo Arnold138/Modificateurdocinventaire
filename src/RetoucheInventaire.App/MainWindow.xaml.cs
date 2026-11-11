@@ -866,10 +866,10 @@ public sealed partial class MainWindow : Window
         // du tableau quand celle-ci ne peut pas servir de modèle.
         if (Rows.CanAddRows(page, line))
         {
-            list.Add(new("Ajouter une ligne vide en dessous", "Rangée complète (case de lot, désignation, prix) sous cette rangée. La suite descend.", "\uE710",
+            list.Add(new("Ajouter une ligne vide en dessous", "Ligne complète (case de lot, désignation, prix) juste sous cette ligne, même au milieu d'un bloc. La suite descend.", "\uE710",
                 () => _ = canCopy ? LineActionAsync("blankBelow", 0, f) : AddRowsNowGuardedAsync(page, line, 1, false)));
             if (Rows.CanAddAbove(page, line))
-                list.Add(new("Ajouter une ligne vide au-dessus", "Rangée complète (case de lot, désignation, prix) au-dessus de cette rangée.", "\uE710",
+                list.Add(new("Ajouter une ligne vide au-dessus", "Ligne complète (case de lot, désignation, prix) juste au-dessus de cette ligne, même au milieu d'un bloc.", "\uE710",
                     () => _ = canCopy ? LineActionAsync("blankAbove", 0, f) : AddRowsNowGuardedAsync(page, line, 1, true)));
             list.Add(new("Ajouter des lignes… (1, 5, 10, 15)", "Plusieurs lignes vides d'un coup, mêmes colonnes et même hauteur que les lignes du tableau.", "\uE8FD",
                 () => _ = AddRowsDialogAsync(page, line)));
