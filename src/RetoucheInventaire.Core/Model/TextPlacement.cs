@@ -40,7 +40,7 @@ public static class TextPlacement
     {
         var b = PageLayout.BaseBox(line, f);
         double size = baseSize;
-        double avail = Math.Max(4, f.Box.Width - f.Indent - 3);
+        double avail = Math.Max(4, f.WrapWidth - f.Indent - 3);
         List<string> lines;
         if (TextWrap.IsMultiline(f)) lines = TextWrap.Wrap(text, avail, s => measure(s, size));
         else

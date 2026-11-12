@@ -281,6 +281,41 @@ public static class Lots
         }
     }
 
+    /// <summary>
+    /// Une ligne d'un tableau à lots peut être rangée (tri par numéro, lot 0) dans n'importe quel autre tableau à lots, où sa
+    /// désignation est coupée à la largeur de la colonne d'arrivée. Le texte se replie donc sur la plus étroite de ces colonnes :
+    /// il tient partout, à l'écran comme à l'export (sinon un long texte rangé sur une page plus étroite débordait sur les lignes
+    /// suivantes : lot 50 du client, de la page 9 à la page 18). Renvoie vrai si un rétrécissement a changé.
+    /// </summary>
+    public static bool SetNarrowing(InventoryProject project)
+    {
+        static bool Grid(Table t) => t.HasGrid && t.RowYs.Count >= 2 && t.ColumnXs.Count >= 2;
+        bool active = IsActive(project);
+        // Tableaux qui reçoivent des lignes rangées : ceux qui ont des cases de lot (pas un petit tableau parasite sans objets).
+        var lotTables = active ? project.Pages.SelectMany(p => p.Tables).Where(t => Grid(t) && !t.LotsOff && t.Rows.Any(r => r.Lines.Any(HasCell))).ToList() : [];
+        bool changed = false;
+        foreach (var page in project.Pages)
+            foreach (var t in page.Tables)
+            {
+                bool lotTable = active && Grid(t) && !t.LotsOff;
+                foreach (var f in t.Rows.SelectMany(r => r.Lines).SelectMany(l => l.Cells))
+                {
+                    double narrow = 0;
+                    if (lotTable && f.Column + 1 < t.ColumnXs.Count)
+                    {
+                        double own = t.ColumnXs[f.Column + 1] - t.ColumnXs[f.Column];
+                        // Une colonne bien plus étroite (moins de 70 %) n'est pas la même colonne (tableau mal lu) : ignorée.
+                        foreach (var u in lotTables)
+                            if (u.ColumnXs.Count == t.ColumnXs.Count && u.ColumnXs[f.Column + 1] - u.ColumnXs[f.Column] >= 0.7 * own)
+                                narrow = Math.Max(narrow, own - (u.ColumnXs[f.Column + 1] - u.ColumnXs[f.Column]));
+                        narrow = Math.Floor(narrow);
+                    }
+                    if (f.Narrow != narrow) { f.Narrow = narrow; changed = true; }
+                }
+            }
+        return changed;
+    }
+
     // ---------- Emplacement : une colonne ajoutée à gauche de chaque tableau, dans la marge ----------
 
     /// <summary>Bord gauche du tableau (son filet vertical gauche s'il a une grille).</summary>

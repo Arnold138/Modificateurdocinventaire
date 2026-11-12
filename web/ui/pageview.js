@@ -5,7 +5,7 @@
 import { Rect } from '../core/geometry.js';
 import { isModified, addLockZone, removeLockZoneAt, looksLikeTotal } from '../core/model.js';
 import { paperColor } from '../core/exports.js';
-import { canAddLot, hasLotCell, isZeroLot, itemTable, columnWidth, tableLeft, lotZone } from '../core/lots.js';
+import { canAddLot, hasLotCell, isZeroLot, itemTable, columnWidth, tableLeft, lotZone, wrapWidth } from '../core/lots.js';
 import { rowGaps } from '../core/rows.js';
 import { frameToggles } from '../core/lotcolumn.js';
 import { font, lotSize, textLayout, isMultiline, LINE_HEIGHT, strikeSegments, rasterToCanvas, freeCanvas, cleanPatch } from '../services/canvas.js';
@@ -681,6 +681,8 @@ export class PageView {
     const line = this.lineOf.get(f);
     const t = textLayout(line, f, input.value);
     px(input, pl.box);
+    // Désignation d'un tableau à lots : repliée comme dans la colonne la plus étroite où elle peut être rangée.
+    if (isMultiline(f)) input.style.width = Math.min(pl.box.Width, wrapWidth(f)) + 'px';
     input.style.font = font(t.size, t.bold);
     const lh = LINE_HEIGHT * t.size;
     input.style.lineHeight = lh + 'px';

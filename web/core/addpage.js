@@ -102,6 +102,13 @@ function mergeThinBody(t, head) {
 }
 
 /** Filet vertical (abscisse x) bien présent sur l'image entre y0 et y1 (au moins la moitié de la hauteur) ; faux pour une colonne lue en trop. */
+/** Colonne écrite sur au moins un tiers des rangées sous l'en-tête. */
+function writtenColumn(t, c, head) {
+  const body = t.Rows.slice(head);
+  if (body.length === 0) return false;
+  return body.filter((r) => r.Lines.some((l) => l.Cells.some((f) => f.Column === c && (f.Text ?? '').trim().length > 0))).length * 3 >= body.length;
+}
+
 function ruleThere(img, x, y0, y1) {
   x = R(x); y0 = Math.max(0, R(y0)); y1 = Math.min(img.h, R(y1));
   if (y1 <= y0) return true;
@@ -188,12 +195,15 @@ export function addBlankPage(project, model, at, img = null, id = null, empty = 
     let ti_ = model.Added ? info.Tables[ti] ?? null : null;
     if (!model.Added && blankable(t)) {
       const head = headRows(t), orig = [...t.ColumnXs];
+      // Colonne écrite sur la plupart des rangées (les désignations) : jamais retirée, même si son trait du bord est effacé
+      // par endroits sur le scan (même règle que Windows).
+      const written = t.ColumnXs.slice(1).map((_, c) => writtenColumn(t, c, head));
       mergeThinBody(t, head);
       // Colonne du bord lue en trop (pas de filet sur l'imprimé) : retirée.
       if (img) {
         const y0 = t.RowYs[head], y1 = t.RowYs[t.RowYs.length - 1];
-        while (t.ColumnXs.length > 3 && !ruleThere(img, t.ColumnXs[t.ColumnXs.length - 1], y0, y1)) dropOuterColumn(t, false);
-        while (t.ColumnXs.length > 3 && !ruleThere(img, t.ColumnXs[0], y0, y1)) dropOuterColumn(t, true);
+        while (t.ColumnXs.length > 3 && !written[written.length - 1] && !ruleThere(img, t.ColumnXs[t.ColumnXs.length - 1], y0, y1)) { dropOuterColumn(t, false); written.pop(); }
+        while (t.ColumnXs.length > 3 && !written[0] && !ruleThere(img, t.ColumnXs[0], y0, y1)) { dropOuterColumn(t, true); written.shift(); }
       }
       ti_ = { Ys: [...t.RowYs], Head: head, Orig: orig };
       rowBounds(t);

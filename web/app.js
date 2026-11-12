@@ -16,7 +16,8 @@ import { stretch, setExtra, baseHeight, totalExtra } from './core/layout.js';
 import { toggleStrike, isStruck, setColor, RED, BLACK, TEXT_COLORS } from './core/strikes.js';
 import { planArrangement, viewOf, composePage, unitCrop, pageArranged, mapY, unmapY, syncEndPages } from './core/arrange.js';
 import { recomputeTotals, isComputedCell, computedValue } from './core/totals.js';
-import { hasLotCell, lotSegment, printedLotZone, applyPrintedLots, numberBox, columnWidth, moveToRow } from './core/lots.js';
+import { hasLotCell, lotSegment, printedLotZone, applyPrintedLots, numberBox, columnWidth, moveToRow, setNarrowing } from './core/lots.js';
+import { repairPending, untouched, regrid, brokenBlank, CURRENT_GRID } from './core/pagerepair.js';
 import { frameSignature, lotFrameEnabled, frameToggles } from './core/lotcolumn.js';
 import { canCopyLine, canAddRows, canAddAbove, canSplit, addedRowOf, copyLine, addBlankLine, locate, splitAt, splitTypedText, removeAddedRow, canSplitBelow, splitBelow, addTotalLine, lastObjectLine, rowTrimOf, trimRow, untrimRow, trimsOf, compactRow, canCompact, setGap, autoCompactMoved } from './core/rows.js';
 import { decodeImage, pdfPages, isImageName, mimeOf } from './services/decode.js';
@@ -286,10 +287,23 @@ function replan() {
     state.crops.clear();
     updateButtons();
   }
+  // Largeur où les désignations se replient (colonne la plus étroite où elles peuvent être rangées) : si elle change
+  // (lots créés, page ajoutée, projet ouvert), les lignes au texte tapé grandissent pour qu'il tienne partout.
+  if (setNarrowing(state.project)) growTypedLines();
   state.plan = planArrangement(state.project);
   // Lignes rangées ou déplacées : leurs grands espaces vides sont réduits une fois (réglables ensuite).
   if (autoCompactMoved(state.plan)) state.plan = planArrangement(state.project);
   return state.plan;
+}
+
+/** Lignes au texte tapé : agrandies si leur texte ne tient plus (jamais réduites ici). */
+function growTypedLines() {
+  for (const page of state.project.Pages)
+    for (const line of page.Tables.flatMap((t) => t.Rows).flatMap((r) => r.Lines))
+      if (line.Cells.some((c) => isModified(c) && c.Column === 0)) {
+        const need = lineExtra(line);
+        if (need > (line.Extra ?? 0)) setExtra(page, line, need);
+      }
 }
 
 /** Totaux recalculés (cases non tapées à la main) ; renvoie les cases changées. */
@@ -1482,8 +1496,50 @@ async function loadProjectById(id) {
   for (const p of pages()) { p.SourceName = repairName(p.SourceName); upgradePage(p); }
   resyncLots(state.project);
   await db.setMeta('last', id);
+  const note = await repairPages();
   await showPage(0);
+  if (note) { status(note); scheduleSave(); }
   return true;
+}
+
+/**
+ * Pages lues par une version précédente (une seule fois, à l'ouverture) : page jamais retouchée dont le tableau avait perdu
+ * sa colonne des désignations relue ; page ajoutée encore vide qui avait perdu cette colonne recréée sur son modèle.
+ * Rien de ce qui a été tapé n'est touché. Renvoie le message à afficher, ou ''.
+ */
+async function repairPages() {
+  const regridding = pages().filter(repairPending);
+  const relu = [];
+  let rebuilt = 0;
+  try {
+    for (const page of regridding) {
+      if (!untouched(page)) { page.GridRev = CURRENT_GRID; continue; }
+      status(`Vérification de la page ${pages().indexOf(page) + 1}…`);
+      await tick();
+      const flat = await restoreFlat(page);
+      if (flat && regrid(page, flat)) relu.push(page);
+    }
+    for (let k = 0; k < pages().length; k++) {
+      const page = pages()[k];
+      const model = brokenBlank(state.project, page);
+      if (!model) continue;
+      const flat = await restoreFlat(model);
+      if (!flat) continue;
+      pages().splice(k, 1);
+      if (!addBlankPage(state.project, model, k, flat, page.Id)) { pages().splice(k, 0, page); continue; }
+      rebuilt++;
+    }
+  } catch (e) {
+    console.error('réparation à l\'ouverture', e);
+  }
+  if (relu.length === 0 && rebuilt === 0) return '';
+  resyncLots(state.project);
+  state.flats.clear();
+  state.crops?.clear?.();
+  const parts = [];
+  if (relu.length) parts.push(`page(s) ${relu.map((p) => pages().indexOf(p) + 1).join(', ')} relue(s) : la colonne des désignations est revenue, on peut y écrire`);
+  if (rebuilt) parts.push(`${rebuilt} page(s) ajoutée(s) vide(s) recréée(s) avec toutes leurs colonnes`);
+  return 'Réparé à l\'ouverture : ' + parts.join(' ; ') + '.';
 }
 
 async function openProjectFile(bytes, name) {

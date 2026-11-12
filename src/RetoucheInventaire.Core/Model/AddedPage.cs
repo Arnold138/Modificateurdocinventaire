@@ -118,6 +118,14 @@ public static partial class AddedPage
     }
 
     /// <summary>Filet vertical bien présent sur l'image entre y0 et y1 (au moins la moitié) ; faux pour une colonne lue en trop.</summary>
+    /// <summary>Colonne écrite sur au moins un tiers des rangées sous l'en-tête.</summary>
+    private static bool Written(Table t, int c, int head)
+    {
+        var body = t.Rows.Skip(head).ToList();
+        if (body.Count == 0) return false;
+        return body.Count(r => r.Lines.Any(l => l.Cells.Any(f => f.Column == c && !string.IsNullOrWhiteSpace(f.Text)))) * 3 >= body.Count;
+    }
+
     private static bool RuleThere(Raster img, double xd, double y0d, double y1d)
     {
         int x = R(xd), y0 = Math.Max(0, R(y0d)), y1 = Math.Min(img.Height, R(y1d));
@@ -226,12 +234,15 @@ public static partial class AddedPage
             {
                 int head = HeadRows(t);
                 var orig = t.ColumnXs.ToList();
+                // Colonne écrite sur la plupart des rangées (les désignations) : jamais retirée, même si son trait du bord est
+                // effacé par endroits sur le scan (page 11 du client : la page ajoutée n'avait plus de colonne des désignations).
+                var written = Enumerable.Range(0, t.ColumnXs.Count - 1).Select(c => Written(t, c, head)).ToList();
                 MergeThinBody(t, head);
                 if (img != null)
                 {
                     double y0 = t.RowYs[head], y1 = t.RowYs[^1];
-                    while (t.ColumnXs.Count > 3 && !RuleThere(img, t.ColumnXs[^1], y0, y1)) DropOuterColumn(t, false);
-                    while (t.ColumnXs.Count > 3 && !RuleThere(img, t.ColumnXs[0], y0, y1)) DropOuterColumn(t, true);
+                    while (t.ColumnXs.Count > 3 && !written[^1] && !RuleThere(img, t.ColumnXs[^1], y0, y1)) { DropOuterColumn(t, false); written.RemoveAt(written.Count - 1); }
+                    while (t.ColumnXs.Count > 3 && !written[0] && !RuleThere(img, t.ColumnXs[0], y0, y1)) { DropOuterColumn(t, true); written.RemoveAt(0); }
                 }
                 at_ = new AddedTable { Ys = t.RowYs.ToList(), Head = head, Orig = orig };
                 RowBounds(t);

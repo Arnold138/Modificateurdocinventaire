@@ -331,10 +331,25 @@ public sealed partial class MainWindow : Window
             _crops.Clear();
             UpdateCommands();
         }
+        // Largeur où les désignations se replient (colonne la plus étroite où elles peuvent être rangées) : si elle change
+        // (lots créés, page ajoutée, projet ouvert), les lignes au texte tapé grandissent pour qu'il tienne partout.
+        if (Lots.SetNarrowing(_project)) GrowTypedLines();
         _plan = Arrangement.Build(_project);
         // Lignes rangées ou déplacées : leurs grands espaces vides sont réduits une fois (réglables ensuite).
         if (Rows.AutoCompactMoved(_plan)) _plan = Arrangement.Build(_project);
         return _plan;
+    }
+
+    /// <summary>Lignes au texte tapé : agrandies si leur texte ne tient plus (jamais réduites ici).</summary>
+    private void GrowTypedLines()
+    {
+        foreach (var page in _project.Pages)
+            foreach (var line in page.Tables.SelectMany(t => t.Rows).SelectMany(r => r.Lines).ToList())
+                if (line.Cells.Any(c => c.IsModified && TextWrap.IsMultiline(c)))
+                {
+                    int need = Views.PageView.LineExtra(line);
+                    if (need > line.Extra) PageLayout.SetExtra(page, line, need);
+                }
     }
 
     /// <summary>Totaux recalculés (cases non tapées à la main) ; renvoie les cases changées.</summary>
@@ -2414,11 +2429,12 @@ public sealed partial class MainWindow : Window
             Lots.Resync(_project);
             _crops.Clear();
             foreach (var (k, v) in sources) _sources[k] = v;
+            await RepairPagesAsync();
             await ShowPageAsync(0);
             int missing = _project.Pages.Count(pg => pg.SourceEntry != null && !_sources.ContainsKey(pg.SourceEntry));
             Baseline($"retour à l'état du {chosen.When:dd/MM/yyyy HH:mm:ss} ({chosen.Label})");
             SetStatus($"Document revenu à l'état du {When(chosen.When)} ({chosen.Label}). ↶ revient à l'état d'avant."
-                      + (missing > 0 ? $" Attention : l'image de {missing} page(s) n'a pas été retrouvée." : ""));
+                      + (missing > 0 ? $" Attention : l'image de {missing} page(s) n'a pas été retrouvée." : "") + _repairNote);
             ScheduleAutosave();
         });
     }
@@ -2832,13 +2848,77 @@ public sealed partial class MainWindow : Window
         foreach (var (k, v) in sources) _sources[k] = v;
         _projectPath = rememberPath ? path : null;
         _undo.Clear();
+        bool repaired = await RepairPagesAsync();
         await ShowPageAsync(0);
         Baseline("ouverture");
+        if (repaired) ScheduleAutosave();
+    }
+
+    private string _repairNote = "";
+
+    /// <summary>
+    /// Pages lues par une version précédente (une seule fois, à l'ouverture) : une page jamais retouchée dont le tableau avait
+    /// perdu sa colonne des désignations (bord gauche effacé sur le scan) est relue ; une page ajoutée encore vide qui avait
+    /// perdu cette colonne est recréée sur son modèle. Rien de ce qui a été tapé n'est touché ; l'état d'avant est gardé dans
+    /// Projet › Revenir à un état précédent. Renvoie vrai si une page a changé.
+    /// </summary>
+    private async Task<bool> RepairPagesAsync()
+    {
+        _repairNote = "";
+        var regrid = _project.Pages.Where(PageRepair.Pending).ToList();
+        bool blanks = _project.Pages.Any(p => PageRepair.BrokenBlank(_project, p) != null);
+        if (!regrid.Any(PageRepair.Untouched) && !blanks)
+        {
+            foreach (var p in regrid) p.GridRev = PageRepair.CurrentGrid;
+            return false;
+        }
+        SavePoint("avant : réparation des pages lues par l'ancienne version");
+        var relu = new List<ModelPage>();
+        try
+        {
+            foreach (var page in regrid)
+            {
+                if (!PageRepair.Untouched(page)) { page.GridRev = PageRepair.CurrentGrid; continue; }
+                SetStatus($"Vérification de la page {_project.Pages.IndexOf(page) + 1}…");
+                var flat = await RestoreFlatAsync(page);
+                if (flat is null) continue;
+                if (await Task.Run(() => PageRepair.Regrid(page, flat))) relu.Add(page);
+            }
+            int rebuilt = 0;
+            for (int k = 0; k < _project.Pages.Count; k++)
+            {
+                var page = _project.Pages[k];
+                if (PageRepair.BrokenBlank(_project, page) is not { } model) continue;
+                var flat = await RestoreFlatAsync(model);
+                if (flat is null) continue;
+                _project.Pages.RemoveAt(k);
+                if (AddedPage.AddBlankPage(_project, model, k, flat, page.Id) is null) { _project.Pages.Insert(k, page); continue; }
+                rebuilt++;
+            }
+            Lots.Resync(_project);
+            _flats.Clear();
+            _crops.Clear();
+            var parts = new List<string>();
+            if (relu.Count > 0)
+                parts.Add($"page(s) {string.Join(", ", relu.Select(p => _project.Pages.IndexOf(p) + 1))} relue(s) : la colonne des désignations est revenue, on peut y écrire");
+            if (rebuilt > 0) parts.Add($"{rebuilt} page(s) ajoutée(s) vide(s) recréée(s) avec toutes leurs colonnes");
+            if (parts.Count > 0)
+            {
+                _repairNote = " Réparé à l'ouverture : " + string.Join(" ; ", parts) + ". (L'état d'avant reste dans Projet › Revenir à un état précédent.)";
+                Journal("réparation à l'ouverture : " + string.Join(" ; ", parts));
+            }
+            return parts.Count > 0;
+        }
+        catch (Exception ex)
+        {
+            LogError("réparation à l'ouverture", ex);
+            return false;
+        }
     }
 
     /// <summary>Document dont la mise en page est déjà abîmée à l'ouverture : dit, avec le moyen de revenir avant.</summary>
-    private string SoundWarning() => _sound.Count == 0 ? ""
-        : $" Attention : sa mise en page a {_sound.Count} défaut(s) ({_sound.Values.First()}). Projet › Revenir à un état précédent… permet de revenir avant.";
+    private string SoundWarning() => _repairNote + (_sound.Count == 0 ? ""
+        : $" Attention : sa mise en page a {_sound.Count} défaut(s) ({_sound.Values.First()}). Projet › Revenir à un état précédent… permet de revenir avant.");
 
     private async void New_Click(object sender, RoutedEventArgs e)
     {

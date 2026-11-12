@@ -58,6 +58,7 @@ export function analyze(page, image, rawWords, grids = null) {
   assignIds(page);
   applyLocks(page);
   page.Rev = CURRENT_REV;
+  page.GridRev = 1; // lecture des filets actuelle (pagerepair.js : CURRENT_GRID)
 }
 
 /** Lecture corrigée : « I trémie » → « 1 trémie », « +1- 20 » → « +/- 20 » (le 1 et la barre / mal lus). */

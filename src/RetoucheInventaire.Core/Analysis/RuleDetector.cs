@@ -81,15 +81,27 @@ public static class RuleDetector
     {
         var result = new List<VLine>();
         var sorted = g0.OrderBy(l => l.X).ToList();
+        var buckets = new List<List<VLine>>();
         for (int i = 0; i < sorted.Count;)
         {
             int j = i;
             while (j + 1 < sorted.Count && sorted[j + 1].X - sorted[j].X <= 6) j++;
             var bucket = sorted.GetRange(i, j - i + 1);
+            buckets.Add(bucket);
             var tall = bucket.Where(l => l.Length >= 0.5 * maxLen).ToList();
             if (tall.Count > 0) result.AddRange(tall);
             else if (bucket.Count > 1 && Union(bucket) >= 0.5 * maxLen) result.AddRange(bucket);
             i = j + 1;
+        }
+        // Bord gauche tracé seulement sur une partie du tableau (en bas ou en haut) : le plus à gauche des filets compte dès
+        // 45 % s'il touche le haut ou le bas des grands filets (page 17 du client, tableau « VII »). Un trait au milieu, non.
+        if (result.Count >= 2 && buckets.Count > 0 && !result.Contains(buckets[0][0]))
+        {
+            var first = buckets[0];
+            double top = result.Min(l => l.Y0), bottom = result.Max(l => l.Y1);
+            if (first.Max(l => l.X) < result.Min(l => l.X) && Union(first) >= 0.45 * maxLen
+                && (Math.Abs(first.Max(l => l.Y1) - bottom) <= 12 || Math.Abs(first.Min(l => l.Y0) - top) <= 12))
+                result.AddRange(first);
         }
         return result;
     }

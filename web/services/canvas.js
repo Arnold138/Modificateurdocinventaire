@@ -6,7 +6,7 @@ import { editedFields, paperColor } from '../core/exports.js';
 import { strikeColor, colorRuns, hasColors, textColor } from '../core/strikes.js';
 import { allLines } from '../core/model.js';
 import { baseBox, extraFor, tallExtra } from '../core/layout.js';
-import { lotLabels } from '../core/lots.js';
+import { lotLabels, wrapWidth } from '../core/lots.js';
 import { framedTables, drawLotColumns, closeTables } from '../core/lotcolumn.js';
 
 export function makeCanvas(w, h) {
@@ -96,7 +96,7 @@ export function textLayout(line, f, text = f.Text) {
   const bold = isBoldLine(line);
   const base = baseSize(f, b.Height, bold);
   let size = base, lines = [text];
-  if (isMultiline(f)) lines = wrapText(text, base, Math.max(4, f.Box.Width - f.Indent - 3), bold);
+  if (isMultiline(f)) lines = wrapText(text, base, Math.max(4, wrapWidth(f) - f.Indent - 3), bold);
   else size = fitSize(f, text, base, bold);
   const center = Rect.isEmpty(f.Ink) ? Rect.cy(b) : Rect.cy(f.Ink);
   const top = Math.min(Math.max(center - 0.58 * size, b.Y), Math.max(b.Y, Rect.bottom(b) - LINE_HEIGHT * size));
@@ -290,7 +290,7 @@ export function lineExtra(line) {
 /** Réduit la police jusqu'à ce que le texte tienne dans sa case. */
 export function fitSize(f, text, base = baseSize(f), bold = false) {
   let size = base;
-  const avail = Math.max(4, f.Box.Width - f.Indent - 3);
+  const avail = Math.max(4, wrapWidth(f) - f.Indent - 3);
   while (size > 5 && measure(text || ' ', size, bold) > avail) size -= 0.5;
   return size;
 }

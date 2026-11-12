@@ -48,6 +48,7 @@ public static class PageAnalyzer
         AssignIds(page);
         PageEdits.ApplyLocks(page);
         page.Rev = CurrentRev;
+        page.GridRev = PageRepair.CurrentGrid;
     }
 
     /// <summary>Lecture corrigée : « I trémie » → « 1 trémie », « +1- 20 » → « +/- 20 » (le 1 et la barre / mal lus).</summary>

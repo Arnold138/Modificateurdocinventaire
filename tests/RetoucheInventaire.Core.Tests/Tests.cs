@@ -1094,6 +1094,91 @@ public static class Tests
         Check(g.RowYs.Any(y => y > 798 && y < 810), "filet penché trouvé");
     }
 
+    /// <summary>Lecture d'une ancienne version simulée : la 1re colonne retirée du tableau, ses textes hors tableau.</summary>
+    private static Table LoseFirstColumn(Page page)
+    {
+        var t = page.Tables.First(x => x.HasGrid && x.ColumnXs.Count >= 3);
+        foreach (var row in t.Rows)
+            foreach (var l in row.Lines)
+            {
+                foreach (var f in l.Cells.Where(c => c.Column == 0).ToList())
+                {
+                    l.Cells.Remove(f);
+                    if (f.Text.Trim().Length > 0) page.LooseLines.Add(new PrintedLine { Kind = LineKind.Ignoree, OutsideTable = true, Cells = [f] });
+                }
+                foreach (var f in l.Cells) f.Column--;
+            }
+        t.ColumnXs.RemoveAt(0);
+        page.GridRev = 0;
+        return t;
+    }
+
+    /// <summary>Pages 8, 10, 17 du client : un fichier lu par l'ancienne version retrouve sa colonne des désignations à l'ouverture.</summary>
+    public static void T_Reparation_colonne_des_designations_perdue()
+    {
+        var page = Fixtures.Analyze("page1");
+        var img = Fixtures.Load("page1").Image;
+        int cols = page.Tables.First(x => x.HasGrid && x.ColumnXs.Count >= 3).ColumnXs.Count;
+        string first = page.Tables.SelectMany(t => t.Rows).SelectMany(r => r.Lines).First(l => l.Kind == LineKind.Article && l.Cells[0].Text.Length > 8).Cells[0].Text;
+        LoseFirstColumn(page);
+        Check(PageRepair.Pending(page) && PageRepair.Untouched(page), "page ancienne, jamais retouchée");
+        Check(PageRepair.Regrid(page, img), "page relue");
+        Equal(cols, page.Tables.First(x => x.HasGrid && x.ColumnXs.Count >= 3).ColumnXs.Count, "colonne retrouvée");
+        Check(page.Tables.SelectMany(t => t.Rows).SelectMany(r => r.Lines).Any(l => l.Cells.Any(c => c.Column == 0 && c.Text == first)), $"« {first} » de nouveau dans le tableau");
+        Check(!PageRepair.Pending(page) && !PageRepair.Regrid(page, img), "une seule fois");
+
+        // Page retouchée (un texte changé) : jamais relue, rien ne bouge.
+        var touched = Fixtures.Analyze("page1");
+        var t2 = LoseFirstColumn(touched);
+        t2.Rows.SelectMany(r => r.Lines).First(l => l.Cells.Count > 0).Cells[0].Text = "tapé à la main";
+        int n2 = t2.ColumnXs.Count;
+        Check(!PageRepair.Regrid(touched, img), "page retouchée : pas relue");
+        Equal(n2, touched.Tables.First(x => x.HasGrid && x.ColumnXs.Count >= 2).ColumnXs.Count, "rien n'a bougé");
+        Equal(PageRepair.CurrentGrid, touched.GridRev, "notée vérifiée");
+    }
+
+    /// <summary>Page 11 du client : bord gauche effacé par endroits ; la page ajoutée sur ce modèle garde la colonne des désignations.</summary>
+    public static void T_Page_ajoutee_garde_la_colonne_ecrite()
+    {
+        var p = new InventoryProject();
+        p.Pages.Add(Fixtures.Analyze("page1"));
+        var model = p.Pages[0];
+        var src = Fixtures.Load("page1").Image;
+        var img = new Raster(src.Width, src.Height, src.Channels, (byte[])src.Data.Clone());
+        var t = model.Tables.First(x => x.HasGrid && x.ColumnXs.Count >= 3);
+        int x0 = (int)Math.Round(t.ColumnXs[0]);
+        for (int y = 0; y < img.Height; y++) // bord gauche effacé sur les deux tiers de la hauteur
+            if (y % 3 != 0) for (int x = Math.Max(0, x0 - 4); x <= x0 + 4; x++) for (int c = 0; c < img.Channels; c++) img.Data[(y * img.Width + x) * img.Channels + c] = 250;
+        var a = AddedPage.AddBlankPage(p, model, 1, img, "aj")!;
+        Equal(t.ColumnXs.Count, a.Tables[model.Tables.IndexOf(t)].ColumnXs.Count, "colonne des désignations gardée");
+    }
+
+    /// <summary>Lot 50 du client : rangé sur une page à colonne plus étroite, son long texte se replie sur la plus étroite.</summary>
+    public static void T_Repli_sur_la_colonne_la_plus_etroite()
+    {
+        var p = new InventoryProject();
+        foreach (var id in new[] { "large", "etroite", "parasite" })
+        {
+            var pg = Fixtures.Analyze("page1");
+            pg.Id = id;
+            PageAnalyzer.AssignIds(pg);
+            p.Pages.Add(pg);
+        }
+        var wide = p.Pages[0].Tables.First(x => x.HasGrid && x.ColumnXs.Count >= 3);
+        var narrow = p.Pages[1].Tables.First(x => x.HasGrid && x.ColumnXs.Count >= 3);
+        var junk = p.Pages[2].Tables.First(x => x.HasGrid && x.ColumnXs.Count >= 3);
+        narrow.ColumnXs[1] -= 100;
+        junk.ColumnXs[1] = junk.ColumnXs[0] + 60; // tableau mal lu : pas la même colonne, ignoré
+        Check(!Lots.SetNarrowing(p), "sans lots : rien ne se replie");
+        Lots.Number(p, 1);
+        Check(Lots.SetNarrowing(p), "lots créés : repli calculé");
+        var f = wide.Rows.SelectMany(r => r.Lines).First(l => l.Cells.Any(c => c.Column == 0 && c.Text.Length > 0)).Cells.First(c => c.Column == 0);
+        Equal(100.0, f.Narrow, "désignation de la page large : repliée de 100");
+        Equal(f.Box.Width - 100, f.WrapWidth, "largeur de repli");
+        Equal(0.0, narrow.Rows.SelectMany(r => r.Lines).SelectMany(l => l.Cells).Max(c => c.Narrow), "page la plus étroite : rien");
+        Check(!Lots.SetNarrowing(p), "rien de changé au 2e appel");
+    }
+
     // ---------- Repli sans filets ----------
 
     public static void T_Tableau_sans_filets()

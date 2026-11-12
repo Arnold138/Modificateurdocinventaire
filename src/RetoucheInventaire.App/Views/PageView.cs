@@ -1124,7 +1124,7 @@ public sealed class PageView
             // peu plus hautes : sur un long texte, la dernière ligne dépassait sur la rangée suivante. Mesure sur une largeur un
             // peu plus étroite, et une ligne de marge par tranche de 20 lignes.
             bool bold = TextPlacement.IsBold(line);
-            int n = Math.Max(t.Lines.Count, TextWrap.Wrap(f.Text, Math.Max(4, f.Box.Width - f.Indent - 3 - 8), s => Measure(s, t.Size, bold)).Count);
+            int n = Math.Max(t.Lines.Count, TextWrap.Wrap(f.Text, Math.Max(4, f.WrapWidth - f.Indent - 3 - 8), s => Measure(s, t.Size, bold)).Count);
             if (n > 1) n += (n + 9) / 20;
             extra = Math.Max(extra, PageLayout.ExtraFor(line, f, n, t.Size));
         }
@@ -1139,7 +1139,9 @@ public sealed class PageView
         tb.FontSize = size;
         Canvas.SetLeft(tb, box.X);
         Canvas.SetTop(tb, box.Y);
-        tb.Width = Math.Max(1, box.Width);
+        // Désignation d'un tableau à lots : repliée comme dans la colonne la plus étroite où elle peut être rangée (même coupure
+        // de lignes qu'à l'export et sur toutes les pages).
+        tb.Width = Math.Max(1, TextWrap.IsMultiline(f) ? Math.Min(box.Width, f.WrapWidth) : box.Width);
         double pad = Math.Max(0, top + cell.Dy - box.Y);
         // Texte sur plusieurs lignes (Entrée) : la case montre tout son texte tout de suite, même avant que la rangée
         // ait fini de grandir (sinon la zone de saisie défile et la 1re ligne semble effacée).

@@ -26,6 +26,8 @@ import { carryOver, allLines as linesOf, looksLikeTotal } from '../core/model.js
 import { detectPage } from '../core/imaging.js';
 import { totalExtra, baseHeight, tallExtra } from '../core/layout.js';
 import { addBlankPage, blankBase, canBeModel, addColumn, removeColumn, canRemoveColumn, addRows } from '../core/addpage.js';
+import { repairPending, untouched, regrid } from '../core/pagerepair.js';
+import { setNarrowing, narrowOf, wrapWidth } from '../core/lots.js';
 
 const FIX = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tests', 'fixtures');
 
@@ -1047,6 +1049,74 @@ test('Bord gauche coupé et filet penché : colonne des désignations gardée, a
   check(Math.abs(g.ColumnXs[0] - 60) <= 3, 'bord gauche à 60');
   eq(20, g.RowYs.length, 'tous les filets, même le penché');
   check(g.RowYs.some((y) => y > 798 && y < 810), 'filet penché trouvé');
+});
+
+function loseFirstColumn(page) {
+  const t = page.Tables.find((x) => x.HasGrid !== false && x.ColumnXs.length >= 3);
+  for (const row of t.Rows)
+    for (const l of row.Lines) {
+      for (const f of l.Cells.filter((c) => c.Column === 0)) {
+        l.Cells.splice(l.Cells.indexOf(f), 1);
+        if (f.Text.trim().length > 0) page.LooseLines.push({ Kind: 'Ignoree', OutsideTable: true, Cells: [f], Lot: '' });
+      }
+      for (const f of l.Cells) f.Column--;
+    }
+  t.ColumnXs.splice(0, 1);
+  page.GridRev = 0;
+  return t;
+}
+
+test('Réparation : colonne des désignations perdue retrouvée à l\'ouverture, page retouchée jamais relue', () => {
+  const page = analyzePage('page1'), img = load('page1').n.image;
+  const cols = page.Tables.find((x) => x.HasGrid !== false && x.ColumnXs.length >= 3).ColumnXs.length;
+  const first = page.Tables.flatMap((t) => t.Rows).flatMap((r) => r.Lines).find((l) => l.Kind === 'Article' && l.Cells[0].Text.length > 8).Cells[0].Text;
+  loseFirstColumn(page);
+  check(repairPending(page) && untouched(page), 'page ancienne, jamais retouchée');
+  check(regrid(page, img), 'page relue');
+  eq(cols, page.Tables.find((x) => x.HasGrid !== false && x.ColumnXs.length >= 3).ColumnXs.length, 'colonne retrouvée');
+  check(page.Tables.flatMap((t) => t.Rows).flatMap((r) => r.Lines).some((l) => l.Cells.some((c) => c.Column === 0 && c.Text === first)), 'désignation de nouveau dans le tableau');
+  check(!repairPending(page) && !regrid(page, img), 'une seule fois');
+  const touched = analyzePage('page1');
+  const t2 = loseFirstColumn(touched);
+  t2.Rows.flatMap((r) => r.Lines).find((l) => l.Cells.length > 0).Cells[0].Text = 'tapé à la main';
+  const n2 = t2.ColumnXs.length;
+  check(!regrid(touched, img), 'page retouchée : pas relue');
+  eq(n2, t2.ColumnXs.length, 'rien n\'a bougé');
+});
+
+test('Page ajoutée : bord gauche effacé par endroits, la colonne des désignations est gardée', () => {
+  const p = newProject();
+  p.Pages.push(analyzePage('page1'));
+  const model = p.Pages[0], src = load('page1').n.image;
+  const img = raster(src.w, src.h, src.ch, new Uint8ClampedArray(src.data));
+  const t = model.Tables.find((x) => x.HasGrid !== false && x.ColumnXs.length >= 3);
+  const x0 = Math.round(t.ColumnXs[0]);
+  for (let y = 0; y < img.h; y++) if (y % 3 !== 0) for (let x = Math.max(0, x0 - 4); x <= x0 + 4; x++) for (let c = 0; c < img.ch; c++) img.data[(y * img.w + x) * img.ch + c] = 250;
+  const a = addBlankPage(p, model, 1, img, 'aj');
+  eq(t.ColumnXs.length, a.Tables[model.Tables.indexOf(t)].ColumnXs.length, 'colonne des désignations gardée');
+});
+
+test('Repli des désignations sur la colonne la plus étroite où elles peuvent être rangées', () => {
+  const p = newProject();
+  for (const id of ['large', 'etroite', 'parasite']) {
+    const pg = analyzePage('page1');
+    pg.Id = id;
+    let n = 0;
+    for (const f of allFields(pg)) f.Id = `${id}-${n++}`;
+    p.Pages.push(pg);
+  }
+  const grid = (pg) => pg.Tables.find((x) => x.HasGrid !== false && x.ColumnXs.length >= 3);
+  const wide = grid(p.Pages[0]), narrow = grid(p.Pages[1]), junk = grid(p.Pages[2]);
+  narrow.ColumnXs[1] -= 100;
+  junk.ColumnXs[1] = junk.ColumnXs[0] + 60;
+  check(!setNarrowing(p), 'sans lots : rien ne se replie');
+  numberLots(p, 1);
+  check(setNarrowing(p), 'lots créés : repli calculé');
+  const f = wide.Rows.flatMap((r) => r.Lines).find((l) => l.Cells.some((c) => c.Column === 0 && c.Text.length > 0)).Cells.find((c) => c.Column === 0);
+  eq(100, narrowOf(f), 'désignation de la page large : repliée de 100');
+  eq(f.Box.Width - 100, wrapWidth(f), 'largeur de repli');
+  eq(0, Math.max(...narrow.Rows.flatMap((r) => r.Lines).flatMap((l) => l.Cells).map(narrowOf)), 'page la plus étroite : rien');
+  check(!setNarrowing(p), 'rien de changé au 2e appel');
 });
 
 test('Hors ligne : tous les fichiers de l\'app sont mis en cache', () => {

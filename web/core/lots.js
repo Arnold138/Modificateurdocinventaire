@@ -244,6 +244,46 @@ export function resyncLots(project) {
   }
 }
 
+// ---------- Largeur où se replient les désignations (même règle que Windows : Lots.SetNarrowing) ----------
+
+const narrowing = new WeakMap();
+
+/** De combien la case doit se replier plus étroit (pixels) ; jamais enregistré dans le projet. */
+export const narrowOf = (f) => narrowing.get(f) ?? 0;
+
+/** Largeur où le texte de la case se replie. */
+export const wrapWidth = (f) => Math.max(4, f.Box.Width - narrowOf(f));
+
+/**
+ * Une ligne d'un tableau à lots peut être rangée dans n'importe quel autre tableau à lots, où sa désignation est coupée à la
+ * colonne d'arrivée : le texte se replie sur la plus étroite (il tient partout). Renvoie vrai si un rétrécissement a changé.
+ */
+export function setNarrowing(project) {
+  const grid = (t) => t.HasGrid !== false && (t.RowYs?.length ?? 0) >= 2 && (t.ColumnXs?.length ?? 0) >= 2;
+  const active = lotsActive(project);
+  // Tableaux qui reçoivent des lignes rangées : ceux qui ont des cases de lot.
+  const lotTables = active ? project.Pages.flatMap((p) => p.Tables).filter((t) => grid(t) && !t.LotsOff && t.Rows.some((r) => r.Lines.some(hasLotCell))) : [];
+  let changed = false;
+  for (const page of project.Pages)
+    for (const t of page.Tables) {
+      const lotTable = active && grid(t) && !t.LotsOff;
+      for (const f of t.Rows.flatMap((r) => r.Lines).flatMap((l) => l.Cells)) {
+        let narrow = 0;
+        if (lotTable && f.Column + 1 < t.ColumnXs.length) {
+          const own = t.ColumnXs[f.Column + 1] - t.ColumnXs[f.Column];
+          // Une colonne bien plus étroite (moins de 70 %) n'est pas la même colonne (tableau mal lu) : ignorée.
+          for (const u of lotTables) {
+            const w = u.ColumnXs.length === t.ColumnXs.length ? u.ColumnXs[f.Column + 1] - u.ColumnXs[f.Column] : 0;
+            if (w >= 0.7 * own) narrow = Math.max(narrow, own - w);
+          }
+          narrow = Math.floor(narrow);
+        }
+        if (narrowOf(f) !== narrow) { narrowing.set(f, narrow); changed = true; }
+      }
+    }
+  return changed;
+}
+
 // ---------- Emplacement : une colonne ajoutée à gauche de chaque tableau, dans la marge ----------
 
 /** Bord gauche du tableau (son filet vertical gauche s'il a une grille). */

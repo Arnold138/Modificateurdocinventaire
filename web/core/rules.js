@@ -166,15 +166,24 @@ export function mergeThinRows(ys) {
  */
 export function longColumns(g0, maxLen) {
   const sorted = [...g0].sort((a, b) => a.X - b.X);
-  const result = [];
+  const result = [], buckets = [];
   for (let i = 0; i < sorted.length;) {
     let j = i;
     while (j + 1 < sorted.length && sorted[j + 1].X - sorted[j].X <= 6) j++;
     const bucket = sorted.slice(i, j + 1);
+    buckets.push(bucket);
     const tall = bucket.filter((l) => l.Y1 - l.Y0 >= 0.5 * maxLen);
     if (tall.length > 0) result.push(...tall);
     else if (bucket.length > 1 && union(bucket) >= 0.5 * maxLen) result.push(...bucket);
     i = j + 1;
+  }
+  // Bord gauche tracé seulement sur une partie du tableau : le plus à gauche compte dès 45 % s'il touche le haut ou le bas.
+  if (result.length >= 2 && buckets.length > 0 && !result.includes(buckets[0][0])) {
+    const first = buckets[0];
+    const top = Math.min(...result.map((l) => l.Y0)), bottom = Math.max(...result.map((l) => l.Y1));
+    if (Math.max(...first.map((l) => l.X)) < Math.min(...result.map((l) => l.X)) && union(first) >= 0.45 * maxLen
+      && (Math.abs(Math.max(...first.map((l) => l.Y1)) - bottom) <= 12 || Math.abs(Math.min(...first.map((l) => l.Y0)) - top) <= 12))
+      result.push(...first);
   }
   return result;
 }

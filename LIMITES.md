@@ -188,3 +188,18 @@
 - **Une seule fenêtre à la fois** : si l'application est lancée une 2e fois, la nouvelle fenêtre le dit et se ferme sans rien enregistrer (deux fenêtres écrasaient la copie de secours l'une de l'autre).
 - Texte très long dans une désignation : la rangée grandit avec une petite marge, la dernière ligne ne dépasse plus sur la rangée suivante.
 
+
+## Tableau au bord gauche effacé, réparation à l'ouverture (Windows et iPad)
+
+- Un filet coupé en morceaux (correcteur, encre pâle) compte quand ses morceaux couvrent ensemble la moitié du tableau ; le bord
+  le plus à gauche compte dès 45 % s'il touche le haut ou le bas du tableau ; un filet horizontal un peu penché (±3 px) compte
+  s'il est présent à 60 % sur sa ligne. Avant, la colonne des désignations des pages 8, 10, 12 et 17 du client disparaissait.
+- Un fichier lu par une version précédente est réparé une fois à l'ouverture : chaque page **jamais retouchée** est relue avec le
+  texte déjà lu (pas de nouvelle lecture) ; une page ajoutée **encore vide** qui avait perdu des colonnes de son modèle est
+  recréée sur ce modèle. Une page déjà retouchée n'est pas relue (à réimporter si besoin). L'état d'avant est gardé dans
+  Projet › Revenir à un état précédent.
+- « Ajouter une page » ne retire plus une colonne écrite sur la plupart des rangées, même si son filet du bord est effacé.
+- Désignation d'un tableau à lots : repliée sur la plus étroite des colonnes où elle peut être rangée (tri par numéro, lot 0) ;
+  un long texte tient donc sur toutes les pages. Une colonne de moins de 70 % de la largeur (tableau mal lu) est ignorée.
+- Reste : sur une ligne vide ajoutée, un trait d'écriture à la main qui touchait la ligne d'origine (bord d'un numéro entouré)
+  est recopié.

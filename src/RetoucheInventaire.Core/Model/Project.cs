@@ -61,6 +61,15 @@ public sealed class Field
     public bool Manual { get; set; }
 
     [JsonIgnore] public bool IsModified => !string.Equals(Text, OriginalText, StringComparison.Ordinal);
+
+    /// <summary>
+    /// De combien la désignation doit se replier plus étroit que sa case (pixels) : la ligne peut être rangée par numéro de lot
+    /// dans un tableau dont la colonne est plus étroite (voir <see cref="Lots.SetNarrowing"/>). Calculé, jamais enregistré.
+    /// </summary>
+    [JsonIgnore] public double Narrow { get; set; }
+
+    /// <summary>Largeur où le texte se replie : la case, moins <see cref="Narrow"/>.</summary>
+    [JsonIgnore] public double WrapWidth => Math.Max(4, Box.Width - Narrow);
 }
 
 /// <summary>Une ligne imprimée : une cellule par colonne du tableau.</summary>
@@ -283,6 +292,12 @@ public sealed class Page
     /// version ou déjà reprise. Elles ne sont faites qu'une fois : rouvrir un projet ne change jamais sa mise en page.
     /// </summary>
     public int Rev { get; set; }
+
+    /// <summary>
+    /// Lecture des filets avec laquelle la page a été lue ou vérifiée (<see cref="PageRepair.CurrentGrid"/>) : une page plus
+    /// ancienne est relue une fois à l'ouverture si elle n'a jamais été retouchée (colonne perdue retrouvée).
+    /// </summary>
+    public int GridRev { get; set; }
 
     public IEnumerable<PrintedLine> AllLines() =>
         Tables.SelectMany(t => t.Rows).SelectMany(r => r.Lines).Concat(LooseLines);

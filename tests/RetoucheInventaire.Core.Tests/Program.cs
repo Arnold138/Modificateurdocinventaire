@@ -112,6 +112,89 @@ if (args.Length > 0 && args[0] == "export-arrange")
     }
     return 0;
 }
+if (args.Length > 0 && args[0] == "render-project")
+{
+    // Pages d'un vrai projet (projet.json + sources converties en .pgm) telles que l'application les compose : pour voir
+    // ce que voit le client (rangées, lignes ajoutées, lots déplacés), sans le texte tapé.
+    var project = JsonSerializer.Deserialize<InventoryProject>(File.ReadAllText(args[1]), RetoucheInventaire.Core.Storage.ProjectStore.Json)!;
+    foreach (var pg in project.Pages) PageAnalyzer.Upgrade(pg);
+    Lots.Resync(project);
+    RetoucheInventaire.Core.Export.Arrangement.SyncEndPages(project);
+    var plan = RetoucheInventaire.Core.Export.Arrangement.Build(project);
+    if (Rows.AutoCompactMoved(plan)) plan = RetoucheInventaire.Core.Export.Arrangement.Build(project);
+    Raster? Flat(Page pg)
+    {
+        if (pg.EndLots || pg.SourceEntry is null) return null;
+        var f = Path.Combine(args[2], Path.GetFileNameWithoutExtension(pg.SourceEntry) + ".pgm");
+        if (!File.Exists(f)) return null;
+        var oriented = ImageOps.Rotate90(Pgm.Read(f), pg.QuarterTurns);
+        var flat = PageNormalizer.Render(oriented, pg.Crop ?? Quad.FullImage(oriented.Width, oriented.Height), pg.Skew, pg.Width, PageLayout.BaseHeight(pg));
+        if (pg.Added != null) flat = AddedPage.BlankBase(flat, pg);
+        return RetoucheInventaire.Core.Export.LotColumn.Draw(PageLayout.Stretch(flat, pg), pg);
+    }
+    var drawn = project.Pages.Select(Flat).ToList();
+    Directory.CreateDirectory(args[3]);
+    for (int k = 0; k < project.Pages.Count; k++)
+    {
+        var src = drawn[plan.Pages[k].Template ?? k];
+        if (src is null) continue;
+        var crops = plan.Pages[k].Pieces.Where(pc => pc.IsUnit).ToDictionary(pc => pc.Unit!, pc => (RetoucheInventaire.Core.Export.Arrangement.Crop?)RetoucheInventaire.Core.Export.Arrangement.UnitCrop(pc.Unit!, drawn[pc.Unit!.P]!));
+        Pgm.Write(Path.Combine(args[3], $"page{k + 1}.pgm"), RetoucheInventaire.Core.Export.Arrangement.ComposePage(plan, k, src, crops));
+        var v = RetoucheInventaire.Core.Export.Arrangement.ViewOf(project, plan, k);
+        File.WriteAllLines(Path.Combine(args[3], $"page{k + 1}.txt"), v.Lines.Select(e => $"{(e.Moved ? "D" : " ")} lot={e.Line.Lot,-4} y={e.Cells.FirstOrDefault()?.Box.Y:0} " + string.Join(" | ", e.Cells.Select(c => $"[{c.Box.X:0},{c.Box.Width:0}] {c.Field.Text}"))));
+    }
+    Console.WriteLine(string.Join(", ", project.Pages.Select((pg, k) => $"p{k + 1} {pg.Height}->{plan.Pages[k].Height}")));
+    Console.WriteLine("Contrôle : " + string.Join(" ; ", Integrity.Check(project).Values.Take(20)));
+    Lots.SetNarrowing(project);
+    Console.WriteLine("Repli des désignations : " + string.Join(", ", project.Pages.Select((pg, k) => (k, n: pg.Tables.SelectMany(t => t.Rows).SelectMany(r => r.Lines).SelectMany(l => l.Cells).Where(c => c.Column == 0).Select(c => c.Narrow).DefaultIfEmpty(0).Max())).Where(x => x.n > 0).Select(x => $"p{x.k + 1} −{x.n}")));
+    return 0;
+}
+if (args.Length > 0 && args[0] == "add-page-real")
+{
+    // Page ajoutée sur le modèle d'une page d'un vrai projet (avec son image) : colonnes gardées, image vierge.
+    var project = JsonSerializer.Deserialize<InventoryProject>(File.ReadAllText(args[1]), RetoucheInventaire.Core.Storage.ProjectStore.Json)!;
+    var model = project.Pages[int.Parse(args[3]) - 1];
+    var oriented = ImageOps.Rotate90(Pgm.Read(Path.Combine(args[2], Path.GetFileNameWithoutExtension(model.SourceEntry!) + ".pgm")), model.QuarterTurns);
+    var flat = PageNormalizer.Render(oriented, model.Crop ?? Quad.FullImage(oriented.Width, oriented.Height), model.Skew, model.Width, PageLayout.BaseHeight(model));
+    var page = AddedPage.AddBlankPage(project, model, project.Pages.Count, flat, "essai")!;
+    Console.WriteLine($"modèle {string.Join(",", model.Tables.Select(t => t.ColumnXs.Count))} colonnes -> page ajoutée {string.Join(",", page.Tables.Select(t => t.ColumnXs.Count))} ; {string.Join(" ", page.Tables[0].ColumnXs.Select(x => Math.Round(x)))}");
+    Pgm.Write(args[4], AddedPage.BlankBase(flat, page));
+    return 0;
+}
+if (args.Length > 0 && args[0] == "repair-real")
+{
+    // Réparation à l'ouverture d'un vrai projet (comme l'application) : pages relues, pages vierges recréées ; projet réparé écrit.
+    var project = JsonSerializer.Deserialize<InventoryProject>(File.ReadAllText(args[1]), RetoucheInventaire.Core.Storage.ProjectStore.Json)!;
+    foreach (var pg in project.Pages) PageAnalyzer.Upgrade(pg);
+    Lots.Resync(project);
+    var before = Integrity.Check(project);
+    Raster Flat(Page pg)
+    {
+        var oriented = ImageOps.Rotate90(Pgm.Read(Path.Combine(args[2], Path.GetFileNameWithoutExtension(pg.SourceEntry!) + ".pgm")), pg.QuarterTurns);
+        return PageNormalizer.Render(oriented, pg.Crop ?? Quad.FullImage(oriented.Width, oriented.Height), pg.Skew, pg.Width, PageLayout.BaseHeight(pg));
+    }
+    for (int k = 0; k < project.Pages.Count; k++)
+    {
+        var pg = project.Pages[k];
+        if (!PageRepair.Pending(pg)) continue;
+        string was = string.Join("+", pg.Tables.Select(t => $"{t.ColumnXs.Count}c{t.Rows.Count}r"));
+        bool changed = PageRepair.Regrid(pg, Flat(pg));
+        if (changed) Console.WriteLine($"page {k + 1} relue : {was} -> {string.Join("+", pg.Tables.Select(t => $"{t.ColumnXs.Count}c{t.Rows.Count}r"))}");
+    }
+    for (int k = 0; k < project.Pages.Count; k++)
+    {
+        var pg = project.Pages[k];
+        if (PageRepair.BrokenBlank(project, pg) is not { } model) continue;
+        project.Pages.RemoveAt(k);
+        var fresh = AddedPage.AddBlankPage(project, model, k, Flat(model), pg.Id)!;
+        Console.WriteLine($"page {k + 1} recréée sur la page {project.Pages.IndexOf(model) + 1} : {string.Join("+", fresh.Tables.Select(t => $"{t.ColumnXs.Count}c{t.Rows.Count}r"))}");
+    }
+    Lots.Resync(project);
+    var after = Integrity.Check(project);
+    Console.WriteLine("Nouveaux défauts : " + string.Join(" ; ", Integrity.NewProblems(before, after)));
+    File.WriteAllText(args[3], JsonSerializer.Serialize(project, RetoucheInventaire.Core.Storage.ProjectStore.Json));
+    return 0;
+}
 if (args.Length > 0 && args[0] == "stress-fixtures")
 {
     // Projet de départ du banc d'essai fait des pages de test (pour la CI) : project.json + p1.pgm…
