@@ -13,13 +13,14 @@ export function detectGrids(image) {
   for (let i = 0; i < dark.length; i++) dark[i] = gray.data[i] < thr ? 1 : 0;
 
   const gap = Math.max(6, Math.trunc(W / 150));
-  const hRuns = horizontalRuns(dark, W, H, gap, Math.max(40, Math.trunc(W / 10)));
+  const hRuns = horizontalRuns(dark, W, H, gap, Math.max(40, Math.trunc(W / 10)), 1);
+  let tilted = null; // filets un peu penchés (±3 px), calculés seulement s'il le faut
   const vLines = verticalLines(dark, W, H, gap, Math.max(30, Math.trunc(H / 40)));
 
   const tables = [];
   for (const g0 of groupByVerticalOverlap(vLines)) {
     const maxLen = Math.max(...g0.map((l) => l.Y1 - l.Y0));
-    const group = g0.filter((l) => l.Y1 - l.Y0 >= 0.5 * maxLen);
+    const group = longColumns(g0, maxLen);
     if (group.length < 2) continue;
     const xs = cluster(group.map((l) => l.X), 6);
     if (xs.length < 2) continue;
@@ -29,8 +30,12 @@ export function detectGrids(image) {
 
     const candidates = [];
     for (let y = Math.max(0, Math.trunc(top) - 8); y <= Math.min(H - 1, Math.trunc(bottom) + 8); y++) {
-      let covered = 0;
-      for (const [s, e] of hRuns[y]) covered += Math.max(0, Math.min(e, right) - Math.max(s, left));
+      let covered = coveredBy(hRuns[y], left, right);
+      // Scan pas tout à fait droit : filet bien présent (60 %) et à 80 % en tolérant ±3 px (même règle que Windows).
+      if (covered < 0.8 * width && covered >= 0.6 * width) {
+        tilted ??= horizontalRuns(dark, W, H, gap, Math.max(40, Math.trunc(W / 10)), 3);
+        covered = coveredBy(tilted[y], left, right);
+      }
       if (covered >= 0.8 * width) candidates.push(y);
     }
     let ys = [];
@@ -65,12 +70,22 @@ function runs(line, n, gap, minLen) {
   return out;
 }
 
-function horizontalRuns(dark, W, H, gap, minLen) {
+function coveredBy(rs, left, right) {
+  let covered = 0;
+  for (const [s, e] of rs) covered += Math.max(0, Math.min(e, right) - Math.max(s, left));
+  return covered;
+}
+
+function horizontalRuns(dark, W, H, gap, minLen, reach) {
   const result = new Array(H);
   const band = new Uint8Array(W);
   for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++)
-      band[x] = dark[y * W + x] || (y > 0 && dark[(y - 1) * W + x]) || (y < H - 1 && dark[(y + 1) * W + x]) ? 1 : 0;
+    const y0 = Math.max(0, y - reach), y1 = Math.min(H - 1, y + reach);
+    for (let x = 0; x < W; x++) {
+      let d = 0;
+      for (let yy = y0; yy <= y1 && !d; yy++) d = dark[yy * W + x];
+      band[x] = d ? 1 : 0;
+    }
     result[y] = runs(band, W, gap, minLen);
   }
   return result;
@@ -143,6 +158,35 @@ export function mergeThinRows(ys) {
   const gaps = ys.slice(1).map((y, i) => y - ys[i]).sort((a, b) => a - b);
   const min = 0.7 * gaps[Math.trunc(gaps.length / 2)];
   return ys.filter((y, i) => !(i > 0 && i + 1 < ys.length && y - ys[i - 1] < min && ys[i + 1] - y < min));
+}
+
+/**
+ * Filets de colonne d'un groupe : ceux d'au moins la moitié du plus long, ou les morceaux d'un filet coupé (même abscisse)
+ * qui couvrent ensemble cette moitié (même règle que Windows : bord gauche effacé par endroits sur le scan).
+ */
+export function longColumns(g0, maxLen) {
+  const sorted = [...g0].sort((a, b) => a.X - b.X);
+  const result = [];
+  for (let i = 0; i < sorted.length;) {
+    let j = i;
+    while (j + 1 < sorted.length && sorted[j + 1].X - sorted[j].X <= 6) j++;
+    const bucket = sorted.slice(i, j + 1);
+    const tall = bucket.filter((l) => l.Y1 - l.Y0 >= 0.5 * maxLen);
+    if (tall.length > 0) result.push(...tall);
+    else if (bucket.length > 1 && union(bucket) >= 0.5 * maxLen) result.push(...bucket);
+    i = j + 1;
+  }
+  return result;
+}
+
+function union(lines) {
+  let total = 0, s = NaN, e = NaN;
+  for (const l of [...lines].sort((a, b) => a.Y0 - b.Y0)) {
+    if (Number.isNaN(s) || l.Y0 > e) { if (!Number.isNaN(s)) total += e - s; s = l.Y0; e = l.Y1; }
+    else e = Math.max(e, l.Y1);
+  }
+  if (!Number.isNaN(s)) total += e - s;
+  return total;
 }
 
 export function cluster(values, tol) {

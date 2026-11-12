@@ -23,7 +23,8 @@ public static class RuleDetector
         for (int i = 0; i < dark.Length; i++) dark[i] = gray.Data[i] < thr;
 
         int gap = Math.Max(6, W / 150);
-        var hRuns = HorizontalRuns(dark, W, H, gap, Math.Max(40, W / 10));
+        var hRuns = HorizontalRuns(dark, W, H, gap, Math.Max(40, W / 10), 1);
+        List<(int S, int E)>[]? tilted = null; // filets un peu penchés (±3 px), calculés seulement s'il le faut
         var vLines = VerticalLines(dark, W, H, gap, Math.Max(30, H / 40));
 
         var tables = new List<TableGrid>();
@@ -31,7 +32,7 @@ public static class RuleDetector
         {
             // Un séparateur de colonne court au milieu d'un grand tableau est presque toujours du texte.
             double maxLen = g0.Max(l => l.Length);
-            var group = g0.Where(l => l.Length >= 0.5 * maxLen).ToList();
+            var group = LongColumns(g0, maxLen);
             if (group.Count < 2) continue;
             var xs = Cluster(group.Select(l => l.X), 6);
             if (xs.Count < 2) continue;
@@ -43,9 +44,14 @@ public static class RuleDetector
             var candidates = new List<int>();
             for (int y = Math.Max(0, (int)top - 8); y <= Math.Min(H - 1, (int)bottom + 8); y++)
             {
-                double covered = 0;
-                foreach (var (s, e) in hRuns[y])
-                    covered += Math.Max(0, Math.Min(e, right) - Math.Max(s, left));
+                double covered = Covered(hRuns[y], left, right);
+                // Scan pas tout à fait droit : un filet qui monte de quelques pixels sur la largeur d'un grand tableau
+                // n'atteint pas 80 % sur une seule ligne de pixels. Bien présent (60 %) et à 80 % en tolérant ±3 px : c'est lui.
+                if (covered < 0.8 * width && covered >= 0.6 * width)
+                {
+                    tilted ??= HorizontalRuns(dark, W, H, gap, Math.Max(40, W / 10), 3);
+                    covered = Covered(tilted[y], left, right);
+                }
                 if (covered >= 0.8 * width) candidates.Add(y);
             }
             var ys = new List<double>();
@@ -66,19 +72,66 @@ public static class RuleDetector
         return tables.OrderBy(t => t.Bounds.Top).ToList();
     }
 
+    /// <summary>
+    /// Filets de colonne d'un groupe : ceux d'au moins la moitié du plus long. Une colonne dont le filet est coupé en plusieurs
+    /// morceaux (bord gauche effacé par endroits sur le scan) compte aussi quand ses morceaux, à la même abscisse, couvrent
+    /// ensemble cette moitié : sinon toute la colonne des désignations était perdue (pages 8, 10, 12 du client).
+    /// </summary>
+    internal static List<VLine> LongColumns(List<VLine> g0, double maxLen)
+    {
+        var result = new List<VLine>();
+        var sorted = g0.OrderBy(l => l.X).ToList();
+        for (int i = 0; i < sorted.Count;)
+        {
+            int j = i;
+            while (j + 1 < sorted.Count && sorted[j + 1].X - sorted[j].X <= 6) j++;
+            var bucket = sorted.GetRange(i, j - i + 1);
+            var tall = bucket.Where(l => l.Length >= 0.5 * maxLen).ToList();
+            if (tall.Count > 0) result.AddRange(tall);
+            else if (bucket.Count > 1 && Union(bucket) >= 0.5 * maxLen) result.AddRange(bucket);
+            i = j + 1;
+        }
+        return result;
+    }
+
+    private static double Union(List<VLine> lines)
+    {
+        double total = 0, s = double.NaN, e = double.NaN;
+        foreach (var l in lines.OrderBy(l => l.Y0))
+        {
+            if (double.IsNaN(s) || l.Y0 > e) { if (!double.IsNaN(s)) total += e - s; s = l.Y0; e = l.Y1; }
+            else e = Math.Max(e, l.Y1);
+        }
+        if (!double.IsNaN(s)) total += e - s;
+        return total;
+    }
+
     internal sealed record VLine(double X, double Y0, double Y1)
     {
         public double Length => Y1 - Y0;
     }
 
-    private static List<(int S, int E)>[] HorizontalRuns(bool[] dark, int W, int H, int gap, int minLen)
+    private static double Covered(List<(int S, int E)> runs, double left, double right)
+    {
+        double covered = 0;
+        foreach (var (s, e) in runs) covered += Math.Max(0, Math.Min(e, right) - Math.Max(s, left));
+        return covered;
+    }
+
+    /// <summary>Traits horizontaux de chaque ligne de pixels, en réunissant les <paramref name="reach"/> lignes au-dessus et en dessous.</summary>
+    private static List<(int S, int E)>[] HorizontalRuns(bool[] dark, int W, int H, int gap, int minLen, int reach)
     {
         var result = new List<(int, int)>[H];
         var band = new bool[W];
         for (int y = 0; y < H; y++)
         {
+            int y0 = Math.Max(0, y - reach), y1 = Math.Min(H - 1, y + reach);
             for (int x = 0; x < W; x++)
-                band[x] = dark[y * W + x] || (y > 0 && dark[(y - 1) * W + x]) || (y < H - 1 && dark[(y + 1) * W + x]);
+            {
+                bool d = false;
+                for (int yy = y0; yy <= y1 && !d; yy++) d = dark[yy * W + x];
+                band[x] = d;
+            }
             result[y] = Runs(band, W, gap, minLen);
         }
         return result;

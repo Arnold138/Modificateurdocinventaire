@@ -1069,6 +1069,31 @@ public static class Tests
         Equal($"0,0 {w - 1},{h - 1}", $"{q.TopLeft.X},{q.TopLeft.Y} {q.BottomRight.X},{q.BottomRight.Y}", "page entière");
     }
 
+    /// <summary>
+    /// Pages 8, 10 et 12 du client : bord gauche du tableau effacé par endroits (aucun morceau n'atteint la moitié des autres
+    /// filets) et filets un peu penchés. La colonne des désignations doit rester une colonne, et aucune rangée ne se perd.
+    /// </summary>
+    public static void T_Bord_gauche_coupe_et_filet_penche()
+    {
+        int w = 1700, h = 2400;
+        var data = Enumerable.Repeat((byte)250, w * h).ToArray();
+        void Box(int x0, int y0, int x1, int y1) { for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) data[y * w + x] = 20; }
+        foreach (var (a, b) in new[] { (300, 900), (940, 1300), (1340, 2200) }) Box(59, a, 61, b); // bord gauche en trois morceaux
+        foreach (int x in new[] { 1200, 1400, 1580 }) Box(x - 1, 300, x + 1, 2200);
+        for (int y = 300; y <= 2200; y += 100)
+        {
+            if (y == 800) { for (int x = 60; x <= 1580; x++) { int yy = 800 + (x - 60) * 7 / 1521; Box(x, yy, x, yy + 2); } continue; } // monte de 6 px
+            Box(60, y - 1, 1580, y + 1);
+        }
+        var grids = RuleDetector.Detect(new Raster(w, h, 1, data));
+        Equal(1, grids.Count, "un tableau");
+        var g = grids[0];
+        Equal(4, g.ColumnXs.Count, "colonne des désignations gardée");
+        Check(Math.Abs(g.ColumnXs[0] - 60) <= 3, $"bord gauche à 60 ({g.ColumnXs[0]:0})");
+        Equal(20, g.RowYs.Count, "tous les filets, même le penché");
+        Check(g.RowYs.Any(y => y > 798 && y < 810), "filet penché trouvé");
+    }
+
     // ---------- Repli sans filets ----------
 
     public static void T_Tableau_sans_filets()

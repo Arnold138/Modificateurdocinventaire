@@ -1031,6 +1031,24 @@ test('Nom de fichier abîmé réparé', () => {
   eq('BEENDHI prisé.pdf', repairName('BEENDHI prisÃ©.pdf'), 'réparation');
 });
 
+test('Bord gauche coupé et filet penché : colonne des désignations gardée, aucune rangée perdue', () => {
+  const w = 1700, h = 2400, data = new Uint8ClampedArray(w * h).fill(250);
+  const box = (x0, y0, x1, y1) => { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) data[y * w + x] = 20; };
+  for (const [a, b] of [[300, 900], [940, 1300], [1340, 2200]]) box(59, a, 61, b);
+  for (const x of [1200, 1400, 1580]) box(x - 1, 300, x + 1, 2200);
+  for (let y = 300; y <= 2200; y += 100) {
+    if (y === 800) { for (let x = 60; x <= 1580; x++) { const yy = 800 + Math.trunc((x - 60) * 7 / 1521); box(x, yy, x, yy + 2); } continue; }
+    box(60, y - 1, 1580, y + 1);
+  }
+  const grids = detectGrids(raster(w, h, 1, data));
+  eq(1, grids.length, 'un tableau');
+  const g = grids[0];
+  eq(4, g.ColumnXs.length, 'colonne des désignations gardée');
+  check(Math.abs(g.ColumnXs[0] - 60) <= 3, 'bord gauche à 60');
+  eq(20, g.RowYs.length, 'tous les filets, même le penché');
+  check(g.RowYs.some((y) => y > 798 && y < 810), 'filet penché trouvé');
+});
+
 test('Hors ligne : tous les fichiers de l\'app sont mis en cache', () => {
   const sw = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'sw.js'), 'utf8');
   const root = join(dirname(fileURLToPath(import.meta.url)), '..');
