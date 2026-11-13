@@ -187,6 +187,11 @@ public sealed class BandPart
     public List<int> Cols { get; set; } = [];
     public int X0 { get; set; }
     public int X1 { get; set; }
+    /// <summary>
+    /// Filet recopié « redressé » : sur un scan un peu penché, le filet est suivi colonne par colonne et recopié droit et
+    /// entier (sinon la bande de 5 px n'en attrapait qu'un bout : traits cassés sur les lignes ajoutées).
+    /// </summary>
+    public bool Straight { get; set; }
 }
 
 /// <summary>

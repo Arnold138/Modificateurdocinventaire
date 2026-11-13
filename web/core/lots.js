@@ -139,7 +139,8 @@ export function createEmptyLots(project) {
 export function fillLotsAutomatically(project, pages = null) {
   resyncLots(project);
   const list = [...objectLines(project)];
-  const num = (l) => (/^[+-]?\d+$/.test((l.Lot ?? '').trim()) ? parseInt(l.Lot, 10) : NaN);
+  // Numéro trop long pour un nombre : traité comme un texte (même règle que Windows).
+  const num = (l) => { const v = /^[+-]?\d+$/.test((l.Lot ?? '').trim()) ? parseInt(l.Lot, 10) : NaN; return Math.abs(v) <= 2147483647 ? v : NaN; };
   let prev = 0;
   for (let i = 0; i < list.length; i++) {
     const { line, page } = list[i];

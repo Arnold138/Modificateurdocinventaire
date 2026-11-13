@@ -20,6 +20,8 @@ import { planArrangement, composePage, unitCrop, viewOf, pageArranged, syncEndPa
 import { Rect } from '../core/geometry.js';
 import { recomputeTotals, parseAmount, formatAmount } from '../core/totals.js';
 import { isZeroLot } from '../core/lots.js';
+import { forgetTrims } from '../core/rows.js';
+import { insertBand } from '../core/layout.js';
 import { copyLine, splitAt, splitTypedText, removeAddedRow, canCopyLine, canSplit, addedRowOf, addBlankLine, splitBelow, canSplitBelow, addTotalLine, lastObjectLine, rowTrimOf, trimRow, untrimRow, trimsOf } from '../core/rows.js';
 import { lotTables, tableHasObjects, setLotTables } from '../core/lots.js';
 import { carryOver, allLines as linesOf, looksLikeTotal } from '../core/model.js';
@@ -1117,6 +1119,46 @@ test('Repli des désignations sur la colonne la plus étroite où elles peuvent 
   eq(f.Box.Width - 100, wrapWidth(f), 'largeur de repli');
   eq(0, Math.max(...narrow.Rows.flatMap((r) => r.Lines).flatMap((l) => l.Cells).map(narrowOf)), 'page la plus étroite : rien');
   check(!setNarrowing(p), 'rien de changé au 2e appel');
+});
+
+test('Filet penché et taché recopié droit et entier pour une ligne ajoutée ; filets effacés redessinés', () => {
+  const w = 600, h = 80, data = new Uint8ClampedArray(w * h).fill(250);
+  for (let x = 0; x < w; x++) {
+    if (x >= 300 && x < 360) continue;
+    const y = 30 + Math.trunc(x * 7 / w);
+    data[y * w + x] = data[(y + 1) * w + x] = 30;
+  }
+  const img = raster(w, h, 1, data);
+  const page = newPage({ Width: w, Height: h });
+  insertBand(page, 60, [{ Src: 31, Height: 5, Straight: true }, { Src: 40, Height: 10, Gap: true, Span: 5, Cols: [20, 580], X0: 10, X1: 590 }], 'Copy');
+  const out = stretch(img, page);
+  let dark = 0;
+  for (let x = 0; x < w; x++) { let any = false; for (let y = 60; y < 65; y++) any ||= out.data[y * w + x] < 150; if (any) dark++; }
+  check(dark >= w - 2, `filet recopié entier (${dark}/${w})`);
+  check(out.data[70 * w + 20] < 150 && out.data[70 * w + 580] < 150, 'filets du tableau effacés redessinés');
+});
+
+test('Numéro de lot trop long : Synchroniser ne plante plus', () => {
+  const p = fromPages(['page1']);
+  numberLots(p, 1);
+  const objs = [...objectLines(p)];
+  objs[1].line.Lot = '17252252252';
+  objs[2].line.Lot = '';
+  fillLotsAutomatically(p);
+  check(objs[2].line.Lot.length > 0, 'case vide remplie');
+});
+
+test('15 lignes ajoutées puis supprimées d\'un coup : la page revient à sa taille et à ses rangées', () => {
+  const p = fromPages(['page1']);
+  const page = p.Pages[0], img = load('page1').n.image;
+  const h0 = page.Height, rows0 = page.Tables.reduce((s, t) => s + t.Rows.length, 0);
+  const line = page.Tables.flatMap((t) => t.Rows).flatMap((r) => r.Lines).find((l) => l.Kind === 'Article' && l.Cells[0].Text.length > 5);
+  eq(15, addRows(p, page, line, 15, { img }).added, '15 lignes ajoutées');
+  const added = page.Tables.flatMap((t) => t.Rows).filter((r) => r.Inserted != null).flatMap((r) => r.Lines);
+  for (const l of added.reverse()) check(removeAddedRow(page, l), 'ligne ajoutée retirée');
+  forgetTrims(page);
+  eq(h0, page.Height, 'taille d\'origine');
+  eq(rows0, page.Tables.reduce((s, t) => s + t.Rows.length, 0), 'rangées d\'origine');
 });
 
 test('Hors ligne : tous les fichiers de l\'app sont mis en cache', () => {

@@ -97,9 +97,16 @@ function partsOf(page, y0, y1) {
       continue;
     }
     const s = x.y0 + (y - pos);
-    if (last && !last.Gap && last.Src + last.Height === s) last.Height++;
-    else parts.push({ Src: s, Height: 1 });
+    if (last && !last.Gap && !!last.Straight === !!x.straight && last.Src + last.Height === s) last.Height++;
+    else parts.push(x.straight ? { Src: s, Height: 1, Straight: true } : { Src: s, Height: 1 });
   }
+  return parts;
+}
+
+/** Filet du haut d'une rangée recopiée : recopié redressé (même règle que Windows : BandPart.Straight). */
+function filetOf(page, filetTop) {
+  const parts = partsOf(page, filetTop, filetTop + FILET);
+  for (const p of parts) if (!p.Gap) p.Straight = true;
   return parts;
 }
 
@@ -163,7 +170,7 @@ export function copyLine(page, line, blank = false, above = false, src = line, f
   const longest = body.filter((p) => !p.Gap).reduce((a, p) => (!a || p.Height > a.Height ? p : a), null) ?? body.find((p) => p.Gap) ?? null;
   const span = longest?.Gap ? longest.Span : longest?.Height;
   const bodyH = body.reduce((n, p) => n + p.Height, 0);
-  const parts = [...partsOf(page, filetTop, filetTop + FILET),
+  const parts = [...filetOf(page, filetTop),
     ...(blank && longest ? [{ Src: longest.Src, Height: bodyH, Gap: true, Span: span, Cols: cols, X0: x0, X1: x1 }] : body)];
   // Sous le texte, autant d'espace qu'au-dessus (la ligne copiée peut venir d'une rangée de plusieurs lignes) :
   // un interligne propre, filets verticaux prolongés depuis la rangée la plus nette de la ligne copiée.
@@ -252,7 +259,7 @@ export function splitAt(page, line) {
   const { table: t, r, i, row } = at;
   const y = gapMid(row.Lines[i - 1], line);
   const filetTop = cutY(t.RowYs[r]);
-  const band = insertBand(page, y, partsOf(page, filetTop, filetTop + FILET), 'Split');
+  const band = insertBand(page, y, filetOf(page, filetTop), 'Split');
   const moved = row.Lines.splice(i);
   t.RowYs.splice(r + 1, 0, y + CUT);
   t.Rows.splice(r + 1, 0, { Bounds: Rect.empty(), Lines: moved, Inserted: band.Id });
@@ -281,6 +288,12 @@ export function splitTypedText(page, line, from) {
 }
 
 /** Défait une rangée ajoutée : copie supprimée, ou rangée séparée remise dans celle du dessus. */
+/** Plus aucune rangée ajoutée : les coupes du blanc du bas faites pour elles sont retirées (même règle que Windows). */
+export function forgetTrims(page) {
+  if (page.Tables.some((t) => t.Rows.some((r) => r.Inserted != null))) return;
+  for (const b of insertsOf(page).filter((b) => b.Kind === 'Trim' && !b.Line)) removeBand(page, b);
+}
+
 export function removeAddedRow(page, line) {
   const hit = addedRowOf(page, line);
   if (!hit) return false;

@@ -203,3 +203,14 @@
   un long texte tient donc sur toutes les pages. Une colonne de moins de 70 % de la largeur (tableau mal lu) est ignorée.
 - Reste : sur une ligne vide ajoutée, un trait d'écriture à la main qui touchait la ligne d'origine (bord d'un numéro entouré)
   est recopié.
+
+## Lignes ajoutées sur un scan penché, sélection de plusieurs lignes (13/11)
+
+- Le filet du haut d'une ligne recopiée est suivi colonne par colonne (± 4 px, lissé par blocs de 32 px) et recopié droit
+  et entier ; un petit trou (jusqu'à 150 px, tache de correcteur) est bouché par la colonne voisine ; un filet droit est
+  recopié tel quel. Un filet vertical du tableau effacé à cet endroit du scan est redessiné dans les lignes ajoutées.
+  Les lignes ajoutées par une version précédente sont corrigées à l'ouverture.
+- Windows : appuyer dans la marge de gauche et glisser sélectionne plusieurs lignes (Maj + clic étend) ; clic droit ›
+  « Supprimer ces N lignes » ou touche Suppr ; un seul ↶ remet tout. Une ligne ajoutée disparaît, une ligne imprimée est
+  retirée de la vente. Quand plus aucune ligne ajoutée ne reste, la page retrouve sa taille d'origine. (iPad : pas encore.)
+- « Synchroniser » : un numéro de lot trop long pour un nombre (« 17252252252 ») est traité comme un texte (plus de plantage).

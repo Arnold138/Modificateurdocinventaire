@@ -105,9 +105,17 @@ public static class Rows
                 continue;
             }
             int s = x.Y0 + (y - pos);
-            if (last is { Gap: false } && last.Src + last.Height == s) last.Height++;
-            else parts.Add(new BandPart { Src = s, Height = 1 });
+            if (last is { Gap: false } && last.Straight == x.Straight && last.Src + last.Height == s) last.Height++;
+            else parts.Add(new BandPart { Src = s, Height = 1, Straight = x.Straight });
         }
+        return parts;
+    }
+
+    /// <summary>Filet du haut d'une rangée recopiée : recopié redressé (voir <see cref="BandPart.Straight"/>).</summary>
+    private static List<BandPart> FiletOf(Page page, int filetTop)
+    {
+        var parts = PartsOf(page, filetTop, filetTop + Arrangement.Filet);
+        foreach (var p in parts) if (!p.Gap) p.Straight = true;
         return parts;
     }
 
@@ -181,7 +189,7 @@ public static class Rows
         var longest = body.Where(p => !p.Gap).Aggregate((BandPart?)null, (a, p) => a is null || p.Height > a.Height ? p : a) ?? body.FirstOrDefault(p => p.Gap);
         int span = longest is { Gap: true } ? longest.Span : longest?.Height ?? 0;
         int bodyH = body.Sum(p => p.Height);
-        var parts = PartsOf(page, filetTop, filetTop + Arrangement.Filet);
+        var parts = FiletOf(page, filetTop);
         if (blank && longest is not null)
             parts.Add(new BandPart { Src = longest.Src, Height = bodyH, Gap = true, Span = span, Cols = cols, X0 = x0, X1 = x1 });
         else parts.AddRange(body);
@@ -281,7 +289,7 @@ public static class Rows
         var (t, r, i, row) = at;
         int y = Arrangement.GapMid(row.Lines[i - 1], line);
         int filetTop = Arrangement.CutY(t.RowYs[r]);
-        var band = PageLayout.InsertBand(page, y, PartsOf(page, filetTop, filetTop + Arrangement.Filet), "Split");
+        var band = PageLayout.InsertBand(page, y, FiletOf(page, filetTop), "Split");
         var moved = row.Lines.Skip(i).ToList();
         row.Lines.RemoveRange(i, moved.Count);
         t.RowYs.Insert(r + 1, y + Arrangement.Cut);
@@ -312,6 +320,16 @@ public static class Rows
     }
 
     /// <summary>Défait une rangée ajoutée : copie supprimée, ou rangée séparée remise dans celle du dessus.</summary>
+    /// <summary>
+    /// Plus aucune rangée ajoutée sur la page : les coupes du blanc du bas faites pour elles (« Ajouter des lignes ») sont
+    /// retirées, la page retrouve sa taille d'origine.
+    /// </summary>
+    public static void ForgetTrims(Page page)
+    {
+        if (page.Tables.Any(t => t.Rows.Any(r => r.Inserted != null))) return;
+        foreach (var b in page.Inserts.Where(b => b.Kind == "Trim" && b.Line == null).ToList()) PageLayout.RemoveBand(page, b);
+    }
+
     public static bool RemoveAdded(Page page, PrintedLine line)
     {
         if (AddedRowOf(page, line) is not var (at, band)) return false;

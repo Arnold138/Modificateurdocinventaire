@@ -49,6 +49,7 @@ public sealed class PageView
     private readonly Canvas _lotLayer = new();
     private readonly Canvas _strikeLayer = new() { IsHitTestVisible = false };
     private readonly Canvas _overlayLayer = new() { IsHitTestVisible = false };
+    private readonly Canvas _selLayer = new() { IsHitTestVisible = false };
     private readonly Canvas _inputLayer = new() { IsHitTestVisible = false };
     /// <summary>Page ajoutée : « + » des lignes et des colonnes, « − » des traits.</summary>
     private readonly Canvas _addedLayer = new();
@@ -120,6 +121,8 @@ public sealed class PageView
     public event Action<PageView, Table, int>? ColumnRemoved;
     /// <summary>Page ajoutée : « Ajouter des lignes » sous le tableau (la ligne : la dernière du tableau).</summary>
     public event Action<PageView, PrintedLine>? RowsRequested;
+    /// <summary>« Supprimer ces lignes » sur une sélection faite à la souris dans la marge de gauche.</summary>
+    public event Action<PageView, List<PrintedLine>>? LinesDeleteRequested;
     /// <summary>Colonne des lots tracée (vrai) ou non (faux) sur une rangée sans case (« + » / corbeille dans la colonne).</summary>
     public event Action<PageView, Table, List<int>, bool>? FrameToggled;
     /// <summary>Réglage « colonne tracée » du projet.</summary>
@@ -168,12 +171,20 @@ public sealed class PageView
         Grid.SetColumn(frame, 1);
         Host.Children.Add(_gutter);
         Host.Children.Add(frame);
+        // Sélection de plusieurs lignes : appuyer dans la marge de gauche et glisser (Maj + clic pour étendre).
+        _gutter.Background = new SolidColorBrush(Colors.Transparent);
+        _gutter.PointerPressed += Gutter_PointerPressed;
+        _gutter.PointerMoved += Gutter_PointerMoved;
+        _gutter.PointerReleased += Gutter_PointerReleased;
+        _gutter.PointerCaptureLost += (_, _) => _selecting = false;
+        _gutter.RightTapped += (_, e) => { if (_selection.Count > 0) { e.Handled = true; ShowSelectionMenu(_gutter, e.GetPosition(_gutter)); } };
         Root.Children.Add(_fieldLayer);
         Root.Children.Add(_colorLayer);
         Root.Children.Add(_zoneLayer);
         Root.Children.Add(_lotLayer);
         Root.Children.Add(_strikeLayer);
         Root.Children.Add(_overlayLayer);
+        Root.Children.Add(_selLayer);
         Root.Children.Add(_addedLayer);
         Root.Children.Add(_inputLayer);
         Root.Children.Add(_gapLayer);
@@ -441,6 +452,12 @@ public sealed class PageView
     {
         if (LineCommands is null) return;
         var menu = new MenuFlyout();
+        // Clic droit sur une ligne de la sélection : « Supprimer ces lignes » en premier.
+        if (_selection.Count > 1 && _selection.Any(l => l.Cells.Contains(f)))
+        {
+            AddSelectionItems(menu);
+            menu.Items.Add(new MenuFlyoutSeparator());
+        }
         foreach (var c in LineCommands(f))
         {
             var item = new MenuFlyoutItem { Text = c.Label, Icon = new FontIcon { Glyph = c.Glyph } };
@@ -454,6 +471,128 @@ public sealed class PageView
             if (at is Point p) menu.ShowAt(anchor, new Microsoft.UI.Xaml.Controls.Primitives.FlyoutShowOptions { Position = p });
             else menu.ShowAt(anchor);
         }
+    }
+
+    // ---------- Sélection de plusieurs lignes (marge de gauche) ----------
+
+    private readonly List<PrintedLine> _selection = [];
+    private bool _selecting;
+    private int _selFrom = -1, _selTo = -1;
+
+    /// <summary>Lignes sélectionnées à la souris, de haut en bas.</summary>
+    public IReadOnlyList<PrintedLine> SelectedLines => _selection;
+
+    /// <summary>Lignes qu'on peut sélectionner, de haut en bas, avec leur bande à l'écran.</summary>
+    private List<(Arrangement.ViewLine Entry, RectD Band)> Selectable()
+    {
+        var list = new List<(Arrangement.ViewLine, RectD)>();
+        foreach (var e in _view.Lines)
+        {
+            if (e.Line.OutsideTable || e.CarriedOnly || e.Line.Cells.Count == 0 || e.Line.Deleted || e.Line.Kind == LineKind.EnTete) continue;
+            if (LineBand(e) is not RectD b) continue;
+            double left = e.Cells.Min(c => PageLayout.BaseBox(e.Line, c.Field).X + c.Dx);
+            double right = e.Cells.Max(c => PageLayout.BaseBox(e.Line, c.Field).Right + c.Dx);
+            list.Add((e, new RectD(left, b.Y, Math.Max(1, right - left), b.Height + Math.Max(0, e.Line.Extra))));
+        }
+        return [.. list.OrderBy(x => x.Item2.Y)];
+    }
+
+    private static int IndexAt(List<(Arrangement.ViewLine Entry, RectD Band)> list, double y)
+    {
+        int best = -1;
+        double bestD = double.MaxValue;
+        for (int i = 0; i < list.Count; i++)
+        {
+            var b = list[i].Band;
+            double d = y < b.Y ? b.Y - y : y > b.Bottom ? y - b.Bottom : 0;
+            if (d < bestD) { bestD = d; best = i; }
+        }
+        return best;
+    }
+
+    private void Gutter_PointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        var pt = e.GetCurrentPoint(_gutter);
+        if (!pt.Properties.IsLeftButtonPressed || MoveMode) return;
+        var list = Selectable();
+        int i = IndexAt(list, pt.Position.Y);
+        if (i < 0) return;
+        bool extend = (e.KeyModifiers & Windows.System.VirtualKeyModifiers.Shift) != 0 && _selFrom >= 0;
+        if (!extend) _selFrom = i;
+        _selTo = i;
+        _selecting = true;
+        _gutter.CapturePointer(e.Pointer);
+        UpdateSelection(list);
+        e.Handled = true;
+    }
+
+    private void Gutter_PointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_selecting) return;
+        var list = Selectable();
+        int i = IndexAt(list, e.GetCurrentPoint(_gutter).Position.Y);
+        if (i < 0 || i == _selTo) return;
+        _selTo = i;
+        UpdateSelection(list);
+    }
+
+    private void Gutter_PointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_selecting) return;
+        _selecting = false;
+        _gutter.ReleasePointerCapture(e.Pointer);
+        if (_selection.Count > 0) SelectionChanged?.Invoke(this, _selection.Count);
+    }
+
+    /// <summary>Nombre de lignes sélectionnées (0 = sélection retirée).</summary>
+    public event Action<PageView, int>? SelectionChanged;
+
+    private void UpdateSelection(List<(Arrangement.ViewLine Entry, RectD Band)> list)
+    {
+        _selection.Clear();
+        _selLayer.Children.Clear();
+        if (_selFrom < 0 || _selTo < 0) return;
+        int a = Math.Min(_selFrom, _selTo), b = Math.Min(list.Count - 1, Math.Max(_selFrom, _selTo));
+        var fill = new SolidColorBrush(ColorHelper.FromArgb(56, 10, 102, 194));
+        var edge = new SolidColorBrush(ColorHelper.FromArgb(200, 10, 102, 194));
+        for (int i = a; i <= b; i++)
+        {
+            var (entry, band) = list[i];
+            if (!_selection.Contains(entry.Line)) _selection.Add(entry.Line);
+            var r = new Microsoft.UI.Xaml.Shapes.Rectangle { Width = band.Width + 8, Height = band.Height + 6, Fill = fill, Stroke = edge, StrokeThickness = 1, RadiusX = 3, RadiusY = 3 };
+            Canvas.SetLeft(r, band.X - 4);
+            Canvas.SetTop(r, band.Y - 3);
+            _selLayer.Children.Add(r);
+        }
+    }
+
+    /// <summary>Sélection retirée (Échap, clic dans une case, action faite).</summary>
+    public void ClearSelection()
+    {
+        bool had = _selection.Count > 0;
+        _selFrom = _selTo = -1;
+        _selection.Clear();
+        _selLayer.Children.Clear();
+        if (had) SelectionChanged?.Invoke(this, 0);
+    }
+
+    private void AddSelectionItems(MenuFlyout menu)
+    {
+        var lines = _selection.ToList();
+        var del = new MenuFlyoutItem { Text = $"Supprimer ces {lines.Count} ligne(s)", Icon = new FontIcon { Glyph = "\uE74D" }, Foreground = TrashInk };
+        ToolTipService.SetToolTip(del, "Les lignes sélectionnées disparaissent d'un coup, ce qui suit remonte. ↶ pour annuler.");
+        del.Click += (_, _) => LinesDeleteRequested?.Invoke(this, lines);
+        menu.Items.Add(del);
+        var none = new MenuFlyoutItem { Text = "Désélectionner", Icon = new FontIcon { Glyph = "\uE711" } };
+        none.Click += (_, _) => ClearSelection();
+        menu.Items.Add(none);
+    }
+
+    private void ShowSelectionMenu(FrameworkElement anchor, Point at)
+    {
+        var menu = new MenuFlyout();
+        AddSelectionItems(menu);
+        menu.ShowAt(anchor, new Microsoft.UI.Xaml.Controls.Primitives.FlyoutShowOptions { Position = at });
     }
 
     /// <summary>Textes changés ailleurs (totaux recalculés) : les cases affichées suivent.</summary>

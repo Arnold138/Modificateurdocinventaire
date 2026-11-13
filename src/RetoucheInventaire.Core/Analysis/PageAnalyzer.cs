@@ -95,6 +95,10 @@ public static class PageAnalyzer
     /// </summary>
     public static void Upgrade(Page page)
     {
+        // Filet du haut des rangées recopiées par une version précédente : recopié redressé (traits cassés sur un scan penché).
+        foreach (var b in page.Inserts)
+            if ((b.Kind == "Copy" || b.Kind == "Split") && b.Parts.Count > 0 && !b.Parts[0].Gap && b.Parts[0].Height <= Export.Arrangement.Filet)
+                b.Parts[0].Straight = true;
         // Reprises d'une version précédente : une seule fois, et jamais sur une page dont la mise en page a été retouchée
         // (des rangées agrandies changeaient la « rangée médiane » : à la réouverture, les autres étaient réunies ; une
         // ligne vide ajoutée devenait un en-tête et perdait sa case de lot).

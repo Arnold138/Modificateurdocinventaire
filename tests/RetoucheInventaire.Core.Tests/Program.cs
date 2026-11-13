@@ -195,6 +195,52 @@ if (args.Length > 0 && args[0] == "repair-real")
     File.WriteAllText(args[3], JsonSerializer.Serialize(project, RetoucheInventaire.Core.Storage.ProjectStore.Json));
     return 0;
 }
+if (args.Length > 0 && args[0] == "scenario-real")
+{
+    // Manipulations du client du 13/11 sur son vrai fichier : supprimer d'un coup les 20 lignes ajoutées, en remettre 20 sous
+    // « 3 tabourets », 20 sous la ligne barrée de LABOTEST, puis Synchroniser (numéro de lot trop long). Contrôle à chaque pas.
+    var project = JsonSerializer.Deserialize<InventoryProject>(File.ReadAllText(args[1]), RetoucheInventaire.Core.Storage.ProjectStore.Json)!;
+    foreach (var pg in project.Pages) PageAnalyzer.Upgrade(pg);
+    Lots.Resync(project);
+    var start = Integrity.Check(project);
+    void Step(string what)
+    {
+        Lots.Resync(project);
+        Lots.SetNarrowing(project);
+        var plan = RetoucheInventaire.Core.Export.Arrangement.Build(project);
+        if (Rows.AutoCompactMoved(plan)) RetoucheInventaire.Core.Export.Arrangement.Build(project);
+        var bad = Integrity.NewProblems(start, Integrity.Check(project));
+        Console.WriteLine($"{what} : {(bad.Count == 0 ? "mise en page saine" : "PROBLÈMES " + string.Join(" ; ", bad))}");
+    }
+    Raster Flat(Page pg)
+    {
+        var oriented = ImageOps.Rotate90(Pgm.Read(Path.Combine(args[2], Path.GetFileNameWithoutExtension(pg.SourceEntry!) + ".pgm")), pg.QuarterTurns);
+        return PageNormalizer.Render(oriented, pg.Crop ?? Quad.FullImage(oriented.Width, oriented.Height), pg.Skew, pg.Width, PageLayout.BaseHeight(pg));
+    }
+    var p10 = project.Pages[9];
+    int h0 = p10.Height;
+    var added = p10.Tables.SelectMany(t => t.Rows).Where(r => r.Inserted != null).SelectMany(r => r.Lines).ToList();
+    int removed = 0;
+    foreach (var l in Enumerable.Reverse(added)) if (Rows.RemoveAdded(p10, l)) removed++;
+    Rows.ForgetTrims(p10);
+    Console.WriteLine($"page 10 : {removed}/{added.Count} lignes ajoutées supprimées d'un coup, hauteur {h0} -> {p10.Height}, rangées ajoutées restantes {p10.Tables.SelectMany(t => t.Rows).Count(r => r.Inserted != null)}");
+    Step("suppression");
+    PrintedLine Find(string text) => p10.AllLines().First(l => l.Cells.Any(c => c.Text.Contains(text)));
+    var img10 = Flat(p10);
+    var r1 = AddedPage.AddRows(project, p10, Find("tabourets"), 20, img: img10);
+    Console.WriteLine($"20 lignes sous « 3 tabourets » : {r1.Added} ajoutées, autres pages {r1.Pages.Count}");
+    Step("ajout 1");
+    var r2 = AddedPage.AddRows(project, p10, Find("ABOTEST"), 20, img: img10);
+    Console.WriteLine($"20 lignes sous « LABOTEST » (ligne barrée dessous) : {r2.Added} ajoutées");
+    Step("ajout 2");
+    var r3 = AddedPage.AddRows(project, p10, Find("ABOTEST"), 20, above: true, img: img10);
+    Console.WriteLine($"20 lignes au-dessus de la même : {r3.Added} ajoutées");
+    Step("ajout 3");
+    Lots.FillAutomatically(project);
+    Step("Synchroniser (lot « 17252252252 » présent : " + project.Pages.SelectMany(p => p.AllLines()).Any(l => l.Lot == "17252252252") + ")");
+    File.WriteAllText(args[3], JsonSerializer.Serialize(project, RetoucheInventaire.Core.Storage.ProjectStore.Json));
+    return 0;
+}
 if (args.Length > 0 && args[0] == "stress-fixtures")
 {
     // Projet de départ du banc d'essai fait des pages de test (pour la CI) : project.json + p1.pgm…

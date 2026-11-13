@@ -1179,6 +1179,77 @@ public static class Tests
         Check(!Lots.SetNarrowing(p), "rien de changé au 2e appel");
     }
 
+    /// <summary>
+    /// Page 10 du client : filet penché de 6 px et taché de correcteur. Recopié pour une ligne ajoutée, il est droit et
+    /// entier (avant : un bout pâle, traits cassés dans la colonne des désignations) ; un filet du tableau effacé est redessiné.
+    /// </summary>
+    public static void T_Filet_penche_recopie_droit()
+    {
+        int w = 600, h = 80;
+        var data = Enumerable.Repeat((byte)250, w * h).ToArray();
+        for (int x = 0; x < w; x++)
+        {
+            if (x >= 300 && x < 360) continue; // tache de correcteur
+            int y = 30 + x * 7 / w;              // monte de 6 px
+            data[y * w + x] = data[(y + 1) * w + x] = 30;
+        }
+        var img = new Raster(w, h, 1, data);
+        var page = new Page { Width = w, Height = h };
+        PageLayout.InsertBand(page, 60, [new BandPart { Src = 31, Height = 5, Straight = true },
+            new BandPart { Src = 40, Height = 10, Gap = true, Span = 5, Cols = [20, 580], X0 = 10, X1 = 590 }], "Copy");
+        var outImg = PageLayout.Stretch(img, page);
+        int dark = 0;
+        for (int x = 0; x < w; x++)
+        {
+            bool any = false;
+            for (int y = 60; y < 65; y++) any |= outImg.Data[y * w + x] < 150;
+            if (any) dark++;
+        }
+        Check(dark >= w - 2, $"filet recopié entier ({dark}/{w} colonnes)");
+        Check(outImg.Data[70 * w + 20] < 150 && outImg.Data[70 * w + 580] < 150, "filets du tableau effacés redessinés");
+        // Sans redressement : bande de 5 px d'un filet penché, des colonnes sans filet (le bug).
+        var page2 = new Page { Width = w, Height = h };
+        PageLayout.InsertBand(page2, 60, [new BandPart { Src = 31, Height = 5 }], "Copy");
+        var old = PageLayout.Stretch(img, page2);
+        int dark2 = 0;
+        for (int x = 0; x < w; x++) { bool any = false; for (int y = 60; y < 65; y++) any |= old.Data[y * w + x] < 150; if (any) dark2++; }
+        Check(dark2 < w - 100, $"témoin : copie brute incomplète ({dark2}/{w})");
+    }
+
+    /// <summary>Numéro de lot trop long tapé par erreur (« 17252252252 ») : Synchroniser ne plante plus.</summary>
+    public static void T_Numero_de_lot_trop_long()
+    {
+        var p = new InventoryProject();
+        p.Pages.Add(Fixtures.Analyze("page1"));
+        Lots.Number(p, 1);
+        var objs = Lots.ObjectLines(p).ToList();
+        objs[1].Line.Lot = "17252252252";
+        objs[2].Line.Lot = "";
+        Lots.FillAutomatically(p);
+        Check(objs[2].Line.Lot.Length > 0, "case vide remplie");
+        Check(RetoucheInventaire.Core.Export.Arrangement.Build(p).Pages.Count > 0, "mise en page calculée");
+    }
+
+    /// <summary>15 lignes ajoutées puis supprimées d'un coup : la page revient exactement à sa taille et à ses rangées.</summary>
+    public static void T_Supprimer_plusieurs_lignes_ajoutees()
+    {
+        var p = new InventoryProject();
+        p.Pages.Add(Fixtures.Analyze("page1"));
+        var page = p.Pages[0];
+        var img = Fixtures.Load("page1").Image;
+        int h0 = page.Height, rows0 = page.Tables.Sum(t => t.Rows.Count);
+        var line = page.Tables.SelectMany(t => t.Rows).SelectMany(r => r.Lines).First(l => l.Kind == LineKind.Article && l.Cells[0].Text.Length > 5);
+        var res = AddedPage.AddRows(p, page, line, 15, img: img);
+        Equal(15, res.Added, "15 lignes ajoutées");
+        var added = page.Tables.SelectMany(t => t.Rows).Where(r => r.Inserted != null).SelectMany(r => r.Lines).ToList();
+        foreach (var l in Enumerable.Reverse(added)) Check(Rows.RemoveAdded(page, l), "ligne ajoutée retirée");
+        Rows.ForgetTrims(page);
+        Equal(h0, page.Height, "taille d'origine");
+        Equal(rows0, page.Tables.Sum(t => t.Rows.Count), "rangées d'origine");
+        Equal(0, page.Inserts.Count, "plus aucune bande");
+        Check(Integrity.Check(p).Count == 0, "mise en page saine");
+    }
+
     // ---------- Repli sans filets ----------
 
     public static void T_Tableau_sans_filets()

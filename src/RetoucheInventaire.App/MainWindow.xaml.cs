@@ -567,6 +567,8 @@ public sealed partial class MainWindow : Window
         view.LineCommands = LineCommandsFor;
         view.ColumnAdded += async (v, table, c) => await ColumnActionAsync(v.Page, table, c, true);
         view.RowsRequested += async (v, line) => await AddRowsDialogAsync(v.Page, line);
+        view.LinesDeleteRequested += async (v, lines) => await DeleteLinesAsync(v, lines);
+        view.SelectionChanged += (_, n) => { if (n > 0) { PageScroller.IsTabStop = true; PageScroller.UseSystemFocusVisuals = false; PageScroller.Focus(FocusState.Programmatic); } if (n > 0) SetStatus($"{n} ligne(s) sélectionnée(s) : clic droit › Supprimer ces lignes (ou touche Suppr). Échap pour désélectionner."); };
         view.LotFrameEnabled = () => _project.LotFrame;
         view.FrameToggled += async (v, table, rows, on) => await GuardAsync("Colonne des lots", async () =>
         {
@@ -762,7 +764,15 @@ public sealed partial class MainWindow : Window
 
     private void Root_KeyDown(object sender, KeyRoutedEventArgs e)
     {
+        // Lignes sélectionnées dans la marge : Échap désélectionne, Suppr les supprime (pas pendant la frappe dans une case).
+        if (e.Key == Windows.System.VirtualKey.Escape && _view is { SelectedLines.Count: > 0 }) { _view.ClearSelection(); e.Handled = true; return; }
         if (e.OriginalSource is TextBox) return;
+        if (e.Key == Windows.System.VirtualKey.Delete && _view is { SelectedLines.Count: > 0 } sel)
+        {
+            e.Handled = true;
+            _ = DeleteLinesAsync(sel, sel.SelectedLines.ToList());
+            return;
+        }
         if (e.Key == Windows.System.VirtualKey.PageUp || e.Key == Windows.System.VirtualKey.Left) { GoTo(_index - 1); e.Handled = true; }
         else if (e.Key == Windows.System.VirtualKey.PageDown || e.Key == Windows.System.VirtualKey.Right) { GoTo(_index + 1); e.Handled = true; }
     }
@@ -1010,6 +1020,41 @@ public sealed partial class MainWindow : Window
 
     /// <summary>Exécute une action du menu « Ligne » ; une seule action à annuler (↶).</summary>
     private Task LineActionAsync(string act, int from, Field f) => GuardAsync("Ligne", () => LineActionAsyncCore(act, from, f));
+
+    /// <summary>
+    /// Plusieurs lignes sélectionnées à la souris (marge de gauche) supprimées d'un coup, un seul ↶ pour tout remettre :
+    /// une ligne ajoutée disparaît (la suite remonte), une ligne imprimée est retirée de la vente comme « Supprimer cette ligne ».
+    /// </summary>
+    private async Task DeleteLinesAsync(PageView v, List<PrintedLine> lines)
+    {
+        if (_busy || lines.Count == 0) return;
+        if (!await ConfirmAsync($"Supprimer ces {lines.Count} ligne(s) ?",
+                "Elles disparaissent de la page, du fichier texte et des totaux ; ce qui suit remonte. ↶ pour tout remettre d'un coup.", "Supprimer")) return;
+        await GuardAsync("Supprimer des lignes", async () =>
+        {
+            PushUndo();
+            int done = 0, skipped = 0;
+            // De bas en haut : retirer une ligne ajoutée fait remonter ce qui suit.
+            foreach (var line in Enumerable.Reverse(lines))
+            {
+                var page = _project.Pages.FirstOrDefault(p => p.AllLines().Contains(line));
+                if (page is null || line.Deleted) { skipped++; continue; }
+                if (Rows.AddedRowOf(page, line) is { Band.Kind: "Copy" }) { Rows.RemoveAdded(page, line); done++; }
+                else if (Rows.Locate(page, line) != null) { line.Deleted = true; done++; }
+                else skipped++;
+            }
+            foreach (var page in _project.Pages) Rows.ForgetTrims(page);
+            v.ClearSelection();
+            Lots.Resync(_project);
+            Replan();
+            RecomputeTotals();
+            _currentField = null;
+            await RefreshViewAsync();
+            UpdateEditBar();
+            SetStatus($"{done} ligne(s) supprimée(s), ce qui suit est remonté{(skipped > 0 ? $" ({skipped} laissée(s) : pas une ligne de tableau)" : "")}. ↶ pour tout remettre.");
+            ScheduleAutosave();
+        });
+    }
 
     private async Task LineActionAsyncCore(string act, int from, Field f)
     {

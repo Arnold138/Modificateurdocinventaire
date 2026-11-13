@@ -160,7 +160,7 @@ public static class PageLayout
     /// d'interligne (<see cref="Extra"/>, ou <see cref="Gap"/> dans une bande insérée : filets verticaux de la rangée
     /// <see cref="Y0"/> prolongés entre X0 et X1, papier ailleurs).
     /// </summary>
-    public sealed record Piece(int Y0, int N, int X0 = 0, int X1 = 0, bool Extra = false, bool Gap = false, int Span = 0, List<int>? Cols = null);
+    public sealed record Piece(int Y0, int N, int X0 = 0, int X1 = 0, bool Extra = false, bool Gap = false, int Span = 0, List<int>? Cols = null, bool Straight = false);
 
     /// <summary>Suite des rangées de la page agrandie, de haut en bas.</summary>
     public static List<Piece> Pieces(Page page) => Pieces(page, BaseHeight(page));
@@ -186,7 +186,7 @@ public static class PageLayout
             if (until > src) seq.Add(new Piece(src, until - src));
             src = until;
             if (b.Skip > 0) { src = Math.Min(baseHeight, until + b.Skip); inserted += b.Height; continue; } // rangée réduite : rangées sautées
-            foreach (var p in b.Parts) if (p.Height > 0) seq.Add(p.Gap ? new Piece(p.Src, p.Height, p.X0, p.X1, Gap: true, Span: p.Span, Cols: p.Cols) : new Piece(p.Src, p.Height));
+            foreach (var p in b.Parts) if (p.Height > 0) seq.Add(p.Gap ? new Piece(p.Src, p.Height, p.X0, p.X1, Gap: true, Span: p.Span, Cols: p.Cols) : new Piece(p.Src, p.Height, Straight: p.Straight));
             inserted += b.Height;
         }
         if (baseHeight > src) seq.Add(new Piece(src, baseHeight - src));
@@ -268,14 +268,23 @@ public static class PageLayout
                 int s = x.Span > 0 ? CleanRow(baseImage, x.Y0, x.Span, x.Cols ?? []) : x.Y0;
                 var paper = PaperOf(baseImage, s);
                 int x0 = Math.Clamp(x.X0, 0, w), x1 = Math.Clamp(x.X1, 0, w);
+                var missing = MissingRules(baseImage, s, x.Cols, x0, x1);
                 for (int k = 0; k < x.N; k++, dst++)
                     for (int xx = 0; xx < w; xx++)
                     {
                         int o = dst * stride + xx * ch;
-                        // Dans le tableau : les filets verticaux (sombres) sont prolongés, le reste devient papier propre.
+                        // Dans le tableau : les filets verticaux (sombres) sont prolongés, le reste devient papier propre ;
+                        // un filet du tableau effacé à cet endroit du scan est redessiné.
                         if (xx >= x0 && xx < x1 && Gray(baseImage, xx, s) < 150) Array.Copy(baseImage.Data, s * stride + xx * ch, data, o, ch);
+                        else if (missing != null && missing[xx]) for (int c = 0; c < ch; c++) data[o + c] = RuleInk;
                         else Array.Copy(paper, 0, data, o, ch);
                     }
+                continue;
+            }
+            if (x.Straight)
+            {
+                StraightRule(baseImage, x.Y0, x.N, data, dst);
+                dst += x.N;
                 continue;
             }
             int a = Math.Clamp(x.Y0, 0, baseImage.Height), b = Math.Min(baseImage.Height, a + x.N);
@@ -283,6 +292,110 @@ public static class PageLayout
             dst += x.N;
         }
         return new Raster(w, height, ch, data);
+    }
+
+    /// <summary>Gris d'un filet redessiné.</summary>
+    internal const byte RuleInk = 70;
+
+    /// <summary>
+    /// Filets verticaux du tableau (<paramref name="cols"/>) absents de la rangée <paramref name="s"/> (effacés sur le scan) :
+    /// pixels où les redessiner (2 px), sinon null.
+    /// </summary>
+    internal static bool[]? MissingRules(Raster img, int s, List<int>? cols, int x0, int x1)
+    {
+        if (cols is null || cols.Count == 0) return null;
+        bool[]? missing = null;
+        foreach (int c in cols)
+        {
+            if (c < x0 || c >= x1) continue;
+            bool there = false;
+            for (int xx = Math.Max(0, c - 3); xx <= Math.Min(img.Width - 1, c + 3) && !there; xx++) there = Gray(img, xx, s) < 150;
+            if (there) continue;
+            missing ??= new bool[img.Width];
+            for (int xx = Math.Max(0, c - 1); xx <= Math.Min(img.Width - 1, c); xx++) missing[xx] = true;
+        }
+        return missing;
+    }
+
+    /// <summary>
+    /// Filet redressé : pour chaque abscisse, la rangée la plus sombre autour de [<paramref name="y0"/>, y0 + n[ (± 4 px),
+    /// lissée par blocs de 32 px (une lettre qui touche le filet ne le fait pas sauter) ; les n rangées écrites suivent ce
+    /// filet. Un scan un peu penché donne ainsi un filet droit et entier.
+    /// </summary>
+    internal static void StraightRule(Raster img, int y0, int n, byte[] data, int dst)
+    {
+        int w = img.Width, ch = img.Channels, stride = w * ch, H = img.Height;
+        int a = Math.Max(0, y0 - 4), b = Math.Min(H, y0 + n + 4);
+        if (b <= a) return;
+        var yd = new int[w];
+        var ok = new bool[w];
+        for (int xx = 0; xx < w; xx++)
+        {
+            int best = 256, by = -1;
+            for (int y = a; y < b; y++) { int g = Gray(img, xx, y); if (g < best) { best = g; by = y; } }
+            yd[xx] = by; ok[xx] = best < 160;
+        }
+        const int Block = 32;
+        int nb = (w + Block - 1) / Block;
+        var mid = new double[nb];
+        var has = new bool[nb];
+        for (int k = 0; k < nb; k++)
+        {
+            var v = new List<int>();
+            for (int xx = k * Block; xx < Math.Min(w, (k + 1) * Block); xx++) if (ok[xx]) v.Add(yd[xx]);
+            if (v.Count >= Block / 4) { v.Sort(); mid[k] = v[v.Count / 2]; has[k] = true; }
+        }
+        double center = y0 + (n - 1) / 2.0;
+        if (!has.Any(x => x))
+        {
+            for (int k = 0; k < n; k++) Array.Copy(img.Data, Math.Clamp(y0 + k, 0, H - 1) * stride, data, (dst + k) * stride, stride);
+            return;
+        }
+        // Blocs sans filet : la valeur du bloc le plus proche qui en a un.
+        for (int k = 0; k < nb; k++)
+            if (!has[k])
+            {
+                int d = 1;
+                while (true)
+                {
+                    if (k - d >= 0 && has[k - d]) { mid[k] = mid[k - d]; break; }
+                    if (k + d < nb && has[k + d]) { mid[k] = mid[k + d]; break; }
+                    d++;
+                }
+            }
+        // Hauteur de référence : la médiane du filet. Un filet droit est recopié tel quel (décalage 0 partout) ; un filet
+        // penché est ramené à cette hauteur colonne par colonne ; s'il est loin du milieu de la bande, il y est recentré.
+        var sorted = mid.OrderBy(v => v).ToArray();
+        double reference = sorted[sorted.Length / 2];
+        int off = Math.Abs(reference - center) >= 2 ? (int)Math.Round(reference - center) : 0;
+        // Petit trou dans le filet (tache de correcteur, encre pâle) : recopié depuis la colonne voisine la plus proche
+        // où le filet est là (jusqu'à 150 px de chaque côté).
+        var from = new int[w];
+        int lastOk = -100000;
+        for (int xx = 0; xx < w; xx++) { if (ok[xx]) lastOk = xx; from[xx] = lastOk; }
+        int nextOk = 100000;
+        for (int xx = w - 1; xx >= 0; xx--)
+        {
+            if (ok[xx]) { nextOk = xx; from[xx] = xx; continue; }
+            int l = from[xx];
+            from[xx] = xx - l <= 150 && nextOk - xx <= 150 ? (xx - l <= nextOk - xx ? l : nextOk) : xx;
+        }
+        for (int xx = 0; xx < w; xx++)
+        {
+            int sx = from[xx];
+            // Interpolation entre centres de blocs.
+            double f = (xx + 0.5) / Block - 0.5;
+            int k0 = Math.Clamp((int)Math.Floor(f), 0, nb - 1), k1 = Math.Min(nb - 1, k0 + 1);
+            double t = Math.Clamp(f - k0, 0, 1);
+            double line = mid[k0] * (1 - t) + mid[k1] * t;
+            int shift = (int)Math.Round(line - reference) + off;
+            for (int k = 0; k < n; k++)
+            {
+                // Colonne bouchée : le filet de la voisine, centré sur sa rangée la plus sombre.
+                int sy = Math.Clamp(sx != xx ? y0 + k + (int)Math.Round(yd[sx] - reference) + off : y0 + k + shift, 0, H - 1);
+                Array.Copy(img.Data, sy * stride + sx * ch, data, (dst + k) * stride + xx * ch, ch);
+            }
+        }
     }
 
     /// <summary>

@@ -187,7 +187,8 @@ public static class Lots
     {
         Resync(project);
         var list = ObjectLines(project).ToList();
-        static int? Num(PrintedLine l) => System.Text.RegularExpressions.Regex.IsMatch(l.Lot.Trim(), @"^[+-]?\d+$") ? int.Parse(l.Lot.Trim()) : null;
+        // Numéro trop long pour un nombre (« 17252252252 » tapé par erreur) : traité comme un texte, jamais un plantage.
+        static int? Num(PrintedLine l) => System.Text.RegularExpressions.Regex.IsMatch(l.Lot.Trim(), @"^[+-]?\d+$") && int.TryParse(l.Lot.Trim(), out int v) ? v : null;
         int prev = 0;
         for (int i = 0; i < list.Count; i++)
         {

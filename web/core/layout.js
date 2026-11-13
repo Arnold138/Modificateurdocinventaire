@@ -155,7 +155,7 @@ export function pieces(page, baseH = baseHeight(page)) {
     if (until > src) seq.push({ y0: src, n: until - src });
     src = until;
     if (b.Skip) { src = Math.min(baseH, until + b.Skip); inserted += b.Height; continue; } // rangée réduite : rangées sautées
-    for (const p of b.Parts) if (p.Height > 0) seq.push(p.Gap ? { gap: true, s: p.Src, span: p.Span, cols: p.Cols, n: p.Height, x0: p.X0, x1: p.X1 } : { y0: p.Src, n: p.Height });
+    for (const p of b.Parts) if (p.Height > 0) seq.push(p.Gap ? { gap: true, s: p.Src, span: p.Span, cols: p.Cols, n: p.Height, x0: p.X0, x1: p.X1 } : (p.Straight ? { y0: p.Src, n: p.Height, straight: true } : { y0: p.Src, n: p.Height }));
     inserted += b.Height;
   }
   if (baseH > src) seq.push({ y0: src, n: baseH - src });
@@ -217,13 +217,21 @@ export function stretch(base, page) {
     if (x.extra || x.gap) {
       const s = x.span ? cleanRow(base, x.s, x.span, x.cols) : x.s, paper = paperOf(base, s);
       const x0 = Math.min(w, Math.max(0, x.x0)), x1 = Math.min(w, Math.max(0, x.x1));
+      const missing = missingRules(base, s, x.cols, x0, x1);
       for (let k = 0; k < x.n; k++, dst++)
         for (let xx = 0; xx < w; xx++) {
           const o = dst * stride + xx * ch;
-          // Dans le tableau : les filets verticaux (sombres) sont prolongés, le reste devient papier propre.
+          // Dans le tableau : les filets verticaux (sombres) sont prolongés, le reste devient papier propre ;
+          // un filet du tableau effacé à cet endroit du scan est redessiné.
           if (xx >= x0 && xx < x1 && gray(base, xx, s) < 150) for (let c = 0; c < ch; c++) data[o + c] = base.data[s * stride + xx * ch + c];
+          else if (missing && missing[xx]) for (let c = 0; c < ch; c++) data[o + c] = RULE_INK;
           else for (let c = 0; c < ch; c++) data[o + c] = paper[c];
         }
+      continue;
+    }
+    if (x.straight) {
+      straightRule(base, x.y0, x.n, data, dst);
+      dst += x.n;
       continue;
     }
     const a = Math.min(base.h, Math.max(0, x.y0)), b = Math.min(base.h, a + x.n);
@@ -231,6 +239,91 @@ export function stretch(base, page) {
     dst += x.n;
   }
   return { w, h: height, ch, data };
+}
+
+/** Gris d'un filet redessiné. */
+const RULE_INK = 70;
+
+/** Filets verticaux du tableau absents de la rangée s (effacés sur le scan) : pixels où les redessiner (2 px), sinon null. */
+export function missingRules(img, s, cols, x0, x1) {
+  if (!cols || cols.length === 0) return null;
+  let missing = null;
+  for (const c of cols) {
+    if (c < x0 || c >= x1) continue;
+    let there = false;
+    for (let xx = Math.max(0, c - 3); xx <= Math.min(img.w - 1, c + 3) && !there; xx++) there = gray(img, xx, s) < 150;
+    if (there) continue;
+    missing ??= new Uint8Array(img.w);
+    for (let xx = Math.max(0, c - 1); xx <= Math.min(img.w - 1, c); xx++) missing[xx] = 1;
+  }
+  return missing;
+}
+
+/**
+ * Filet redressé (même règle que Windows) : pour chaque abscisse, la rangée la plus sombre autour de [y0, y0 + n[ (± 4 px),
+ * lissée par blocs de 32 px ; les n rangées écrites suivent ce filet.
+ */
+export function straightRule(img, y0, n, data, dst) {
+  const w = img.w, ch = img.ch, stride = w * ch, H = img.h;
+  const a = Math.max(0, y0 - 4), b = Math.min(H, y0 + n + 4);
+  if (b <= a) return;
+  const yd = new Int32Array(w), ok = new Uint8Array(w);
+  for (let xx = 0; xx < w; xx++) {
+    let best = 256, by = -1;
+    for (let y = a; y < b; y++) { const g = gray(img, xx, y); if (g < best) { best = g; by = y; } }
+    yd[xx] = by; ok[xx] = best < 160 ? 1 : 0;
+  }
+  const BLOCK = 32, nb = Math.ceil(w / BLOCK);
+  const mid = new Float64Array(nb), has = new Uint8Array(nb);
+  for (let k = 0; k < nb; k++) {
+    const v = [];
+    for (let xx = k * BLOCK; xx < Math.min(w, (k + 1) * BLOCK); xx++) if (ok[xx]) v.push(yd[xx]);
+    if (v.length >= BLOCK / 4) { v.sort((p, q) => p - q); mid[k] = v[Math.trunc(v.length / 2)]; has[k] = 1; }
+  }
+  const center = y0 + (n - 1) / 2;
+  if (!has.some((h) => h)) {
+    for (let k = 0; k < n; k++) { const sy = Math.min(H - 1, Math.max(0, y0 + k)); data.set(img.data.subarray(sy * stride, (sy + 1) * stride), (dst + k) * stride); }
+    return;
+  }
+  for (let k = 0; k < nb; k++)
+    if (!has[k])
+      for (let d = 1; ; d++) {
+        if (k - d >= 0 && has[k - d]) { mid[k] = mid[k - d]; break; }
+        if (k + d < nb && has[k + d]) { mid[k] = mid[k + d]; break; }
+      }
+  // Hauteur de référence : la médiane du filet (un filet droit est recopié tel quel ; même règle que Windows).
+  const sortedMid = [...mid].sort((p, q) => p - q);
+  const reference = sortedMid[Math.trunc(sortedMid.length / 2)];
+  const off = Math.abs(reference - center) >= 2 ? csRound(reference - center) : 0;
+  // Petit trou dans le filet : recopié depuis la colonne voisine la plus proche où il est là (jusqu'à 150 px de chaque côté).
+  const from = new Int32Array(w);
+  let lastOk = -100000;
+  for (let xx = 0; xx < w; xx++) { if (ok[xx]) lastOk = xx; from[xx] = lastOk; }
+  let nextOk = 100000;
+  for (let xx = w - 1; xx >= 0; xx--) {
+    if (ok[xx]) { nextOk = xx; from[xx] = xx; continue; }
+    const l = from[xx];
+    from[xx] = xx - l <= 150 && nextOk - xx <= 150 ? (xx - l <= nextOk - xx ? l : nextOk) : xx;
+  }
+  for (let xx = 0; xx < w; xx++) {
+    const sx = from[xx];
+    const f = (xx + 0.5) / BLOCK - 0.5;
+    const k0 = Math.min(nb - 1, Math.max(0, Math.floor(f))), k1 = Math.min(nb - 1, k0 + 1);
+    const t = Math.min(1, Math.max(0, f - k0));
+    const line = mid[k0] * (1 - t) + mid[k1] * t;
+    const shift = csRound(line - reference) + off;
+    for (let k = 0; k < n; k++) {
+      // Colonne bouchée : le filet de la voisine, centré sur sa rangée la plus sombre.
+      const sy = Math.min(H - 1, Math.max(0, sx !== xx ? y0 + k + csRound(yd[sx] - reference) + off : y0 + k + shift));
+      for (let c = 0; c < ch; c++) data[(dst + k) * stride + xx * ch + c] = img.data[sy * stride + sx * ch + c];
+    }
+  }
+}
+
+/** Arrondi comme Math.Round de C# (au pair le plus proche). */
+function csRound(v) {
+  const r = Math.round(v);
+  return Math.abs(v % 1) === 0.5 && r % 2 !== 0 ? r - 1 : r;
 }
 
 /**

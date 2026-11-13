@@ -97,6 +97,9 @@ export function reclassify(page) { for (const t of page.Tables) classify(t); }
  * rangée de libellés sans désignation (« exploitation réalisation » d'un récapitulatif) → en-tête. Rien d'autre ne change.
  */
 export function upgradePage(page) {
+  // Filet du haut des rangées recopiées par une version précédente : recopié redressé (même règle que Windows).
+  for (const b of page.Inserts ?? [])
+    if ((b.Kind === 'Copy' || b.Kind === 'Split') && b.Parts?.length > 0 && !b.Parts[0].Gap && b.Parts[0].Height <= 5) b.Parts[0].Straight = true;
   // Reprises d'une version précédente : une seule fois, et jamais sur une page dont la mise en page a été retouchée
   // (rouvrir un projet ne doit jamais changer sa mise en page).
   // Les autres reprises (lecture corrigée, lignes des pages ajoutées) aussi : une seule fois.
