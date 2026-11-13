@@ -64,15 +64,18 @@ export const isMultiline = (f) => f.Column === 0;
 
 /** Coupe le texte en lignes qui tiennent dans la largeur (retours à la ligne tapés respectés). */
 export function wrapText(text, size, width, bold = false) {
+  // Même coupure que Windows et le navigateur : espaces tapés gardés, un mot qui ne tient pas passe à la ligne suivante,
+  // seul un mot plus long que la case est coupé en morceaux.
   const measure2 = (t, z) => measure(t, z, bold);
   const out = [];
   for (const para of text.replace(/\r\n?/g, '\n').split('\n')) {
-    let cur = '';
-    for (const word of para.split(' ')) {
-      const next = cur.length === 0 ? word : cur + ' ' + word;
-      if (measure2(next, size) <= width || cur.length === 0 && measure2(word, size) <= width) { cur = next; continue; }
-      if (cur.length > 0) out.push(cur);
-      // Mot plus long que la case : coupé en morceaux.
+    const words = para.split(' ');
+    let cur = '', open = false;
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i];
+      const next = open ? cur + ' ' + word : word;
+      if (measure2(next, size) <= width) { cur = next; open = true; continue; }
+      if (open && (cur.length > 0 || i > 0)) { out.push(cur); cur = ''; open = false; }
       let rest = word;
       while (measure2(rest, size) > width && rest.length > 1) {
         let k = rest.length - 1;
@@ -81,6 +84,7 @@ export function wrapText(text, size, width, bold = false) {
         rest = rest.slice(k);
       }
       cur = rest;
+      open = true;
     }
     out.push(cur);
   }

@@ -418,7 +418,7 @@ public static class Stress
                 break;
             }
             case "unmoveLot": line.MoveTo = null; break;
-            case "sortLots": project.SortLots = a.GetProperty("on").GetBoolean(); break;
+            case "sortLots": project.SortLots = a.GetProperty("on").GetBoolean(); if (project.SortLots) Lots.SnapshotSort(project); break;
             case "align": line.LotPos = null; line.LotAlign = a.GetProperty("v").ValueKind == JsonValueKind.Null ? null : a.GetProperty("v").GetString(); break;
             case "frameToggle": foreach (var x in a.GetProperty("rows").EnumerateArray()) table.Rows[x.GetInt32()].LotFrame = a.GetProperty("on").GetBoolean(); break;
             case "sync":
@@ -433,6 +433,7 @@ public static class Stress
                 var pg = a.GetProperty("page");
                 Lots.FillAutomatically(project, pg.ValueKind == JsonValueKind.Null ? null : new List<Page> { pages[pg.GetInt32()] });
                 project.SortLots = true;
+                Lots.SnapshotSort(project);
                 break;
             }
             case "dragRow":
@@ -592,11 +593,11 @@ public static class Stress
             PrintedLine? prev = null;
             for (int k = 0; k < project.Pages.Count; k++)
                 foreach (var e in Arrangement.ViewOf(project, plan, k).Lines
-                    .Where(e => e.LotBox != null && objSet.Contains(e.Line) && e.Line.MoveTo == null && !e.Line.Deleted && e.Line.Lot.Trim().Length > 0 && !Lots.IsZero(e.Line) && e.Line.Cells.Any(c => c.Text.Trim().Length > 0))
+                    .Where(e => e.LotBox != null && objSet.Contains(e.Line) && e.Line.MoveTo == null && !e.Line.Deleted && (e.Line.SortedLot ?? "").Trim().Length > 0 && !Lots.IsZero(e.Line) && e.Line.Cells.Any(c => c.Text.Trim().Length > 0))
                     .OrderBy(e => e.LotBox!.Value.Y))
                 {
-                    if (prev != null && Arrangement.CompareKeys(Arrangement.LotKey(prev.Lot), Arrangement.LotKey(e.Line.Lot)) > 0)
-                        fail(step, $"{op} : tri cassé, « {prev.Lot} » avant « {e.Line.Lot} » page {k + 1}");
+                    if (prev != null && Arrangement.CompareKeys(Arrangement.LotKey(prev.SortedLot), Arrangement.LotKey(e.Line.SortedLot)) > 0)
+                        fail(step, $"{op} : tri cassé, « {prev.SortedLot} » avant « {e.Line.SortedLot} » page {k + 1}");
                     prev = e.Line;
                 }
         }

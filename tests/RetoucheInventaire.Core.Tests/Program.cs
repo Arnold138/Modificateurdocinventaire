@@ -141,7 +141,7 @@ if (args.Length > 0 && args[0] == "render-project")
         var crops = plan.Pages[k].Pieces.Where(pc => pc.IsUnit).ToDictionary(pc => pc.Unit!, pc => (RetoucheInventaire.Core.Export.Arrangement.Crop?)RetoucheInventaire.Core.Export.Arrangement.UnitCrop(pc.Unit!, drawn[pc.Unit!.P]!));
         Pgm.Write(Path.Combine(args[3], $"page{k + 1}.pgm"), RetoucheInventaire.Core.Export.Arrangement.ComposePage(plan, k, src, crops));
         var v = RetoucheInventaire.Core.Export.Arrangement.ViewOf(project, plan, k);
-        File.WriteAllLines(Path.Combine(args[3], $"page{k + 1}.txt"), v.Lines.Select(e => $"{(e.Moved ? "D" : " ")} lot={e.Line.Lot,-4} y={e.Cells.FirstOrDefault()?.Box.Y:0} " + string.Join(" | ", e.Cells.Select(c => $"[{c.Box.X:0},{c.Box.Width:0}] {c.Field.Text}"))));
+        File.WriteAllLines(Path.Combine(args[3], $"page{k + 1}.txt"), v.Lines.Select(e => $"{(e.Moved ? "D" : " ")} lot={e.Line.Lot,-4} y={e.Cells.FirstOrDefault()?.Box.Y:0} " + string.Join(" | ", e.Cells.Take(1).Select(c => $"[box {c.Box.X:0},{c.Box.Y:0},{c.Box.Width:0}x{c.Box.Height:0} dy={c.Dy:0} f={c.Field.Box.Y:0}+{c.Field.Box.Height:0} ink={c.Field.Ink.Y:0}+{c.Field.Ink.Height:0} base={PageLayout.BaseBox(e.Line, c.Field).Y:0}+{PageLayout.BaseBox(e.Line, c.Field).Height:0} extra={e.Line.Extra}] {(c.Field.Text.Length > 20 ? c.Field.Text[..20] : c.Field.Text)}"))));
     }
     Console.WriteLine(string.Join(", ", project.Pages.Select((pg, k) => $"p{k + 1} {pg.Height}->{plan.Pages[k].Height}")));
     Console.WriteLine("Contrôle : " + string.Join(" ; ", Integrity.Check(project).Values.Take(20)));

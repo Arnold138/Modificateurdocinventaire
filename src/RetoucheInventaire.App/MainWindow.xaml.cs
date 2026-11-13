@@ -340,16 +340,18 @@ public sealed partial class MainWindow : Window
         return _plan;
     }
 
-    /// <summary>Lignes au texte tapé : agrandies si leur texte ne tient plus (jamais réduites ici).</summary>
-    private void GrowTypedLines()
+    /// <summary>Lignes au texte tapé : agrandies si leur texte ne tient plus (jamais réduites ici). Vrai si une a grandi.</summary>
+    private bool GrowTypedLines()
     {
+        bool grown = false;
         foreach (var page in _project.Pages)
             foreach (var line in page.Tables.SelectMany(t => t.Rows).SelectMany(r => r.Lines).ToList())
                 if (line.Cells.Any(c => c.IsModified && TextWrap.IsMultiline(c)))
                 {
                     int need = Views.PageView.LineExtra(line);
-                    if (need > line.Extra) PageLayout.SetExtra(page, line, need);
+                    if (need > line.Extra) { PageLayout.SetExtra(page, line, need); grown = true; }
                 }
+        return grown;
     }
 
     /// <summary>Totaux recalculés (cases non tapées à la main) ; renvoie les cases changées.</summary>
@@ -655,15 +657,15 @@ public sealed partial class MainWindow : Window
             return;
         }
         var page = CurrentPage;
-        var options = new List<(string, string, bool)>();
-        if (page is { EndLots: false }) options.Add(($"Cette page (page {_index + 1})", "page", false));
-        options.Add(("Toutes les pages", "all", false));
+        var options = new List<(string, string, bool)> { ("Ranger dans l'ordre des numéros tapés", "sort", false) };
+        if (page is { EndLots: false }) options.Add(($"Remplir aussi les cases vides de cette page (page {_index + 1})", "page", false));
+        options.Add(("Remplir aussi toutes les cases vides", "all", false));
         var choice = await ChooseAsync("Synchroniser les lots",
-            "Remplit les cases vides. Les numéros déjà là ne bougent pas : une case vide prend le numéro qui suit et décale seulement les lots qui la suivent directement (6, 7, 8 → 7, 8, 9).\n\nPuis les lignes entières (case de lot, désignation, prix) sont rangées dans l'ordre des numéros sur tout le document : tous les 2 ensemble après les 1…, lettres (VGG, ?) à la fin. Ensuite c'est gardé à chaque changement : un numéro tapé rejoint aussitôt sa place.\n\nPour poser un lot ailleurs : clic droit › Déplacer ce lot (page choisie, dans l'ordre), ou Modifier puis glisser ses ⋮⋮. Pour tout renuméroter dans l'ordre affiché : Lots › Renuméroter tout.",
+            "Les lignes entières (case de lot, désignation, prix) sont rangées dans l'ordre des numéros que vous avez tapés : tous les 2 ensemble après les 1…, lettres (VGG, ?) à la fin. Une ligne qu'on ne peut pas ranger reste où elle est.\n\nEnsuite, un numéro tapé ne déplace rien : la ligne reste à sa place jusqu'au prochain « Synchroniser ».\n\n« Remplir aussi » : chaque case vide prend le numéro qui suit (6, 7, 8 → 7, 8, 9 pour les lots qui la suivent directement).",
             [.. options]);
         if (choice is null) return;
         PushUndo();
-        SyncLots(choice == "page" && page != null ? new List<ModelPage> { page } : null);
+        SyncLots(choice == "page" && page != null ? new List<ModelPage> { page } : null, 0, fill: choice != "sort");
     }
 
     /// <summary>Remplit les cases vides (pages choisies, ou toutes) sans toucher aux numéros déjà là ; dit ce qui a changé.</summary>
@@ -722,12 +724,14 @@ public sealed partial class MainWindow : Window
         return n;
     }
 
-    private void SyncLots(List<ModelPage>? only = null, int read = 0)
+    private void SyncLots(List<ModelPage>? only = null, int read = 0, bool fill = true)
     {
         var before = Lots.ObjectLines(_project).ToDictionary(o => o.Line, o => o.Line.Lot);
-        Lots.FillAutomatically(_project, only);
-        // Synchroniser range aussi les lignes entières dans l'ordre des numéros (et le garde ensuite à chaque changement).
+        if (fill) Lots.FillAutomatically(_project, only);
+        // Synchroniser range les lignes entières dans l'ordre des numéros tapés. Un numéro tapé ensuite ne déplace rien
+        // jusqu'au prochain « Synchroniser » (demande du client : rien ne bouge de force).
         _project.SortLots = true;
+        Lots.SnapshotSort(_project);
         Replan();
         RecomputeTotals();
         Observe(RefreshViewAsync(), "Réafficher la page");
@@ -739,7 +743,8 @@ public sealed partial class MainWindow : Window
         var dup = objs.Where(o => o.Line.Lot.Length > 0 && !Lots.IsZero(o.Line)).GroupBy(o => o.Line.Lot).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
         string warn = dup.Count > 0 ? $" Attention, numéro(s) en double : {string.Join(", ", dup.Take(6))}{(dup.Count > 6 ? "…" : "")} (touchez la case pour corriger)." : "";
         int movedNow = _plan.Moving.Count(u => u.Kind == "sort");
-        SetStatus((read > 0 ? $"{read} numéro(s) déjà imprimé(s) repris. " : "") + $"Lignes rangées dans l'ordre des numéros ({movedNow} déplacée(s)). " + (objs.Count == 0 ? "Aucun objet à numéroter."
+        SetStatus((read > 0 ? $"{read} numéro(s) déjà imprimé(s) repris. " : "") + $"Lignes rangées dans l'ordre des numéros ({movedNow} déplacée(s)) ; un numéro tapé ensuite reste à sa place jusqu'au prochain « Synchroniser ». " + (objs.Count == 0 ? "Aucun objet à numéroter."
+            : !fill ? "Cases vides laissées vides. ↶ pour annuler."
             : filled == 0 ? $"Rien à remplir{where} : toutes les cases ont un numéro (rien n'a bougé)."
             : $"{filled} case(s) remplie(s){where}{(shifted > 0 ? $", {shifted} lot(s) suivant(s) décalé(s) d'un cran" : "")} ; les autres numéros n'ont pas bougé. ↶ pour annuler.") + warn);
         ScheduleAutosave();
@@ -1126,6 +1131,7 @@ public sealed partial class MainWindow : Window
         {
             PushUndo();
             Lots.Set(_project, line, "");
+            line.SortedLot = null;
             Replan();
             RecomputeTotals();
             await RefreshViewAsync();
@@ -1613,8 +1619,8 @@ public sealed partial class MainWindow : Window
                 : "Lot 0 : aucun autre lot numéroté, la ligne reste en place.");
         }
         else if (wasZero && !zero) SetStatus($"Lot {(line.Lot.Length > 0 ? line.Lot : "(vide)")} : « {Short(line.FirstText)} » est revenu à sa place.");
-        else if (_project.SortLots && line.Lot.Length > 0 && _plan.Moving.FirstOrDefault(u => u.Kind == "sort" && u.Lines.Contains(line)) is { } su)
-            SetStatus($"Lot {line.Lot} enregistré : la ligne entière rejoint sa place dans l'ordre des numéros (page {su.Dest.P + 1}).");
+        else if (_project.SortLots && line.Lot.Length > 0 && line.Lot != line.SortedLot)
+            SetStatus($"Lot {line.Lot} enregistré : la ligne reste ici ; « Synchroniser » la range dans l'ordre des numéros.");
         else SetStatus(line.Lot.Length > 0 ? $"Lot {line.Lot} enregistré." : "Case de lot vidée.");
         ScheduleAutosave();
     }
@@ -2229,6 +2235,7 @@ public sealed partial class MainWindow : Window
             case "sort":
                 PushUndo();
                 _project.SortLots = !_project.SortLots;
+                if (_project.SortLots) Lots.SnapshotSort(_project);
                 Replan();
                 RecomputeTotals();
                 await RefreshViewAsync();
@@ -2894,6 +2901,10 @@ public sealed partial class MainWindow : Window
         _projectPath = rememberPath ? path : null;
         _undo.Clear();
         bool repaired = await RepairPagesAsync();
+        // Lignes au texte tapé : hauteur recalculée (coupure des lignes comme la zone de saisie : une rangée calculée trop
+        // courte laissait le texte déborder sur la suivante). Seulement agrandies.
+        Lots.SetNarrowing(_project);
+        repaired |= GrowTypedLines();
         await ShowPageAsync(0);
         Baseline("ouverture");
         if (repaired) ScheduleAutosave();
@@ -3234,7 +3245,8 @@ public sealed partial class MainWindow : Window
         int n = _project.Pages.Count;
         var page = CurrentPage;
         PhotoButton.IsEnabled = ImportButton.IsEnabled = ProjectButton.IsEnabled = !_busy;
-        CropButton.IsEnabled = !_busy && page?.Source == PageSource.Image && !page.EndLots && page.Added == null;
+        CropItem.IsEnabled = !_busy && page?.Source == PageSource.Image && !page.EndLots && page.Added == null;
+        SyncButton.IsEnabled = !_busy && n > 0;
         LockToggle.IsEnabled = !_busy && page != null && !page.EndLots;
         MoveToggle.IsEnabled = !_busy && page != null && !page.EndLots;
         LotsButton.IsEnabled = ExportButton.IsEnabled = SaveAsButton.IsEnabled = EditButton.IsEnabled = !_busy && n > 0;

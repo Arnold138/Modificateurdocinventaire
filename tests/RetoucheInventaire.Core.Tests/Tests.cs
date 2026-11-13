@@ -1250,6 +1250,39 @@ public static class Tests
         Check(Integrity.Check(p).Count == 0, "mise en page saine");
     }
 
+    /// <summary>Demande du client (13/11) : un numéro tapé ne déplace rien ; seul « Synchroniser les lots » range les lignes.</summary>
+    public static void T_Lot_tape_ne_bouge_qu_a_la_synchronisation()
+    {
+        var p = new InventoryProject();
+        p.Pages.Add(Fixtures.Analyze("page1"));
+        Lots.Number(p, 1);
+        p.SortLots = true;
+        Lots.SnapshotSort(p);
+        Equal(0, RetoucheInventaire.Core.Export.Arrangement.Build(p).Moving.Count(u => u.Kind == "sort"), "dans l'ordre : rien ne bouge");
+        var first = Lots.ObjectLines(p).First().Line;
+        Lots.Set(p, first, "999");
+        Equal(0, RetoucheInventaire.Core.Export.Arrangement.Build(p).Moving.Count(u => u.Kind == "sort"), "numéro tapé : la ligne reste à sa place");
+        Lots.SnapshotSort(p);
+        var plan = RetoucheInventaire.Core.Export.Arrangement.Build(p);
+        Check(plan.Moving.Any(u => u.Kind == "sort" && u.Lines.Contains(first)), "Synchroniser : la ligne rejoint sa place");
+    }
+
+    /// <summary>
+    /// Captures du 13/11 : « ␣aaaa… » (espace puis un mot plus long que la case). La zone de saisie laisse la 1re ligne vide
+    /// et passe le mot à la ligne : la rangée doit compter cette ligne, sinon le texte déborde sur la suivante.
+    /// </summary>
+    public static void T_Coupure_comme_la_zone_de_saisie()
+    {
+        double M(string t) => t.Length * 10.0;
+        var lines = TextWrap.Wrap(" " + new string('a', 25), 100, M);
+        Equal(4, lines.Count, "espace seul sur la 1re ligne, puis 10 + 10 + 5");
+        Equal(" ", lines[0].Length == 0 ? " " : lines[0][..1], "1re ligne : rien que l'espace");
+        Equal(3, TextWrap.Wrap(new string('a', 25), 100, M).Count, "sans espace : 3 lignes");
+        Equal(2, TextWrap.Wrap("abc " + new string('a', 9), 100, M).Count, "un mot qui ne tient pas passe à la ligne");
+        Equal(1, TextWrap.Wrap(" abc def", 100, M).Count, "espace en tête gardé");
+        Equal(1, TextWrap.Wrap("", 100, M).Count, "case vide : une ligne");
+    }
+
     // ---------- Repli sans filets ----------
 
     public static void T_Tableau_sans_filets()

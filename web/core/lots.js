@@ -245,6 +245,13 @@ export function resyncLots(project) {
   }
 }
 
+/** « Synchroniser les lots » : chaque ligne sera rangée selon son numéro actuel (même règle que Windows). */
+export function snapshotSort(project) {
+  for (const p of project.Pages)
+    for (const l of [...p.Tables.flatMap((t) => t.Rows.flatMap((r) => r.Lines)), ...(p.LooseLines ?? [])])
+      l.SortedLot = hasLotCell(l) && (l.Lot ?? '').trim().length > 0 ? l.Lot : null;
+}
+
 // ---------- Largeur où se replient les désignations (même règle que Windows : Lots.SetNarrowing) ----------
 
 const narrowing = new WeakMap();

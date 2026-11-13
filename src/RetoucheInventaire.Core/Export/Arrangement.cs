@@ -157,7 +157,7 @@ public static class Arrangement
 
     private static List<(Unit U, Destination D)> SortPlaces(List<Unit> units, List<OrderedRow> rows)
     {
-        var keys = units.Select(u => LotKey(u.Object.Lot)).ToList();
+        var keys = units.Select(u => LotKey(u.Object.SortedLot)).ToList();
         var tails = new List<int>();
         var prev = Enumerable.Repeat(-1, units.Count).ToArray();
         for (int i = 0; i < units.Count; i++)
@@ -251,7 +251,8 @@ public static class Arrangement
                         bool zero = lotsOn && Lots.HasCell(l) && Lots.IsZero(l);
                         bool move = !deleted && !zero && lotsOn && Lots.HasCell(l) && l.MoveTo != null;
                         // Case encore vide : elle reste à sa place (elle n'a pas de numéro à suivre).
-                        bool sort = !deleted && !zero && !move && sorting && objects!.Contains(l) && l.Lot.Trim().Length > 0;
+                        // Rangée selon le numéro du dernier « Synchroniser » (un numéro tapé depuis ne déplace rien).
+                        bool sort = !deleted && !zero && !move && sorting && objects!.Contains(l) && (l.SortedLot ?? "").Trim().Length > 0;
                         if (!deleted && !zero && !move && !sort) continue;
                         if (found.Any(u => u.Lines.Contains(l))) continue;
                         var own = new List<PrintedLine> { l };
@@ -267,7 +268,7 @@ public static class Arrangement
                     var covered = found.SelectMany(u => u.Lines).ToHashSet();
                     // Rangée entière : seulement si tous ses objets vont au même endroit (deux numéros différents dans une
                     // rangée, ou deux destinations différentes : chacun part de son côté).
-                    bool SameWay((string Kind, PrintedLine Object, List<PrintedLine> Lines, PrintedLine? Title) u) => u.Kind == "sort" ? CompareKeys(LotKey(u.Object.Lot), LotKey(found[0].Object.Lot)) == 0
+                    bool SameWay((string Kind, PrintedLine Object, List<PrintedLine> Lines, PrintedLine? Title) u) => u.Kind == "sort" ? CompareKeys(LotKey(u.Object.SortedLot), LotKey(found[0].Object.SortedLot)) == 0
                         : u.Kind == "move" ? SameMove(u.Object.MoveTo, found[0].Object.MoveTo) : true;
                     bool whole = lines.All(covered.Contains) && found.All(u => u.Title is null) && found.All(u => u.Kind == found[0].Kind && SameWay(u));
                     if (whole)

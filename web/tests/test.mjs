@@ -29,7 +29,7 @@ import { detectPage } from '../core/imaging.js';
 import { totalExtra, baseHeight, tallExtra } from '../core/layout.js';
 import { addBlankPage, blankBase, canBeModel, addColumn, removeColumn, canRemoveColumn, addRows } from '../core/addpage.js';
 import { repairPending, untouched, regrid } from '../core/pagerepair.js';
-import { setNarrowing, narrowOf, wrapWidth } from '../core/lots.js';
+import { setNarrowing, narrowOf, wrapWidth, snapshotSort } from '../core/lots.js';
 
 const FIX = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tests', 'fixtures');
 
@@ -1159,6 +1159,19 @@ test('15 lignes ajoutées puis supprimées d\'un coup : la page revient à sa ta
   forgetTrims(page);
   eq(h0, page.Height, 'taille d\'origine');
   eq(rows0, page.Tables.reduce((s, t) => s + t.Rows.length, 0), 'rangées d\'origine');
+});
+
+test('Un numéro de lot tapé ne déplace rien : seul « Synchroniser » range les lignes', () => {
+  const p = fromPages(['page1']);
+  numberLots(p, 1);
+  p.SortLots = true;
+  snapshotSort(p);
+  eq(0, planArrangement(p).moving.filter((u) => u.kind === 'sort').length, 'dans l\'ordre : rien ne bouge');
+  const first = [...objectLines(p)][0].line;
+  setLot(p, first, '999');
+  eq(0, planArrangement(p).moving.filter((u) => u.kind === 'sort').length, 'numéro tapé : la ligne reste à sa place');
+  snapshotSort(p);
+  check(planArrangement(p).moving.some((u) => u.kind === 'sort' && u.lines.includes(first)), 'Synchroniser : la ligne rejoint sa place');
 });
 
 test('Hors ligne : tous les fichiers de l\'app sont mis en cache', () => {

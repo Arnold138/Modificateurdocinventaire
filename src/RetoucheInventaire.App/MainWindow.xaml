@@ -97,7 +97,6 @@
                 <ColumnDefinition Width="*" MaxWidth="170" />
                 <ColumnDefinition Width="*" MaxWidth="170" />
                 <ColumnDefinition Width="*" MaxWidth="170" />
-                <ColumnDefinition Width="*" MaxWidth="170" />
                 <ColumnDefinition Width="*" MaxWidth="190" />
             </Grid.ColumnDefinitions>
             <Button x:Name="PhotoButton" Grid.Column="0" Style="{StaticResource AccentTabButton}" Click="Photo_Click"
@@ -132,7 +131,7 @@
                 </StackPanel>
             </Button>
             <Button x:Name="EditButton" Grid.Column="3" Style="{StaticResource TabButton}"
-                    ToolTipService.ToolTip="Mise en page : renommer, pages, lots, loupe">
+                    ToolTipService.ToolTip="Mise en page : renommer, pages, recadrer, lots, loupe">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <FontIcon Glyph="&#xE70F;" FontSize="20" />
                     <TextBlock Text="Mise en page" VerticalAlignment="Center" />
@@ -147,6 +146,9 @@
                         </MenuFlyoutItem>
                         <MenuFlyoutItem x:Name="SyncItem" Text="Synchroniser les lots…" Click="SyncLots_Click">
                             <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE895;" /></MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem x:Name="CropItem" Text="Recadrer la page…" Click="Crop_Click">
+                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE7A8;" /></MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
                         <MenuFlyoutItem x:Name="RemovePageItem" Text="Retirer cette page" Click="RemovePage_Click">
                             <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE74D;" /></MenuFlyoutItem.Icon>
@@ -165,21 +167,17 @@
                     <TextBlock Text="Modifier" VerticalAlignment="Center" />
                 </StackPanel>
             </ToggleButton>
-            <Button x:Name="CropButton" Grid.Column="5" Style="{StaticResource TabButton}" Click="Crop_Click"
-                    ToolTipService.ToolTip="Recadrer la page affichée">
+            <!-- Demande du client (13/11) : « Verrouiller » retiré de la barre, « Recadrer » rangé dans Mise en page ;
+                 à leur place, « Synchroniser » (les lots ne bougent qu'avec ce bouton). -->
+            <Button x:Name="SyncButton" Grid.Column="5" Style="{StaticResource TabButton}" Click="SyncLots_Click"
+                    ToolTipService.ToolTip="Ranger les lignes dans l'ordre des numéros de lot tapés (rien ne bouge sans ce bouton)">
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                    <FontIcon Glyph="&#xE7A8;" FontSize="20" />
-                    <TextBlock Text="Recadrer" VerticalAlignment="Center" />
+                    <FontIcon Glyph="&#xE895;" FontSize="20" />
+                    <TextBlock Text="Synchroniser" VerticalAlignment="Center" />
                 </StackPanel>
             </Button>
-            <ToggleButton x:Name="LockToggle" Grid.Column="6" Style="{StaticResource TabToggle}" Checked="LockToggle_Changed" Unchecked="LockToggle_Changed"
-                          ToolTipService.ToolTip="Tracer une zone (signature, tampon) qui ne pourra pas être modifiée">
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <FontIcon Glyph="&#xE72E;" FontSize="20" />
-                    <TextBlock Text="Verrouiller" VerticalAlignment="Center" />
-                </StackPanel>
-            </ToggleButton>
-            <Button x:Name="ExportButton" Grid.Column="7" Style="{StaticResource AccentTabButton}"
+            <ToggleButton x:Name="LockToggle" Grid.Column="5" Visibility="Collapsed" Style="{StaticResource TabToggle}" Checked="LockToggle_Changed" Unchecked="LockToggle_Changed" />
+            <Button x:Name="ExportButton" Grid.Column="6" Style="{StaticResource AccentTabButton}"
                     ToolTipService.ToolTip="Images JPEG, document PDF ou fichier texte">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <FontIcon Glyph="&#xE72D;" FontSize="20" />
@@ -206,7 +204,7 @@
                 </Button.Flyout>
             </Button>
             <!-- Enregistrer sous : le document tel qu'à l'écran, en PDF ou en texte, dans le dossier et sous le nom choisis. -->
-            <Button x:Name="SaveAsButton" Grid.Column="8" Style="{StaticResource TabButton}"
+            <Button x:Name="SaveAsButton" Grid.Column="7" Style="{StaticResource TabButton}"
                     ToolTipService.ToolTip="Enregistrer le document en PDF ou en texte (.txt), dans le dossier et sous le nom de votre choix">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <FontIcon Glyph="&#xE792;" FontSize="20" />

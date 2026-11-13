@@ -283,6 +283,16 @@ public static class Lots
     }
 
     /// <summary>
+    /// « Synchroniser les lots » : chaque ligne sera rangée selon son numéro actuel (<see cref="PrintedLine.SortedLot"/>).
+    /// Les numéros tapés ensuite ne déplacent rien jusqu'au prochain « Synchroniser ».
+    /// </summary>
+    public static void SnapshotSort(InventoryProject project)
+    {
+        foreach (var l in project.Pages.SelectMany(p => p.AllLines()))
+            l.SortedLot = HasCell(l) && l.Lot.Trim().Length > 0 ? l.Lot : null;
+    }
+
+    /// <summary>
     /// Une ligne d'un tableau à lots peut être rangée (tri par numéro, lot 0) dans n'importe quel autre tableau à lots, où sa
     /// désignation est coupée à la largeur de la colonne d'arrivée. Le texte se replie donc sur la plus étroite de ces colonnes :
     /// il tient partout, à l'écran comme à l'export (sinon un long texte rangé sur une page plus étroite débordait sur les lignes

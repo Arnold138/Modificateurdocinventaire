@@ -12,7 +12,7 @@ import { raster } from '../core/imaging.js';
 import { upgradePage, firstText, isModified } from '../core/model.js';
 import { buildTxt } from '../core/exports.js';
 import {
-  objectLines, lotsActive, setLot, resyncLots, addLot, createEmptyLots, fillLotsAutomatically, numberLots, isZeroLot,
+  objectLines, lotsActive, setLot, resyncLots, addLot, createEmptyLots, fillLotsAutomatically, snapshotSort, numberLots, isZeroLot,
   hasLotCell, itemTable, addLotHere, rowOrder, moveToRow, lotTables, setLotTables, defaultLotChoice, columnWidth, numberBox,
 } from '../core/lots.js';
 import { drawLotColumns, framedRows, frames, frameToggles, closeTables } from '../core/lotcolumn.js';
@@ -178,7 +178,7 @@ const ACTIONS = {
   shorter(t) { const { page, line } = resolve(t); line.Tall = Math.max(0, (line.Tall ?? 0) - 1); setExtra(page, line, extraOf(line)); },
   del(t) { resolve(t).line.Deleted = true; },
   addLotHere(t) { const { table, line } = resolve(t); addLotHere(project, table, line); },
-  sortLots(t, a) { project.SortLots = a.on; },
+  sortLots(t, a) { project.SortLots = a.on; if (a.on) snapshotSort(project); },
   moveLot(t, a) { resolve(t).line.MoveTo = { Page: pages()[a.page].Id, Where: a.where, Anchor: a.anchor ? resolve(a.anchor).line.Cells[0].Id : '' }; },
   unmoveLot(t) { delete resolve(t).line.MoveTo; },
   align(t, a) { const { line } = resolve(t); delete line.LotPos; if (a.v) line.LotAlign = a.v; else delete line.LotAlign; },
@@ -188,7 +188,7 @@ const ACTIONS = {
   addLot(t) { addLot(project, resolve(t).line); },
   sync(t, a) { fillLotsAutomatically(project, a.page === null ? null : [pages()[a.page]]); },
   // Comme le bouton « Synchroniser » de l'application : remplit puis range les lignes par numéro (et le garde).
-  syncApp(t, a) { fillLotsAutomatically(project, a.page === null ? null : [pages()[a.page]]); project.SortLots = true; },
+  syncApp(t, a) { fillLotsAutomatically(project, a.page === null ? null : [pages()[a.page]]); project.SortLots = true; snapshotSort(project); },
   // Comme la poignée ⋮⋮ d'une rangée à l'écran (Modifier) : lignes triées → posée à la main, sinon ordre des rangées.
   dragRow(t, a) {
     const { page, table } = resolve(t);
@@ -503,10 +503,10 @@ function check(step, op, beforeLots, plan) {
     let prev = null;
     pages().forEach((page, k) => {
       const v = viewOf(project, plan, k);
-      const seq = v.lines.filter((e) => e.lotBox && objSet.has(e.line) && !e.line.MoveTo && !e.line.Deleted && (e.line.Lot ?? '').trim() && !isZeroLot(e.line) && e.line.Cells.some((c) => c.Text.trim()))
+      const seq = v.lines.filter((e) => e.lotBox && objSet.has(e.line) && !e.line.MoveTo && !e.line.Deleted && (e.line.SortedLot ?? '').trim() && !isZeroLot(e.line) && e.line.Cells.some((c) => c.Text.trim()))
         .sort((a, b) => a.lotBox.Y - b.lotBox.Y);
       for (const e of seq) {
-        if (prev && compareKeys(lotKey(prev.line.Lot), lotKey(e.line.Lot)) > 0) fail(step, `${op} : tri cassé, « ${prev.line.Lot} » (${firstText(prev.line).slice(0, 20)}) avant « ${e.line.Lot} » (${firstText(e.line).slice(0, 20)}) page ${k + 1}`);
+        if (prev && compareKeys(lotKey(prev.line.SortedLot), lotKey(e.line.SortedLot)) > 0) fail(step, `${op} : tri cassé, « ${prev.line.SortedLot} » (${firstText(prev.line).slice(0, 20)}) avant « ${e.line.Lot} » (${firstText(e.line).slice(0, 20)}) page ${k + 1}`);
         prev = e;
       }
     });

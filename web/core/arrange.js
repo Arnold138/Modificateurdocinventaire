@@ -73,7 +73,8 @@ function movedUnits(project) {
         const zero = lots && hasLotCell(l) && isZeroLot(l);
         const move = !deleted && !zero && lots && hasLotCell(l) && !!l.MoveTo;
         // Case encore vide : elle reste à sa place (elle n'a pas de numéro à suivre).
-        const sort = !deleted && !zero && !move && sorting && objects.has(l) && (l.Lot ?? '').trim().length > 0;
+        // Rangée selon le numéro du dernier « Synchroniser » (même règle que Windows).
+        const sort = !deleted && !zero && !move && sorting && objects.has(l) && (l.SortedLot ?? '').trim().length > 0;
         if (!deleted && !zero && !move && !sort) return;
         if (found.some((u) => u.lines.includes(l))) return;
         const own = [l];
@@ -88,7 +89,7 @@ function movedUnits(project) {
       const covered = new Set(found.flatMap((u) => u.lines));
       // Rangée entière : seulement si tous ses objets vont au même endroit (deux numéros différents dans une rangée,
       // ou deux destinations différentes : chacun part de son côté).
-      const sameWay = (u) => u.kind === 'sort' ? compareKeys(lotKey(u.object.Lot), lotKey(found[0].object.Lot)) === 0
+      const sameWay = (u) => u.kind === 'sort' ? compareKeys(lotKey(u.object.SortedLot), lotKey(found[0].object.SortedLot)) === 0
         : u.kind === 'move' ? sameMove(u.object.MoveTo, found[0].object.MoveTo) : true;
       const whole = lines.every((l) => covered.has(l)) && found.every((u) => !u.title) && found.every((u) => u.kind === found[0].kind && sameWay(u));
       const base = { p, page, ti, table, r };
@@ -151,7 +152,7 @@ function moveDest(project, u, rows) {
  * ou égal (avant le 1er : après la rangée qui précède). Renvoie [{ u, d }] dans l'ordre des numéros.
  */
 function sortPlaces(units, rows) {
-  const keys = units.map((u) => lotKey(u.object.Lot));
+  const keys = units.map((u) => lotKey(u.object.SortedLot));
   const tails = [], prev = new Array(units.length).fill(-1);
   for (let i = 0; i < units.length; i++) {
     let lo = 0, hi = tails.length;

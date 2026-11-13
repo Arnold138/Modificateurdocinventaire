@@ -83,6 +83,11 @@ public sealed class PrintedLine
 
     /// <summary>Numéro de lot (vide si aucun). Uniquement sur les lignes d'objet.</summary>
     public string Lot { get; set; } = "";
+    /// <summary>
+    /// Numéro avec lequel la ligne est rangée (tri par numéro) : celui du dernier « Synchroniser les lots ». Un numéro tapé
+    /// ensuite ne déplace rien tant qu'on ne synchronise pas (null : la ligne reste à sa place imprimée).
+    /// </summary>
+    public string? SortedLot { get; set; }
     /// <summary>Numéro saisi à la main : la numérotation automatique repart de lui.</summary>
     public bool LotManual { get; set; }
     /// <summary>Case de lot affichée sur cette ligne (objet), même vide : la colonne existe.</summary>

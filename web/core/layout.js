@@ -217,13 +217,16 @@ export function stretch(base, page) {
     if (x.extra || x.gap) {
       const s = x.span ? cleanRow(base, x.s, x.span, x.cols) : x.s, paper = paperOf(base, s);
       const x0 = Math.min(w, Math.max(0, x.x0)), x1 = Math.min(w, Math.max(0, x.x1));
-      const missing = missingRules(base, s, x.cols, x0, x1);
+      // Chaque filet vertical prolongé depuis SA rangée la plus nette (même règle que Windows).
+      const rowOf = x.span ? columnRows(base, x.s, x.span, x.cols, s) : null;
+      const missing = missingRules(base, s, x.cols, x0, x1, rowOf);
       for (let k = 0; k < x.n; k++, dst++)
         for (let xx = 0; xx < w; xx++) {
           const o = dst * stride + xx * ch;
+          const sr = rowOf && rowOf[xx] >= 0 ? rowOf[xx] : s;
           // Dans le tableau : les filets verticaux (sombres) sont prolongés, le reste devient papier propre ;
           // un filet du tableau effacé à cet endroit du scan est redessiné.
-          if (xx >= x0 && xx < x1 && gray(base, xx, s) < 150) for (let c = 0; c < ch; c++) data[o + c] = base.data[s * stride + xx * ch + c];
+          if (xx >= x0 && xx < x1 && gray(base, xx, sr) < 150) for (let c = 0; c < ch; c++) data[o + c] = base.data[sr * stride + xx * ch + c];
           else if (missing && missing[xx]) for (let c = 0; c < ch; c++) data[o + c] = RULE_INK;
           else for (let c = 0; c < ch; c++) data[o + c] = paper[c];
         }
@@ -245,13 +248,30 @@ export function stretch(base, page) {
 const RULE_INK = 70;
 
 /** Filets verticaux du tableau absents de la rangée s (effacés sur le scan) : pixels où les redessiner (2 px), sinon null. */
-export function missingRules(img, s, cols, x0, x1) {
+/** Pour chaque filet vertical (± 3 px), la rangée de [s0, s0 + span[ où il est le plus sombre ; -1 ailleurs. */
+export function columnRows(img, s0, span, cols, fallback) {
+  if (!cols || cols.length === 0) return null;
+  const w = img.w, rows = new Int32Array(w).fill(-1);
+  const a = Math.max(0, s0), b = Math.min(img.h, s0 + span);
+  for (const c of cols) {
+    let best = fallback, bestSum = Infinity;
+    for (let y = a; y < b; y++) {
+      let sum = 0;
+      for (let xx = Math.max(0, c - 3); xx <= Math.min(w - 1, c + 3); xx++) sum += gray(img, xx, y);
+      if (sum < bestSum) { bestSum = sum; best = y; }
+    }
+    for (let xx = Math.max(0, c - 3); xx <= Math.min(w - 1, c + 3); xx++) rows[xx] = best;
+  }
+  return rows;
+}
+
+export function missingRules(img, s, cols, x0, x1, rowOf = null) {
   if (!cols || cols.length === 0) return null;
   let missing = null;
   for (const c of cols) {
     if (c < x0 || c >= x1) continue;
     let there = false;
-    for (let xx = Math.max(0, c - 3); xx <= Math.min(img.w - 1, c + 3) && !there; xx++) there = gray(img, xx, s) < 150;
+    for (let xx = Math.max(0, c - 3); xx <= Math.min(img.w - 1, c + 3) && !there; xx++) there = gray(img, xx, rowOf && rowOf[xx] >= 0 ? rowOf[xx] : s) < 150;
     if (there) continue;
     missing ??= new Uint8Array(img.w);
     for (let xx = Math.max(0, c - 1); xx <= Math.min(img.w - 1, c); xx++) missing[xx] = 1;

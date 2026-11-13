@@ -268,14 +268,18 @@ public static class PageLayout
                 int s = x.Span > 0 ? CleanRow(baseImage, x.Y0, x.Span, x.Cols ?? []) : x.Y0;
                 var paper = PaperOf(baseImage, s);
                 int x0 = Math.Clamp(x.X0, 0, w), x1 = Math.Clamp(x.X1, 0, w);
-                var missing = MissingRules(baseImage, s, x.Cols, x0, x1);
+                // Chaque filet vertical prolongé depuis SA rangée la plus nette (un filet pâle sur la rangée commune restait
+                // pâle dans toutes les lignes ajoutées).
+                var rowOf = x.Span > 0 ? ColumnRows(baseImage, x.Y0, x.Span, x.Cols, s) : null;
+                var missing = MissingRules(baseImage, s, x.Cols, x0, x1, rowOf);
                 for (int k = 0; k < x.N; k++, dst++)
                     for (int xx = 0; xx < w; xx++)
                     {
                         int o = dst * stride + xx * ch;
+                        int sr = rowOf != null && rowOf[xx] >= 0 ? rowOf[xx] : s;
                         // Dans le tableau : les filets verticaux (sombres) sont prolongés, le reste devient papier propre ;
                         // un filet du tableau effacé à cet endroit du scan est redessiné.
-                        if (xx >= x0 && xx < x1 && Gray(baseImage, xx, s) < 150) Array.Copy(baseImage.Data, s * stride + xx * ch, data, o, ch);
+                        if (xx >= x0 && xx < x1 && Gray(baseImage, xx, sr) < 150) Array.Copy(baseImage.Data, sr * stride + xx * ch, data, o, ch);
                         else if (missing != null && missing[xx]) for (int c = 0; c < ch; c++) data[o + c] = RuleInk;
                         else Array.Copy(paper, 0, data, o, ch);
                     }
@@ -301,7 +305,31 @@ public static class PageLayout
     /// Filets verticaux du tableau (<paramref name="cols"/>) absents de la rangée <paramref name="s"/> (effacés sur le scan) :
     /// pixels où les redessiner (2 px), sinon null.
     /// </summary>
-    internal static bool[]? MissingRules(Raster img, int s, List<int>? cols, int x0, int x1)
+    /// <summary>
+    /// Pour chaque filet vertical (± 3 px), la rangée de [s0, s0 + span[ où il est le plus sombre ; -1 ailleurs.
+    /// </summary>
+    internal static int[]? ColumnRows(Raster img, int s0, int span, List<int>? cols, int fallback)
+    {
+        if (cols is null || cols.Count == 0) return null;
+        int w = img.Width;
+        var rows = new int[w];
+        Array.Fill(rows, -1);
+        int a = Math.Max(0, s0), b = Math.Min(img.Height, s0 + span);
+        foreach (int c in cols)
+        {
+            int best = fallback, bestSum = int.MaxValue;
+            for (int y = a; y < b; y++)
+            {
+                int sum = 0;
+                for (int xx = Math.Max(0, c - 3); xx <= Math.Min(w - 1, c + 3); xx++) sum += Gray(img, xx, y);
+                if (sum < bestSum) { bestSum = sum; best = y; }
+            }
+            for (int xx = Math.Max(0, c - 3); xx <= Math.Min(w - 1, c + 3); xx++) rows[xx] = best;
+        }
+        return rows;
+    }
+
+    internal static bool[]? MissingRules(Raster img, int s, List<int>? cols, int x0, int x1, int[]? rowOf = null)
     {
         if (cols is null || cols.Count == 0) return null;
         bool[]? missing = null;
@@ -309,7 +337,7 @@ public static class PageLayout
         {
             if (c < x0 || c >= x1) continue;
             bool there = false;
-            for (int xx = Math.Max(0, c - 3); xx <= Math.Min(img.Width - 1, c + 3) && !there; xx++) there = Gray(img, xx, s) < 150;
+            for (int xx = Math.Max(0, c - 3); xx <= Math.Min(img.Width - 1, c + 3) && !there; xx++) there = Gray(img, xx, rowOf != null && rowOf[xx] >= 0 ? rowOf[xx] : s) < 150;
             if (there) continue;
             missing ??= new bool[img.Width];
             for (int xx = Math.Max(0, c - 1); xx <= Math.Min(img.Width - 1, c); xx++) missing[xx] = true;

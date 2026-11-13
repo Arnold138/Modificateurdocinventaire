@@ -214,3 +214,16 @@
   « Supprimer ces N lignes » ou touche Suppr ; un seul ↶ remet tout. Une ligne ajoutée disparaît, une ligne imprimée est
   retirée de la vente. Quand plus aucune ligne ajoutée ne reste, la page retrouve sa taille d'origine. (iPad : pas encore.)
 - « Synchroniser » : un numéro de lot trop long pour un nombre (« 17252252252 ») est traité comme un texte (plus de plantage).
+
+## Texte qui pousse les lignes, lots rangés seulement sur « Synchroniser » (13/11, soir)
+
+- Un long texte tapé est coupé exactement comme dans la case de saisie (même largeur, même règle de coupure, espace en
+  tête compris) : chaque ligne de texte en plus agrandit la rangée, ce qui suit descend, rien ne chevauche. Les pages déjà
+  touchées par une version précédente sont recalculées à l'ouverture.
+- Un numéro de lot tapé ne déplace plus rien : la ligne reste où elle est. Elle n'est rangée que par le bouton
+  « Synchroniser » (barre du haut), dans l'ordre des numéros tapés ; une ligne qu'on ne peut pas ranger sans casser
+  l'ordre reste à sa place (rien de forcé). Un projet déjà rangé par une ancienne version remet les lignes à leur place
+  imprimée jusqu'au prochain « Synchroniser ».
+- Barre du haut : « Verrouiller » retiré, « Recadrer la page… » déplacé dans le menu Mise en page, bouton
+  « Synchroniser » à la place.
+- Lignes fines vides : le filet vertical est suivi colonne par colonne, il ne pâlit plus entre deux colonnes.

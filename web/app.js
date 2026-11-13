@@ -16,7 +16,7 @@ import { stretch, setExtra, baseHeight, totalExtra } from './core/layout.js';
 import { toggleStrike, isStruck, setColor, RED, BLACK, TEXT_COLORS } from './core/strikes.js';
 import { planArrangement, viewOf, composePage, unitCrop, pageArranged, mapY, unmapY, syncEndPages } from './core/arrange.js';
 import { recomputeTotals, isComputedCell, computedValue } from './core/totals.js';
-import { hasLotCell, lotSegment, printedLotZone, applyPrintedLots, numberBox, columnWidth, moveToRow, setNarrowing } from './core/lots.js';
+import { hasLotCell, lotSegment, printedLotZone, applyPrintedLots, numberBox, columnWidth, moveToRow, setNarrowing, snapshotSort } from './core/lots.js';
 import { repairPending, untouched, regrid, brokenBlank, CURRENT_GRID } from './core/pagerepair.js';
 import { frameSignature, lotFrameEnabled, frameToggles } from './core/lotcolumn.js';
 import { canCopyLine, canAddRows, canAddAbove, canSplit, addedRowOf, copyLine, addBlankLine, locate, splitAt, splitTypedText, removeAddedRow, canSplitBelow, splitBelow, addTotalLine, lastObjectLine, rowTrimOf, trimRow, untrimRow, trimsOf, compactRow, canCompact, setGap, autoCompactMoved } from './core/rows.js';
@@ -86,6 +86,7 @@ function updateButtons() {
   $('btnMove').disabled = b || !page || !!page?.EndLots;
   $('btnLots').disabled = b || n === 0;
   $('btnEdit').disabled = b || n === 0;
+  $('btnSync').disabled = b || n === 0;
   $('btnUndo').disabled = b || state.undo.length === 0;
   $('btnExport').disabled = b || n === 0;
   $('pager').hidden = n === 0;
@@ -298,12 +299,14 @@ function replan() {
 
 /** Lignes au texte tapé : agrandies si leur texte ne tient plus (jamais réduites ici). */
 function growTypedLines() {
+  let grown = false;
   for (const page of state.project.Pages)
     for (const line of page.Tables.flatMap((t) => t.Rows).flatMap((r) => r.Lines))
       if (line.Cells.some((c) => isModified(c) && c.Column === 0)) {
         const need = lineExtra(line);
-        if (need > (line.Extra ?? 0)) setExtra(page, line, need);
+        if (need > (line.Extra ?? 0)) { setExtra(page, line, need); grown = true; }
       }
+  return grown;
 }
 
 /** Totaux recalculés (cases non tapées à la main) ; renvoie les cases changées. */
@@ -703,6 +706,7 @@ async function lineAction(item, f) {
   if (item.act === 'back') {
     pushUndo();
     setLot(state.project, line, '');
+    line.SortedLot = null;
     replan(); recomputeAll();
     await refreshView();
     status(`« ${name} » est revenu à sa place : tapez son numéro (ou « Synchroniser »).`);
@@ -831,9 +835,8 @@ async function applyLot(v, line, value) {
       ? `Lot 0 : « ${short(firstText(line))} » est maintenant à la fin : ${where.text}.${added > 0 ? ` Page « Lots de fin » ajoutée (page ${where.k + 1}) : les pages suivantes ont été renumérotées.` : ''} Pour le placer ailleurs : Modifier, puis glissez sa poignée orange ⋮⋮. Pour le remettre : retapez son numéro, ou clic droit › Remettre à sa place.`
       : 'Lot 0 : aucun autre lot numéroté, la ligne reste en place.');
   } else if (wasZero && !zero) status(`Lot ${line.Lot || '(vide)'} : « ${short(firstText(line))} » est revenu à sa place.`);
-  else if (state.project.SortLots && line.Lot && state.plan?.moving.some((u) => u.kind === 'sort' && u.lines.includes(line))) {
-    const u = state.plan.moving.find((x) => x.kind === 'sort' && x.lines.includes(line));
-    status(`Lot ${line.Lot} enregistré : la ligne entière rejoint sa place dans l'ordre des numéros (page ${u.dest.p + 1}).`);
+  else if (state.project.SortLots && line.Lot && line.Lot !== line.SortedLot) {
+    status(`Lot ${line.Lot} enregistré : la ligne reste ici ; « Synchroniser » la range dans l'ordre des numéros.`);
   } else status(line.Lot ? `Lot ${line.Lot} enregistré.` : 'Case de lot vidée.');
   scheduleSave();
 }
@@ -1120,24 +1123,26 @@ async function syncWithoutLots() {
 async function syncDialog() {
   if (!lotsActive(state.project)) return syncWithoutLots();
   const page = currentPage();
-  const choice = await dialog('Synchroniser les lots', `<p>Remplit les <b>cases vides</b>. Les numéros déjà là <b>ne bougent pas</b> : une case vide prend le numéro qui suit et décale seulement les lots qui la suivent directement (6, 7, 8 → 7, 8, 9).</p>
-    <p>Puis les <b>lignes entières</b> (case de lot, désignation, prix) sont <b>rangées dans l'ordre des numéros</b> sur tout le document : tous les 2 ensemble après les 1…, lettres (VGG, ?) à la fin. Ensuite c'est <b>gardé à chaque changement</b> : un numéro tapé rejoint aussitôt sa place.</p>
-    <p class="muted">Pour poser un lot ailleurs : clic droit › Déplacer ce lot (page choisie, dans l'ordre), ou Modifier puis glisser ses ⋮⋮. Pour tout renuméroter dans l'ordre affiché : Lots › Renuméroter tout.</p>`, [
-    ...(page && !page.EndLots ? [{ label: `Cette page (page ${state.index + 1})`, value: 'page', className: 'accent' }] : []),
-    { label: 'Toutes les pages', value: 'all' },
+  const choice = await dialog('Synchroniser les lots', `<p>Les <b>lignes entières</b> (case de lot, désignation, prix) sont <b>rangées dans l'ordre des numéros que vous avez tapés</b> : tous les 2 ensemble après les 1…, lettres (VGG, ?) à la fin. Une ligne qu'on ne peut pas ranger reste où elle est.</p>
+    <p>Ensuite, <b>un numéro tapé ne déplace rien</b> : la ligne reste à sa place jusqu'au prochain « Synchroniser ».</p>
+    <p class="muted">« Remplir aussi » : chaque case vide prend le numéro qui suit (6, 7, 8 → 7, 8, 9 pour les lots qui la suivent directement).</p>`, [
+    { label: 'Ranger dans l\'ordre des numéros tapés', value: 'sort', className: 'accent' },
+    ...(page && !page.EndLots ? [{ label: `Remplir aussi les cases vides de cette page (page ${state.index + 1})`, value: 'page' }] : []),
+    { label: 'Remplir aussi toutes les cases vides', value: 'all' },
     { label: 'Annuler', value: null },
   ]);
   if (!choice) return;
   pushUndo();
-  syncLots(choice === 'page' ? [page] : null);
+  syncLots(choice === 'page' ? [page] : null, 0, choice !== 'sort');
 }
 
 /** Remplit les cases vides (pages choisies, ou toutes) sans toucher aux numéros déjà là ; dit ce qui a changé. */
-function syncLots(only = null, read = 0) {
+function syncLots(only = null, read = 0, fill = true) {
   const before = new Map([...objectLines(state.project)].map((o) => [o.line, o.line.Lot ?? '']));
-  fillLotsAutomatically(state.project, only);
-  // Synchroniser range aussi les lignes entières dans l'ordre des numéros (et le garde ensuite à chaque changement).
+  if (fill) fillLotsAutomatically(state.project, only);
+  // Synchroniser range les lignes dans l'ordre des numéros tapés ; un numéro tapé ensuite ne déplace rien jusqu'au prochain.
   state.project.SortLots = true;
+  snapshotSort(state.project);
   replan(); recomputeAll();
   refreshView();
   const objs = [...objectLines(state.project)];
@@ -1150,7 +1155,8 @@ function syncLots(only = null, read = 0) {
   const dup = [...seen].filter(([, n]) => n > 1).map(([v]) => v);
   const warn = dup.length ? ` Attention, numéro(s) en double : ${dup.slice(0, 6).join(', ')}${dup.length > 6 ? '…' : ''} (touchez la case pour corriger).` : '';
   const movedNow = state.plan.moving.filter((u) => u.kind === 'sort').length;
-  status((read ? `${read} numéro(s) déjà imprimé(s) repris. ` : '') + `Lignes rangées dans l'ordre des numéros (${movedNow} déplacée(s)). ` + (!objs.length ? 'Aucun objet à numéroter.'
+  status((read ? `${read} numéro(s) déjà imprimé(s) repris. ` : '') + `Lignes rangées dans l'ordre des numéros (${movedNow} déplacée(s)) ; un numéro tapé ensuite reste à sa place jusqu'au prochain « Synchroniser ». ` + (!objs.length ? 'Aucun objet à numéroter.'
+    : !fill ? 'Cases vides laissées vides. ↶ pour annuler.'
     : filled === 0 ? `Rien à remplir${where} : toutes les cases ont un numéro (rien n'a bougé).`
       : `${filled} case(s) remplie(s)${where}${shifted ? `, ${shifted} lot(s) suivant(s) décalé(s) d'un cran` : ''} ; les autres numéros n'ont pas bougé. ↶ pour annuler.`) + warn);
   scheduleSave();
@@ -1497,8 +1503,12 @@ async function loadProjectById(id) {
   resyncLots(state.project);
   await db.setMeta('last', id);
   const note = await repairPages();
+  // Lignes au texte tapé : hauteur recalculée (coupure des lignes comme la zone de saisie), seulement agrandies.
+  setNarrowing(state.project);
+  const grown = growTypedLines();
   await showPage(0);
-  if (note) { status(note); scheduleSave(); }
+  if (note) status(note);
+  if (note || grown) scheduleSave();
   return true;
 }
 
@@ -1808,6 +1818,7 @@ async function lotsDialog() {
   if (choice === 'sort') {
     pushUndo();
     state.project.SortLots = !state.project.SortLots;
+    if (state.project.SortLots) snapshotSort(state.project);
     replan(); recomputeAll();
     await refreshView();
     const moved = state.plan.moving.filter((u) => u.kind === 'sort').length;
@@ -1871,6 +1882,7 @@ async function editDialog() {
     <p class="muted">Pour une case : touchez-la, puis en haut <b>Ligne</b> (dupliquer la ligne, séparer ici ; aussi au clic droit ou à l'appui long sur la case), <b>Barrer</b>, <b>Couleur</b>, <b>Type de ligne</b>, <b>Rétablir</b> (et <b>Recalculer</b> pour un total). Sélectionnez quelques mots pour ne barrer ou colorer qu'eux.</p>`, [
     { label: 'Renommer le document', value: 'rename', className: 'accent' },
     { label: 'Liste des pages', value: 'pages' },
+    ...(page?.Source === 'Image' && !page.EndLots && !page.Added ? [{ label: 'Recadrer la page', value: 'crop' }] : []),
     ...(lotsActive(state.project) ? [{ label: 'Synchroniser les lots', value: 'sync' }] : []),
     ...(page ? [{ label: 'Retirer cette page', value: 'remove', className: 'danger' }] : []),
     { label: 'Fermer', value: null },
@@ -1881,6 +1893,7 @@ async function editDialog() {
   if (choice === 'rename') await renameProject();
   else if (choice === 'pages') await pagesDialog();
   else if (choice === 'sync') await syncDialog();
+  else if (choice === 'crop') setTimeout(() => $('btnCrop').onclick(), 0); // après la fin de cette action
   else if (choice === 'remove') await removePage(page);
 }
 
@@ -2088,6 +2101,7 @@ function initButtons() {
 
   $('btnLots').onclick = () => run(lotsDialog);
   $('btnEdit').onclick = () => run(editDialog);
+  $('btnSync').onclick = () => run(syncDialog);
   $('btnExport').onclick = () => run(exportDialog);
   $('btnProjects').onclick = () => run(projectsDialog);
 }
