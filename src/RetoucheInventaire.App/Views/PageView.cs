@@ -177,7 +177,7 @@ public sealed class PageView
         _gutter.PointerMoved += Gutter_PointerMoved;
         _gutter.PointerReleased += Gutter_PointerReleased;
         _gutter.PointerCaptureLost += (_, _) => _selecting = false;
-        _gutter.RightTapped += (_, e) => { if (_selection.Count > 0) { e.Handled = true; ShowSelectionMenu(_gutter, e.GetPosition(_gutter)); } };
+        _gutter.RightTapped += (_, e) => { if (_picked.Count > 0) { e.Handled = true; ShowSelectionMenu(_gutter, e.GetPosition(_gutter)); } };
         Root.Children.Add(_fieldLayer);
         Root.Children.Add(_colorLayer);
         Root.Children.Add(_zoneLayer);
@@ -453,7 +453,7 @@ public sealed class PageView
         if (LineCommands is null) return;
         var menu = new MenuFlyout();
         // Clic droit sur une ligne de la sélection : « Supprimer ces lignes » en premier.
-        if (_selection.Count > 1 && _selection.Any(l => l.Cells.Contains(f)))
+        if (_picked.Count > 1 && _picked.Any(l => l.Cells.Contains(f)))
         {
             AddSelectionItems(menu);
             menu.Items.Add(new MenuFlyoutSeparator());
@@ -475,12 +475,12 @@ public sealed class PageView
 
     // ---------- Sélection de plusieurs lignes (marge de gauche) ----------
 
-    private readonly List<PrintedLine> _selection = [];
+    private readonly List<PrintedLine> _picked = [];
     private bool _selecting;
     private int _selFrom = -1, _selTo = -1;
 
     /// <summary>Lignes sélectionnées à la souris, de haut en bas.</summary>
-    public IReadOnlyList<PrintedLine> SelectedLines => _selection;
+    public IReadOnlyList<PrintedLine> SelectedLines => _picked;
 
     /// <summary>Lignes qu'on peut sélectionner, de haut en bas, avec leur bande à l'écran.</summary>
     private List<(Arrangement.ViewLine Entry, RectD Band)> Selectable()
@@ -541,7 +541,7 @@ public sealed class PageView
         if (!_selecting) return;
         _selecting = false;
         _gutter.ReleasePointerCapture(e.Pointer);
-        if (_selection.Count > 0) SelectionChanged?.Invoke(this, _selection.Count);
+        if (_picked.Count > 0) SelectionChanged?.Invoke(this, _picked.Count);
     }
 
     /// <summary>Nombre de lignes sélectionnées (0 = sélection retirée).</summary>
@@ -549,7 +549,7 @@ public sealed class PageView
 
     private void UpdateSelection(List<(Arrangement.ViewLine Entry, RectD Band)> list)
     {
-        _selection.Clear();
+        _picked.Clear();
         _selLayer.Children.Clear();
         if (_selFrom < 0 || _selTo < 0) return;
         int a = Math.Min(_selFrom, _selTo), b = Math.Min(list.Count - 1, Math.Max(_selFrom, _selTo));
@@ -558,7 +558,7 @@ public sealed class PageView
         for (int i = a; i <= b; i++)
         {
             var (entry, band) = list[i];
-            if (!_selection.Contains(entry.Line)) _selection.Add(entry.Line);
+            if (!_picked.Contains(entry.Line)) _picked.Add(entry.Line);
             var r = new Microsoft.UI.Xaml.Shapes.Rectangle { Width = band.Width + 8, Height = band.Height + 6, Fill = fill, Stroke = edge, StrokeThickness = 1, RadiusX = 3, RadiusY = 3 };
             Canvas.SetLeft(r, band.X - 4);
             Canvas.SetTop(r, band.Y - 3);
@@ -569,16 +569,16 @@ public sealed class PageView
     /// <summary>Sélection retirée (Échap, clic dans une case, action faite).</summary>
     public void ClearSelection()
     {
-        bool had = _selection.Count > 0;
+        bool had = _picked.Count > 0;
         _selFrom = _selTo = -1;
-        _selection.Clear();
+        _picked.Clear();
         _selLayer.Children.Clear();
         if (had) SelectionChanged?.Invoke(this, 0);
     }
 
     private void AddSelectionItems(MenuFlyout menu)
     {
-        var lines = _selection.ToList();
+        var lines = _picked.ToList();
         var del = new MenuFlyoutItem { Text = $"Supprimer ces {lines.Count} ligne(s)", Icon = new FontIcon { Glyph = "\uE74D" }, Foreground = TrashInk };
         ToolTipService.SetToolTip(del, "Les lignes sélectionnées disparaissent d'un coup, ce qui suit remonte. ↶ pour annuler.");
         del.Click += (_, _) => LinesDeleteRequested?.Invoke(this, lines);
