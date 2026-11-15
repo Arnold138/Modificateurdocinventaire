@@ -1138,6 +1138,28 @@ test('Filet penché et taché recopié droit et entier pour une ligne ajoutée ;
   check(out.data[70 * w + 20] < 150 && out.data[70 * w + 580] < 150, 'filets du tableau effacés redessinés');
 });
 
+test('Ligne ajoutée : mêmes filets que la page à cet endroit (bord gauche, épaisseur, sans écriture)', () => {
+  const w = 400, h = 300, data = new Uint8ClampedArray(w * h).fill(250);
+  const px = (x, y, v) => { data[y * w + x] = v; };
+  for (const ry of [50, 100, 150, 200, 250]) for (let x = 10; x < 390; x++) { px(x, ry, 40); px(x, ry + 1, 40); }
+  for (let y = 50; y < 252; y++) { px(10, y, 90); px(11, y, 90); px(60, y, 140); px(61, y, 140); px(388, y, 40); px(389, y, 40); }
+  for (let y = 108; y < 128; y++) for (let x = 58; x < 67; x++) px(x, y, 20);
+  for (let x = 150; x < 220; x++) px(x, 151, 20);
+  const img = raster(w, h, 1, data);
+  const page = newPage({ Width: w, Height: h });
+  insertBand(page, 148, [{ Src: 98, Height: 5, Straight: true }, { Src: 103, Height: 40, Gap: true, Span: 40, Cols: [60, 389], X0: 55, X1: 394 }], 'Copy');
+  const o = stretch(img, page), P = (x, y) => o.data[y * w + x], mid = 148 + 5 + 20;
+  check(P(10, mid) < 150 && P(11, mid) < 150, 'bord gauche prolongé');
+  check(P(60, mid) === 140 && P(61, mid) === 140 && P(59, mid) > 200 && P(63, mid) > 200, `filet lot/désignation : même trait (${P(59, mid)} ${P(60, mid)} ${P(61, mid)} ${P(63, mid)})`);
+  check(P(388, mid) === 40 && P(30, mid) === 250, 'filet de droite, papier ailleurs');
+  let dark = 0;
+  for (let x = 10; x < 390; x++) { let any = false; for (let y = 148; y < 153; y++) any ||= P(x, y) < 150; if (any) dark++; }
+  check(dark >= 378, `filet du haut entier (${dark})`);
+  let thick = 0;
+  for (let y = 148; y < 153; y++) if (P(180, y) < 150) thick++;
+  check(thick === 2, `filet du haut : 2 px, sans le trait d'écriture (${thick})`);
+});
+
 test('Numéro de lot trop long : Synchroniser ne plante plus', () => {
   const p = fromPages(['page1']);
   numberLots(p, 1);

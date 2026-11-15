@@ -227,3 +227,15 @@
 - Barre du haut : « Verrouiller » retiré, « Recadrer la page… » déplacé dans le menu Mise en page, bouton
   « Synchroniser » à la place.
 - Lignes fines vides : le filet vertical est suivi colonne par colonne, il ne pâlit plus entre deux colonnes.
+
+## Lignes ajoutées : mêmes traits que la page (15/11)
+
+- Les filets verticaux d'une ligne ajoutée (et d'une rangée agrandie par un long texte) sont relevés sur la page à
+  l'endroit même de l'ajout (± 64 rangées autour, filets horizontaux exclus) : une abscisse encrée sur au moins 3/4 de ces
+  rangées est un filet, recopié avec son encre (même place au pixel près, même épaisseur, même noir). Le bord gauche ou
+  droit du tableau est donc prolongé même s'il n'est pas une colonne lue ; une écriture à cheval sur un filet (chiffre
+  rouge, parenthèse) n'est plus recopiée.
+- Un filet du tableau effacé à cet endroit du scan est redessiné avec le trait du filet voisin le plus proche (même
+  épaisseur, même encre), plus avec un gris fixe.
+- Le filet du haut de chaque ligne ajoutée est celui qui sépare les deux rangées voisines (redressé) ; là où une écriture
+  le croise ou où il est effacé, la colonne vient du filet de la rangée recopiée.

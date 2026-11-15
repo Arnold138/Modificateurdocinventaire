@@ -155,7 +155,7 @@ export function pieces(page, baseH = baseHeight(page)) {
     if (until > src) seq.push({ y0: src, n: until - src });
     src = until;
     if (b.Skip) { src = Math.min(baseH, until + b.Skip); inserted += b.Height; continue; } // rangée réduite : rangées sautées
-    for (const p of b.Parts) if (p.Height > 0) seq.push(p.Gap ? { gap: true, s: p.Src, span: p.Span, cols: p.Cols, n: p.Height, x0: p.X0, x1: p.X1 } : (p.Straight ? { y0: p.Src, n: p.Height, straight: true } : { y0: p.Src, n: p.Height }));
+    for (const p of b.Parts) if (p.Height > 0) seq.push(p.Gap ? { gap: true, s: p.Src, span: p.Span, cols: p.Cols, n: p.Height, x0: p.X0, x1: p.X1, anchor: until } : (p.Straight ? { y0: p.Src, n: p.Height, straight: true, anchor: until } : { y0: p.Src, n: p.Height }));
     inserted += b.Height;
   }
   if (baseH > src) seq.push({ y0: src, n: baseH - src });
@@ -177,7 +177,8 @@ export function pieces(page, baseH = baseHeight(page)) {
       pos += x.n;
     }
     const extra = { extra: true, s: Math.min(baseH - 1, Math.max(0, s)), n: e.height, x0: e.x0, x1: e.x1 };
-    if (from) { extra.span = from.span; extra.cols = from.cols; } // dans l'interligne d'une rangée ajoutée : même rangée source
+    extra.anchor = extra.s;
+    if (from) { extra.span = from.span; extra.cols = from.cols; extra.anchor = from.anchor; } // dans l'interligne d'une rangée ajoutée : même rangée source
     seq.splice(i, 0, extra);
     before += e.height;
   }
@@ -213,27 +214,28 @@ export function stretch(base, page) {
   const height = seq.reduce((s, x) => s + x.n, 0);
   const data = new Uint8ClampedArray(height * stride);
   let dst = 0;
+  const profiles = new Map();
   for (const x of seq) {
     if (x.extra || x.gap) {
       const s = x.span ? cleanRow(base, x.s, x.span, x.cols) : x.s, paper = paperOf(base, s);
-      const x0 = Math.min(w, Math.max(0, x.x0)), x1 = Math.min(w, Math.max(0, x.x1));
-      // Chaque filet vertical prolongé depuis SA rangée la plus nette (même règle que Windows).
-      const rowOf = x.span ? columnRows(base, x.s, x.span, x.cols, s) : null;
-      const missing = missingRules(base, s, x.cols, x0, x1, rowOf);
+      const anchor = Math.min(base.h - 1, Math.max(0, x.anchor ?? x.s));
+      // Filets verticaux tels qu'ils sont sur la page à l'endroit de l'ajout (même règle que Windows).
+      let prof = profiles.get(anchor);
+      if (!prof) { prof = ruleProfile(base, anchor, grayOf(paper, 0, ch)); profiles.set(anchor, prof); }
+      const missing = missingRules(prof.has, x.cols, Math.min(w, Math.max(0, x.x0)), Math.min(w, Math.max(0, x.x1)));
       for (let k = 0; k < x.n; k++, dst++)
         for (let xx = 0; xx < w; xx++) {
           const o = dst * stride + xx * ch;
-          const sr = rowOf && rowOf[xx] >= 0 ? rowOf[xx] : s;
-          // Dans le tableau : les filets verticaux (sombres) sont prolongés, le reste devient papier propre ;
-          // un filet du tableau effacé à cet endroit du scan est redessiné.
-          if (xx >= x0 && xx < x1 && gray(base, xx, sr) < 150) for (let c = 0; c < ch; c++) data[o + c] = base.data[sr * stride + xx * ch + c];
-          else if (missing && missing[xx]) for (let c = 0; c < ch; c++) data[o + c] = RULE_INK;
+          if (prof.has[xx]) for (let c = 0; c < ch; c++) data[o + c] = prof.ink[xx * ch + c];
+          else if (missing && missing[xx] >= 0) for (let c = 0; c < ch; c++) data[o + c] = prof.ink[missing[xx] * ch + c];
+          else if (missing && missing[xx] === -2) for (let c = 0; c < ch; c++) data[o + c] = c === 3 ? 255 : RULE_INK;
           else for (let c = 0; c < ch; c++) data[o + c] = paper[c];
         }
       continue;
     }
     if (x.straight) {
-      straightRule(base, x.y0, x.n, data, dst);
+      if (x.anchor !== undefined) tableRule(base, x.y0, x.anchor, x.n, data, dst);
+      else straightRule(base, x.y0, x.n, data, dst);
       dst += x.n;
       continue;
     }
@@ -247,36 +249,114 @@ export function stretch(base, page) {
 /** Gris d'un filet redessiné. */
 const RULE_INK = 70;
 
-/** Filets verticaux du tableau absents de la rangée s (effacés sur le scan) : pixels où les redessiner (2 px), sinon null. */
-/** Pour chaque filet vertical (± 3 px), la rangée de [s0, s0 + span[ où il est le plus sombre ; -1 ailleurs. */
-export function columnRows(img, s0, span, cols, fallback) {
-  if (!cols || cols.length === 0) return null;
-  const w = img.w, rows = new Int32Array(w).fill(-1);
-  const a = Math.max(0, s0), b = Math.min(img.h, s0 + span);
-  for (const c of cols) {
-    let best = fallback, bestSum = Infinity;
-    for (let y = a; y < b; y++) {
-      let sum = 0;
-      for (let xx = Math.max(0, c - 3); xx <= Math.min(w - 1, c + 3); xx++) sum += gray(img, xx, y);
-      if (sum < bestSum) { bestSum = sum; best = y; }
-    }
-    for (let xx = Math.max(0, c - 3); xx <= Math.min(w - 1, c + 3); xx++) rows[xx] = best;
+/**
+ * Filets verticaux de la page autour de la rangée anchor (± 64 rangées, sans les filets horizontaux) : une abscisse est un
+ * filet si elle est encrée sur au moins les 3/4 de ces rangées ; son encre est celle de la rangée médiane (même règle que Windows).
+ */
+export function ruleProfile(img, anchor, paperGray) {
+  const w = img.w, ch = img.ch, H = img.h;
+  const a = Math.max(0, anchor - 64), b = Math.min(H, anchor + 64);
+  const rule = new Uint8Array(b - a);
+  for (let y = a; y < b; y++) {
+    let dark = 0;
+    for (let x = 0; x < w; x++) if (gray(img, x, y) < 150) dark++;
+    rule[y - a] = dark * 3 > w ? 1 : 0;
   }
-  return rows;
+  let rows = [];
+  for (let y = a; y < b; y++) {
+    let near = false;
+    for (let d = -3; d <= 3 && !near; d++) near = y + d >= a && y + d < b && rule[y + d - a] === 1;
+    if (!near) rows.push(y);
+  }
+  if (rows.length < 8) { rows = []; for (let y = a; y < b; y++) rows.push(y); }
+  const n = rows.length, ink = new Uint8ClampedArray(w * ch), has = new Uint8Array(w);
+  const g = new Array(n);
+  for (let x = 0; x < w; x++) {
+    for (let i = 0; i < n; i++) g[i] = [gray(img, x, rows[i]), rows[i]];
+    g.sort((p, q) => (p[0] !== q[0] ? p[0] - q[0] : p[1] - q[1]));
+    has[x] = g[Math.trunc(n * 3 / 4)][0] < paperGray - 60 ? 1 : 0;
+    const o = (g[Math.trunc(n / 2)][1] * w + x) * ch;
+    for (let c = 0; c < ch; c++) ink[x * ch + c] = img.data[o + c];
+  }
+  return { ink, has };
 }
 
-export function missingRules(img, s, cols, x0, x1, rowOf = null) {
+/**
+ * Filets du tableau (cols) absents à cet endroit du scan : redessinés avec le trait du filet vertical trouvé le plus proche,
+ * centré sur la colonne. Par pixel : abscisse du trait à recopier, -2 (gris par défaut), -1 ailleurs ; null si rien ne manque.
+ */
+export function missingRules(has, cols, x0, x1) {
   if (!cols || cols.length === 0) return null;
+  const w = has.length;
   let missing = null;
   for (const c of cols) {
     if (c < x0 || c >= x1) continue;
     let there = false;
-    for (let xx = Math.max(0, c - 3); xx <= Math.min(img.w - 1, c + 3) && !there; xx++) there = gray(img, xx, rowOf && rowOf[xx] >= 0 ? rowOf[xx] : s) < 150;
+    for (let xx = Math.max(0, c - 3); xx <= Math.min(w - 1, c + 3) && !there; xx++) there = has[xx] === 1;
     if (there) continue;
-    missing ??= new Uint8Array(img.w);
-    for (let xx = Math.max(0, c - 1); xx <= Math.min(img.w - 1, c); xx++) missing[xx] = 1;
+    if (!missing) missing = new Int32Array(w).fill(-1);
+    let r0 = -1, r1 = -1, bestD = Infinity;
+    for (const o of cols) {
+      const d = Math.abs(o - c);
+      if (o === c || d >= bestD) continue;
+      let k = -1;
+      for (let xx = Math.max(0, o - 3); xx <= Math.min(w - 1, o + 3) && k < 0; xx++) if (has[xx]) k = xx;
+      if (k < 0) continue;
+      let e = k;
+      while (e + 1 < w && has[e + 1] && e - k < 8) e++;
+      r0 = k; r1 = e; bestD = d;
+    }
+    if (r0 < 0) { for (let xx = Math.max(0, c - 1); xx <= Math.min(w - 1, c); xx++) missing[xx] = -2; continue; }
+    const len = r1 - r0 + 1, start = c - Math.trunc(len / 2);
+    for (let i = 0; i < len; i++) if (start + i >= 0 && start + i < w) missing[start + i] = r0 + i;
   }
   return missing;
+}
+
+/**
+ * Filet du haut d'une rangée ajoutée : le filet de la page à l'endroit de l'ajout, redressé ; là où il est croisé par une
+ * écriture ou effacé, la colonne vient du filet de la rangée recopiée (même règle que Windows).
+ */
+export function tableRule(img, src, anchor, n, data, dst) {
+  const w = img.w, ch = img.ch, stride = w * ch, H = img.h;
+  let ruleHere = false;
+  for (let y = Math.max(0, anchor - 2); y < Math.min(H, anchor + n + 2) && !ruleHere; y++) {
+    let run = 0, best = 0, gap = 0;
+    for (let x = 0; x < w; x++) {
+      if (gray(img, x, y) < 150) { run += gap + 1; gap = 0; best = Math.max(best, run); }
+      else if (run > 0 && ++gap > 2) { run = 0; gap = 0; }
+    }
+    ruleHere = best * 4 > w;
+  }
+  if (!ruleHere || anchor === src) { straightRule(img, src, n, data, dst); return; }
+  const here = new Uint8ClampedArray(n * stride), model = new Uint8ClampedArray(n * stride);
+  straightRule(img, anchor, n, here, 0);
+  straightRule(img, src, n, model, 0);
+  const badHere = badColumns(here, w, ch, n), badModel = badColumns(model, w, ch, n);
+  for (let x = 0; x < w; x++) {
+    const from = badHere[x] && !badModel[x] ? model : here;
+    for (let k = 0; k < n; k++) for (let c = 0; c < ch; c++) data[(dst + k) * stride + x * ch + c] = from[k * stride + x * ch + c];
+  }
+}
+
+/** Colonnes d'un filet redressé où il n'a pas l'air d'un filet : bien plus d'encre que d'habitude, presque pas, ou de la couleur. */
+function badColumns(band, w, ch, n) {
+  const ink = new Int32Array(w), colored = new Uint8Array(w);
+  for (let x = 0; x < w; x++)
+    for (let k = 0; k < n; k++) {
+      const o = (k * w + x) * ch;
+      ink[x] += 255 - grayOf(band, o, ch);
+      if (ch >= 3 && Math.max(band[o], band[o + 1], band[o + 2]) - Math.min(band[o], band[o + 1], band[o + 2]) > 60) colored[x] = 1;
+    }
+  const sorted = Int32Array.from(ink).sort();
+  const typical = sorted[Math.trunc(w / 2)];
+  const bad = new Uint8Array(w);
+  for (let x = 0; x < w; x++) bad[x] = colored[x] || ink[x] * 10 > typical * 16 + 1500 || ink[x] * 2 < typical ? 1 : 0;
+  return bad;
+}
+
+function grayOf(d, o, ch) {
+  return ch === 1 ? d[o] : (d[o] * 77 + d[o + 1] * 150 + d[o + 2] * 29) >> 8;
 }
 
 /**

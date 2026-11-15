@@ -1216,6 +1216,38 @@ public static class Tests
         Check(dark2 < w - 100, $"témoin : copie brute incomplète ({dark2}/{w})");
     }
 
+    /// <summary>
+    /// Captures du 15/11 : lignes ajoutées sans le bord gauche du tableau (pas une colonne lue), filet entre lot et désignation
+    /// épais et rouge (écriture de la rangée recopiée). Les filets des lignes ajoutées sont ceux de la page à l'endroit de
+    /// l'ajout : même place, même épaisseur, même encre, sans l'écriture.
+    /// </summary>
+    public static void T_Ligne_ajoutee_meme_trait_que_la_page()
+    {
+        int w = 400, h = 300;
+        var data = Enumerable.Repeat((byte)250, w * h).ToArray();
+        void Px(int x, int y, byte v) => data[y * w + x] = v;
+        foreach (int ry in new[] { 50, 100, 150, 200, 250 }) for (int x = 10; x < 390; x++) { Px(x, ry, 40); Px(x, ry + 1, 40); }
+        for (int y = 50; y < 252; y++) { Px(10, y, 90); Px(11, y, 90); Px(60, y, 140); Px(61, y, 140); Px(388, y, 40); Px(389, y, 40); }
+        for (int y = 108; y < 128; y++) for (int x = 58; x < 67; x++) Px(x, y, 20); // écriture à cheval sur le filet
+        for (int x = 150; x < 220; x++) Px(x, 151, 20);                                // trait d'écriture sur le filet de l'ajout
+        var img = new Raster(w, h, 1, data);
+        var page = new Page { Width = w, Height = h };
+        PageLayout.InsertBand(page, 148, [new BandPart { Src = 98, Height = 5, Straight = true },
+            new BandPart { Src = 103, Height = 40, Gap = true, Span = 40, Cols = [60, 389], X0 = 55, X1 = 394 }], "Copy");
+        var o = PageLayout.Stretch(img, page);
+        byte P(int x, int y) => o.Data[y * w + x];
+        int mid = 148 + 5 + 20;
+        Check(P(10, mid) < 150 && P(11, mid) < 150, "bord gauche du tableau prolongé dans la ligne ajoutée");
+        Check(P(60, mid) == 140 && P(61, mid) == 140 && P(59, mid) > 200 && P(63, mid) > 200, $"filet lot/désignation : même trait ({P(59, mid)} {P(60, mid)} {P(61, mid)} {P(63, mid)})");
+        Check(P(388, mid) == 40 && P(30, mid) == 250, "filet de droite, papier ailleurs");
+        int dark = 0;
+        for (int x = 10; x < 390; x++) { bool any = false; for (int y = 148; y < 153; y++) any |= P(x, y) < 150; if (any) dark++; }
+        Check(dark >= 378, $"filet du haut entier ({dark})");
+        int thick = 0;
+        for (int y = 148; y < 153; y++) if (P(180, y) < 150) thick++;
+        Check(thick == 2, $"filet du haut : 2 px comme ceux de la page, sans le trait d'écriture ({thick})");
+    }
+
     /// <summary>Numéro de lot trop long tapé par erreur (« 17252252252 ») : Synchroniser ne plante plus.</summary>
     public static void T_Numero_de_lot_trop_long()
     {

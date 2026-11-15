@@ -241,6 +241,34 @@ if (args.Length > 0 && args[0] == "scenario-real")
     File.WriteAllText(args[3], JsonSerializer.Serialize(project, RetoucheInventaire.Core.Storage.ProjectStore.Json));
     return 0;
 }
+if (args.Length > 0 && args[0] == "flat")
+{
+    // flat <projet.json> <pgmDir> <page> <out.pgm> : image d'origine redressée de la page (avant les lignes ajoutées).
+    var project = JsonSerializer.Deserialize<InventoryProject>(File.ReadAllText(args[1]), RetoucheInventaire.Core.Storage.ProjectStore.Json)!;
+    var pg = project.Pages[int.Parse(args[3]) - 1];
+    PageAnalyzer.Upgrade(pg);
+    var oriented = ImageOps.Rotate90(Pgm.Read(Path.Combine(args[2], Path.GetFileNameWithoutExtension(pg.SourceEntry!) + ".pgm")), pg.QuarterTurns);
+    Pgm.Write(args[4], PageNormalizer.Render(oriented, pg.Crop ?? Quad.FullImage(oriented.Width, oriented.Height), pg.Skew, pg.Width, PageLayout.BaseHeight(pg)));
+    return 0;
+}
+if (args.Length > 0 && args[0] == "add-real")
+{
+    // add-real <projet.json> <pgmDir> <page> <texte> <n> <out.json> [above] : n lignes ajoutées sous la ligne qui contient le texte.
+    var project = JsonSerializer.Deserialize<InventoryProject>(File.ReadAllText(args[1]), RetoucheInventaire.Core.Storage.ProjectStore.Json)!;
+    foreach (var pg in project.Pages) PageAnalyzer.Upgrade(pg);
+    Lots.Resync(project);
+    var start = Integrity.Check(project);
+    var page = project.Pages[int.Parse(args[3]) - 1];
+    var oriented = ImageOps.Rotate90(Pgm.Read(Path.Combine(args[2], Path.GetFileNameWithoutExtension(page.SourceEntry!) + ".pgm")), page.QuarterTurns);
+    var flat = PageNormalizer.Render(oriented, page.Crop ?? Quad.FullImage(oriented.Width, oriented.Height), page.Skew, page.Width, PageLayout.BaseHeight(page));
+    var line = page.AllLines().First(l => l.Cells.Any(c => c.Text.Contains(args[4])));
+    var r = AddedPage.AddRows(project, page, line, int.Parse(args[5]), above: args.Length > 7 && args[7] == "above", img: flat);
+    Lots.Resync(project);
+    var bad = Integrity.NewProblems(start, Integrity.Check(project));
+    Console.WriteLine($"{r.Added} lignes ajoutées, hauteur {page.Height} ; {(bad.Count == 0 ? "mise en page saine" : "PROBLÈMES " + string.Join(" ; ", bad))}");
+    File.WriteAllText(args[6], JsonSerializer.Serialize(project, RetoucheInventaire.Core.Storage.ProjectStore.Json));
+    return 0;
+}
 if (args.Length > 0 && args[0] == "stress-fixtures")
 {
     // Projet de départ du banc d'essai fait des pages de test (pour la CI) : project.json + p1.pgm…

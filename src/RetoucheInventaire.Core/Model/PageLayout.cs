@@ -160,7 +160,7 @@ public static class PageLayout
     /// d'interligne (<see cref="Extra"/>, ou <see cref="Gap"/> dans une bande insérée : filets verticaux de la rangée
     /// <see cref="Y0"/> prolongés entre X0 et X1, papier ailleurs).
     /// </summary>
-    public sealed record Piece(int Y0, int N, int X0 = 0, int X1 = 0, bool Extra = false, bool Gap = false, int Span = 0, List<int>? Cols = null, bool Straight = false);
+    public sealed record Piece(int Y0, int N, int X0 = 0, int X1 = 0, bool Extra = false, bool Gap = false, int Span = 0, List<int>? Cols = null, bool Straight = false, int Anchor = -1);
 
     /// <summary>Suite des rangées de la page agrandie, de haut en bas.</summary>
     public static List<Piece> Pieces(Page page) => Pieces(page, BaseHeight(page));
@@ -186,7 +186,7 @@ public static class PageLayout
             if (until > src) seq.Add(new Piece(src, until - src));
             src = until;
             if (b.Skip > 0) { src = Math.Min(baseHeight, until + b.Skip); inserted += b.Height; continue; } // rangée réduite : rangées sautées
-            foreach (var p in b.Parts) if (p.Height > 0) seq.Add(p.Gap ? new Piece(p.Src, p.Height, p.X0, p.X1, Gap: true, Span: p.Span, Cols: p.Cols) : new Piece(p.Src, p.Height, Straight: p.Straight));
+            foreach (var p in b.Parts) if (p.Height > 0) seq.Add(p.Gap ? new Piece(p.Src, p.Height, p.X0, p.X1, Gap: true, Span: p.Span, Cols: p.Cols, Anchor: until) : new Piece(p.Src, p.Height, Straight: p.Straight, Anchor: until));
             inserted += b.Height;
         }
         if (baseHeight > src) seq.Add(new Piece(src, baseHeight - src));
@@ -217,7 +217,8 @@ public static class PageLayout
                 pos += x.N;
             }
             // Dans l'interligne d'une rangée ajoutée : même rangée source.
-            seq.Insert(i, new Piece(Math.Clamp(s, 0, Math.Max(0, baseHeight - 1)), e.Height, e.X0, e.X1, Extra: true, Span: from?.Span ?? 0, Cols: from?.Cols));
+            int sc = Math.Clamp(s, 0, Math.Max(0, baseHeight - 1));
+            seq.Insert(i, new Piece(sc, e.Height, e.X0, e.X1, Extra: true, Span: from?.Span ?? 0, Cols: from?.Cols, Anchor: from?.Anchor ?? sc));
             before += e.Height;
         }
         return seq;
@@ -261,33 +262,33 @@ public static class PageLayout
         int height = seq.Sum(x => x.N);
         var data = new byte[height * stride];
         int dst = 0;
+        var profiles = new Dictionary<int, (byte[] Ink, bool[] Has)>();
         foreach (var x in seq)
         {
             if (x.Extra || x.Gap)
             {
                 int s = x.Span > 0 ? CleanRow(baseImage, x.Y0, x.Span, x.Cols ?? []) : x.Y0;
                 var paper = PaperOf(baseImage, s);
-                int x0 = Math.Clamp(x.X0, 0, w), x1 = Math.Clamp(x.X1, 0, w);
-                // Chaque filet vertical prolongé depuis SA rangée la plus nette (un filet pâle sur la rangée commune restait
-                // pâle dans toutes les lignes ajoutées).
-                var rowOf = x.Span > 0 ? ColumnRows(baseImage, x.Y0, x.Span, x.Cols, s) : null;
-                var missing = MissingRules(baseImage, s, x.Cols, x0, x1, rowOf);
+                int anchor = Math.Clamp(x.Anchor >= 0 ? x.Anchor : x.Y0, 0, baseImage.Height - 1);
+                // Filets verticaux tels qu'ils sont sur la page À L'ENDROIT de l'ajout (rangées voisines) : même place au pixel
+                // près, même épaisseur, même encre ; une écriture qui touche un filet n'est pas recopiée.
+                if (!profiles.TryGetValue(anchor, out var prof)) profiles[anchor] = prof = RuleProfile(baseImage, anchor, Gray(paper));
+                var missing = MissingRules(prof.Has, x.Cols, Math.Clamp(x.X0, 0, w), Math.Clamp(x.X1, 0, w));
                 for (int k = 0; k < x.N; k++, dst++)
                     for (int xx = 0; xx < w; xx++)
                     {
                         int o = dst * stride + xx * ch;
-                        int sr = rowOf != null && rowOf[xx] >= 0 ? rowOf[xx] : s;
-                        // Dans le tableau : les filets verticaux (sombres) sont prolongés, le reste devient papier propre ;
-                        // un filet du tableau effacé à cet endroit du scan est redessiné.
-                        if (xx >= x0 && xx < x1 && Gray(baseImage, xx, sr) < 150) Array.Copy(baseImage.Data, sr * stride + xx * ch, data, o, ch);
-                        else if (missing != null && missing[xx]) for (int c = 0; c < ch; c++) data[o + c] = RuleInk;
+                        if (prof.Has[xx]) Array.Copy(prof.Ink, xx * ch, data, o, ch);
+                        else if (missing != null && missing[xx] >= 0) Array.Copy(prof.Ink, missing[xx] * ch, data, o, ch);
+                        else if (missing != null && missing[xx] == -2) for (int c = 0; c < ch; c++) data[o + c] = c == 3 ? (byte)255 : RuleInk;
                         else Array.Copy(paper, 0, data, o, ch);
                     }
                 continue;
             }
             if (x.Straight)
             {
-                StraightRule(baseImage, x.Y0, x.N, data, dst);
+                if (x.Anchor >= 0) TableRule(baseImage, x.Y0, x.Anchor, x.N, data, dst);
+                else StraightRule(baseImage, x.Y0, x.N, data, dst);
                 dst += x.N;
                 continue;
             }
@@ -302,48 +303,138 @@ public static class PageLayout
     internal const byte RuleInk = 70;
 
     /// <summary>
-    /// Filets verticaux du tableau (<paramref name="cols"/>) absents de la rangée <paramref name="s"/> (effacés sur le scan) :
-    /// pixels où les redessiner (2 px), sinon null.
+    /// Filets verticaux de la page autour de la rangée <paramref name="anchor"/> (± 64 rangées, sans les filets horizontaux) :
+    /// une abscisse est un filet si elle est encrée sur au moins les 3/4 de ces rangées (une écriture, même à cheval sur un
+    /// filet, n'y est pas) ; son encre est celle de la rangée médiane. Donne aussi le bord gauche ou droit d'un tableau qui
+    /// n'est pas une colonne lue.
     /// </summary>
-    /// <summary>
-    /// Pour chaque filet vertical (± 3 px), la rangée de [s0, s0 + span[ où il est le plus sombre ; -1 ailleurs.
-    /// </summary>
-    internal static int[]? ColumnRows(Raster img, int s0, int span, List<int>? cols, int fallback)
+    internal static (byte[] Ink, bool[] Has) RuleProfile(Raster img, int anchor, int paperGray)
     {
-        if (cols is null || cols.Count == 0) return null;
-        int w = img.Width;
-        var rows = new int[w];
-        Array.Fill(rows, -1);
-        int a = Math.Max(0, s0), b = Math.Min(img.Height, s0 + span);
-        foreach (int c in cols)
+        int w = img.Width, ch = img.Channels, H = img.Height;
+        int a = Math.Max(0, anchor - 64), b = Math.Min(H, anchor + 64);
+        var rule = new bool[b - a];
+        for (int y = a; y < b; y++)
         {
-            int best = fallback, bestSum = int.MaxValue;
-            for (int y = a; y < b; y++)
-            {
-                int sum = 0;
-                for (int xx = Math.Max(0, c - 3); xx <= Math.Min(w - 1, c + 3); xx++) sum += Gray(img, xx, y);
-                if (sum < bestSum) { bestSum = sum; best = y; }
-            }
-            for (int xx = Math.Max(0, c - 3); xx <= Math.Min(w - 1, c + 3); xx++) rows[xx] = best;
+            int dark = 0;
+            for (int x = 0; x < w; x++) if (Gray(img, x, y) < 150) dark++;
+            rule[y - a] = dark * 3 > w;
         }
-        return rows;
+        var rows = new List<int>();
+        for (int y = a; y < b; y++)
+        {
+            bool near = false;
+            for (int d = -3; d <= 3 && !near; d++) near = y + d >= a && y + d < b && rule[y + d - a];
+            if (!near) rows.Add(y);
+        }
+        if (rows.Count < 8) { rows.Clear(); for (int y = a; y < b; y++) rows.Add(y); }
+        var ink = new byte[w * ch];
+        var has = new bool[w];
+        int n = rows.Count;
+        var g = new (int G, int Y)[n];
+        for (int x = 0; x < w; x++)
+        {
+            for (int i = 0; i < n; i++) g[i] = (Gray(img, x, rows[i]), rows[i]);
+            Array.Sort(g, (p, q) => p.G != q.G ? p.G.CompareTo(q.G) : p.Y.CompareTo(q.Y));
+            has[x] = g[n * 3 / 4].G < paperGray - 60;
+            Array.Copy(img.Data, (g[n / 2].Y * w + x) * ch, ink, x * ch, ch);
+        }
+        return (ink, has);
     }
 
-    internal static bool[]? MissingRules(Raster img, int s, List<int>? cols, int x0, int x1, int[]? rowOf = null)
+    /// <summary>
+    /// Filets du tableau (<paramref name="cols"/>) absents à cet endroit du scan (effacés) : redessinés avec le trait du
+    /// filet vertical trouvé le plus proche (même épaisseur, même encre), centré sur la colonne. Pour chaque pixel :
+    /// l'abscisse du trait à recopier, -2 (gris par défaut, aucun filet trouvé), -1 ailleurs ; null si rien ne manque.
+    /// </summary>
+    internal static int[]? MissingRules(bool[] has, List<int>? cols, int x0, int x1)
     {
         if (cols is null || cols.Count == 0) return null;
-        bool[]? missing = null;
+        int w = has.Length;
+        int[]? missing = null;
         foreach (int c in cols)
         {
             if (c < x0 || c >= x1) continue;
             bool there = false;
-            for (int xx = Math.Max(0, c - 3); xx <= Math.Min(img.Width - 1, c + 3) && !there; xx++) there = Gray(img, xx, rowOf != null && rowOf[xx] >= 0 ? rowOf[xx] : s) < 150;
+            for (int xx = Math.Max(0, c - 3); xx <= Math.Min(w - 1, c + 3) && !there; xx++) there = has[xx];
             if (there) continue;
-            missing ??= new bool[img.Width];
-            for (int xx = Math.Max(0, c - 1); xx <= Math.Min(img.Width - 1, c); xx++) missing[xx] = true;
+            if (missing is null) { missing = new int[w]; Array.Fill(missing, -1); }
+            // Trait le plus proche : une suite de pixels de filet autour d'une autre colonne du tableau.
+            int r0 = -1, r1 = -1, bestD = int.MaxValue;
+            foreach (int o in cols)
+            {
+                int d = Math.Abs(o - c), k = -1;
+                if (o == c || d >= bestD) continue;
+                for (int xx = Math.Max(0, o - 3); xx <= Math.Min(w - 1, o + 3) && k < 0; xx++) if (has[xx]) k = xx;
+                if (k < 0) continue;
+                int e = k;
+                while (e + 1 < w && has[e + 1] && e - k < 8) e++;
+                r0 = k; r1 = e; bestD = d;
+            }
+            if (r0 < 0) { for (int xx = Math.Max(0, c - 1); xx <= Math.Min(w - 1, c); xx++) missing[xx] = -2; continue; }
+            int len = r1 - r0 + 1, start = c - len / 2;
+            for (int i = 0; i < len; i++) if (start + i >= 0 && start + i < w) missing[start + i] = r0 + i;
         }
         return missing;
     }
+
+    /// <summary>
+    /// Filet du haut d'une rangée ajoutée : le filet de la page à l'endroit de l'ajout (celui qui sépare les deux rangées
+    /// voisines), redressé : même trait que ses voisins (épaisseur, noir, bords du tableau au pixel près). Là où ce filet
+    /// est croisé par une écriture (encre en trop, couleur) ou effacé, la colonne vient du filet de la rangée recopiée
+    /// (<paramref name="src"/>). Sans filet à cet endroit (trait tracé au milieu d'une rangée) : celui de la rangée recopiée.
+    /// </summary>
+    internal static void TableRule(Raster img, int src, int anchor, int n, byte[] data, int dst)
+    {
+        int w = img.Width, ch = img.Channels, stride = w * ch, H = img.Height;
+        bool ruleHere = false;
+        for (int y = Math.Max(0, anchor - 2); y < Math.Min(H, anchor + n + 2) && !ruleHere; y++)
+        {
+            int run = 0, best = 0, gap = 0;
+            for (int x = 0; x < w; x++)
+            {
+                if (Gray(img, x, y) < 150) { run += gap + 1; gap = 0; best = Math.Max(best, run); }
+                else if (run > 0 && ++gap > 2) { run = 0; gap = 0; }
+            }
+            ruleHere = best * 4 > w;
+        }
+        if (!ruleHere || anchor == src) { StraightRule(img, src, n, data, dst); return; }
+        var here = new byte[n * stride];
+        var model = new byte[n * stride];
+        StraightRule(img, anchor, n, here, 0);
+        StraightRule(img, src, n, model, 0);
+        var badHere = BadColumns(here, w, ch, n);
+        var badModel = BadColumns(model, w, ch, n);
+        for (int x = 0; x < w; x++)
+        {
+            var from = badHere[x] && !badModel[x] ? model : here;
+            for (int k = 0; k < n; k++) Array.Copy(from, k * stride + x * ch, data, (dst + k) * stride + x * ch, ch);
+        }
+    }
+
+    /// <summary>
+    /// Colonnes d'un filet redressé (n rangées) où il n'a pas l'air d'un filet : beaucoup plus d'encre que d'habitude
+    /// (écriture qui le croise), presque pas d'encre (effacé), ou de la couleur.
+    /// </summary>
+    private static bool[] BadColumns(byte[] band, int w, int ch, int n)
+    {
+        var ink = new int[w];
+        var colored = new bool[w];
+        for (int x = 0; x < w; x++)
+            for (int k = 0; k < n; k++)
+            {
+                int o = (k * w + x) * ch;
+                ink[x] += 255 - Gray(band, o, ch);
+                if (ch >= 3 && Math.Max(band[o], Math.Max(band[o + 1], band[o + 2])) - Math.Min(band[o], Math.Min(band[o + 1], band[o + 2])) > 60) colored[x] = true;
+            }
+        var sorted = (int[])ink.Clone();
+        Array.Sort(sorted);
+        int typical = sorted[w / 2];
+        var bad = new bool[w];
+        for (int x = 0; x < w; x++) bad[x] = colored[x] || ink[x] * 10 > typical * 16 + 1500 || ink[x] * 2 < typical;
+        return bad;
+    }
+
+    private static int Gray(byte[] d, int o, int ch) => ch == 1 ? d[o] : (d[o] * 29 + d[o + 1] * 150 + d[o + 2] * 77) >> 8;
 
     /// <summary>
     /// Filet redressé : pour chaque abscisse, la rangée la plus sombre autour de [<paramref name="y0"/>, y0 + n[ (± 4 px),
@@ -444,6 +535,8 @@ public static class PageLayout
         }
         return best;
     }
+
+    internal static int Gray(byte[] px) => px.Length == 1 ? px[0] : (px[0] * 29 + px[1] * 150 + px[2] * 77) >> 8;
 
     internal static int Gray(Raster img, int x, int y)
     {
